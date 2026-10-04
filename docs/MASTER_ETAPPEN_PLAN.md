@@ -31,7 +31,7 @@ flowchart TD
         E2_Type[Typ-Inferenz + IngestionConfig - FERTIG] --> E2_Long[Wide/Long-Erkennung + Pivot - FERTIG]
         E2_Long --> E2_Role[Rollen Messwert/Parameter - FERTIG]
         E2_Role --> E2_Empty[Leere Spalten markieren - FERTIG]
-        E2_Empty --> E2_Run[Run-Segmentierung]
+        E2_Empty --> E2_Run[Run-Segmentierung - FERTIG]
         E2_Run --> E2_Merge[Multi-File-Merge + Qualitäts-Flags]
         E2_Merge --> E2_Block[Block-Segmentation + Ragged-Healer]
     end
@@ -102,7 +102,7 @@ flowchart TD
 3. ✅ **Wide/Long-Erkennung + Pivot:** Erkennung über Header und Datenform statt Dateiname; Kanal-Attribute (`unit` …) in `channel_attrs` (P1, P19).
 4. ✅ **Rollen Messwert vs. Parameter** (P7): `ColumnKind.PARAMETER` für numerische Spalten, die in jedem Run konstant sind; Runs und Erkennung über `RoleConfig`, Overrides über `column_kinds`.
    ✅ **Leere Spalten markieren** (P9, P19): `fill_ratio` und `empty_columns`, markiert statt gelöscht; leere Kanäle werden nicht geplottet. ⏳ Parameter ohne Einheit (braucht P20).
-5. ⏳ **Run-Segmentierung:** `run_id` als eigene Dimension, Kanalverfügbarkeit und Qualitäts-Score pro Run (P10, P11, P18).
+5. ✅ **Run-Segmentierung:** `ds.runs` (Samples, Dauer, Median-Δt, Parameter, `aborted`), `channel_availability`, `run_time()`, `select_run()`; Run-Tabelle und Run-Filter im Inspector (P10, P11, P18).
 6. ⏳ **Multi-File-Merge mit Dedupe:** Hash-Erkennung, überlappende Snapshots (P2, P3).
 7. ⏳ **Qualitäts-Flags** als separate Spalten: Lücken, Dropout, Sprünge, eingefrorene Sensoren, unplausible Werte (P12–P17).
 8. ⏳ **Block-Segmentation** (Metadaten-Kopf, Multi-Row-Header, Footer-Statistiken) und **Ragged-CSV-Healer**, sobald Gerätedaten mit Kopfblöcken vorliegen.

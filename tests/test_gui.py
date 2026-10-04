@@ -583,3 +583,62 @@ def test_canvas_default_skips_empty_channels(qapp: QApplication) -> None:
     canvas.set_dataset(ds)
     assert "snad" not in canvas.active_channels
     assert "masse" in canvas.active_channels
+
+
+# ==============================================================================
+# Run-Segmentierung (Datenkatalog P10, P11, P18)
+# ==============================================================================
+
+
+def test_inspector_run_table(qapp: QApplication) -> None:
+    ds = load_csv(ALL_MESSY)
+    inspector = InspectorPanel()
+    inspector.set_dataset(ds, file_path=ALL_MESSY)
+
+    assert not inspector.run_group.isHidden()
+    table = inspector.run_table
+    assert table.rowCount() == 21
+    assert table.item(0, 0).text() == "All runs"
+    status_col = table.columnCount() - 1
+    assert table.item(2, status_col).text() == "aborted"  # Run 2
+    assert table.item(1, status_col).text() == ""  # Run 1
+
+
+def test_inspector_run_selection_updates_channels(qapp: QApplication) -> None:
+    ds = load_csv(ALL_MESSY)
+    inspector = InspectorPanel()
+    inspector.set_dataset(ds, file_path=ALL_MESSY)
+    emitted: list[object] = []
+    inspector.run_selected.connect(emitted.append)
+
+    inspector.select_run((17,))
+    assert emitted == [(17,)]
+    selected = inspector.get_selected_channels()
+    assert "masse" in selected
+    assert "normkonzentration" not in selected  # Run 17 hat keine Rechenwerte
+
+    inspector.select_run(None)
+    assert emitted[-1] is None
+    assert "normkonzentration" in inspector.get_selected_channels()
+
+
+def test_run_table_hidden_without_runs(qapp: QApplication, dataset: DualModeDataset) -> None:
+    inspector = InspectorPanel()
+    inspector.set_dataset(dataset)
+    assert inspector.run_group.isHidden()
+
+
+def test_main_window_plots_selected_run(qapp: QApplication) -> None:
+    win = DatualizerMainWindow()
+    win.load_file(ALL_MESSY)
+
+    win.inspector.select_run((17,))
+    canvas = win.plot_canvas
+    assert "normkonzentration" not in canvas.active_channels
+    assert len(canvas.dataset) == 311
+    assert canvas.dataset[canvas.dataset.time_col][0] == 0.0
+    assert canvas.x_label == "Time in run (seconds)"
+
+    win.inspector.select_run(None)
+    assert len(canvas.dataset) == len(win.dataset)
+    assert canvas.x_label == "Time (seconds)"

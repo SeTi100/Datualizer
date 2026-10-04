@@ -231,6 +231,8 @@ class CSVLoader:
             channel_attrs=channel_attrs,
             source_format=source_format,
             ingestion_spec=resolved,
+            run_columns=run_columns,
+            aborted_run_fraction=self.config.runs.aborted_fraction,
         )
 
     def _long_config_with_clean_names(self, raw_to_clean: dict[str, str]) -> LongFormatConfig:

@@ -6,6 +6,7 @@ from datualizer_core.ingestion.config import (
     LongFormatConfig,
     LongFormatMode,
     RoleConfig,
+    RunConfig,
     Vocabulary,
 )
 from datualizer_core.ingestion.loader import CSVLoader, load_csv
@@ -23,6 +24,7 @@ __all__ = [
     "LongFormatConfig",
     "LongFormatMode",
     "RoleConfig",
+    "RunConfig",
     "Vocabulary",
     "load_csv",
     "PreScanResult",

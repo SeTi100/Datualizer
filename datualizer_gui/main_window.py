@@ -128,6 +128,7 @@ class DatualizerMainWindow(QMainWindow):
 
         # Inspector -> Channel Checklist changed -> Update Plots
         self.inspector.channels_toggled.connect(self.plot_canvas.set_active_channels)
+        self.inspector.run_selected.connect(self._on_run_selected)
 
         # Recipe -> Mode Changed (wide / long) -> Update Data Grid
         self.recipe_panel.view_mode_changed.connect(self.set_view_mode)
@@ -239,6 +240,20 @@ class DatualizerMainWindow(QMainWindow):
                 self,
                 "Loading Error",
                 f"An error occurred while loading {p.name}:\n\n{exc}",
+            )
+
+    def _on_run_selected(self, key: tuple | None) -> None:
+        """Plot only the selected run on a run-relative time axis (None = all runs)."""
+        if self._dataset is None:
+            return
+        channels = self.inspector.get_selected_channels()
+        if key is None:
+            self.plot_canvas.set_dataset(self._dataset, active_channels=channels)
+        else:
+            self.plot_canvas.set_dataset(
+                self._dataset.select_run(key),
+                active_channels=channels,
+                x_label="Time in run (seconds)",
             )
 
     def set_view_mode(self, mode: str) -> None:

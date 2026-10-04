@@ -102,6 +102,17 @@ class RoleConfig(BaseModel):
     )
 
 
+class RunConfig(BaseModel):
+    """Run segmentation settings (Datenkatalog P10, P11, P18). Runs are defined by `RoleConfig.run_columns`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    aborted_fraction: float = Field(
+        0.1, ge=0.0, le=1.0,
+        description="A run with fewer samples than this share of the median run is marked aborted. 0 = off.",
+    )
+
+
 class IngestionConfig(BaseModel):
     """Every decision the loader makes, as editable and JSON-serializable settings."""
 
@@ -123,6 +134,7 @@ class IngestionConfig(BaseModel):
     )
     long_format: LongFormatConfig = Field(default_factory=LongFormatConfig)
     roles: RoleConfig = Field(default_factory=RoleConfig)
+    runs: RunConfig = Field(default_factory=RunConfig)
     vocabulary: Vocabulary = Field(default_factory=Vocabulary)
 
     def kind_override(self, raw_name: str, clean_name: str) -> ColumnKind | None:

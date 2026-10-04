@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Sequence
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -33,12 +34,14 @@ class InspectorPanel(QWidget):
 
     file_selected = Signal(str)
     channels_toggled = Signal(list)  # Emits list of selected channel names
+    run_selected = Signal(object)  # Emits the run key tuple, or None for all runs
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._dataset: DualModeDataset | None = None
         self._file_path: str = ""
         self._all_channels: list[str] = []
+        self._run_keys: list[tuple | None] = []
         self._is_updating_ui = False
 
         self._init_ui()
@@ -104,6 +107,27 @@ class InspectorPanel(QWidget):
             meta_layout.addWidget(lbl)
 
         layout.addWidget(meta_group)
+
+        # 2b. Runs (only shown when the data has run columns)
+        self.run_group = QGroupBox("Runs")
+        run_layout = QVBoxLayout(self.run_group)
+        run_layout.setSpacing(4)
+        self.run_table = QTableWidget(0, 6)
+        self.run_table.setHorizontalHeaderLabels(
+            ["Run", "Samples", "Duration", "Δt", "Parameters", "Status"]
+        )
+        self.run_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.run_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.run_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.run_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.run_table.verticalHeader().setVisible(False)
+        self.run_table.setMaximumHeight(180)
+        self.run_table.itemSelectionChanged.connect(self._on_run_selection_changed)
+        run_layout.addWidget(self.run_table)
+        self.run_group.setHidden(True)
+        layout.addWidget(self.run_group)
 
         # 3. Channel Checklist
         chan_group = QGroupBox("Channels & Subplots")
@@ -174,6 +198,7 @@ class InspectorPanel(QWidget):
             self.lbl_timespan.setText("Time Span: -")
             self.channel_list_widget.clear()
             self._all_channels = []
+            self._fill_run_table()
             self.lbl_audit_summary.setText("Audit Log: No dataset loaded")
             self.audit_table.setRowCount(0)
             self._is_updating_ui = False
@@ -215,21 +240,12 @@ class InspectorPanel(QWidget):
         # 2. Channels Checklist
         self.channel_list_widget.clear()
         self._all_channels = list(self._dataset.channels)
-        fill_ratio = self._dataset.fill_ratio
-
         for ch in self._all_channels:
             item = QListWidgetItem(ch)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            ratio = fill_ratio.get(ch, 0.0)
-            item.setToolTip(f"Fill ratio: {ratio * 100:.0f} %")
-            if ratio == 0.0:
-                # Empty channels stay listed (marked, not dropped) but are not plotted by default
-                item.setCheckState(Qt.CheckState.Unchecked)
-                item.setForeground(Qt.GlobalColor.gray)
-                item.setToolTip("No values (fill ratio 0 %)")
-            else:
-                item.setCheckState(Qt.CheckState.Checked)
             self.channel_list_widget.addItem(item)
+        self._apply_fill_ratios(self._dataset.fill_ratio)
+        self._fill_run_table()
 
         # 3. Audit Log Entries
         audit_log = self._dataset.audit_log
@@ -250,6 +266,86 @@ class InspectorPanel(QWidget):
 
         self._is_updating_ui = False
         self.channels_toggled.emit(self.get_selected_channels())
+
+    def _apply_fill_ratios(self, fill_ratio: dict[str, float]) -> None:
+        """Check channels with values; gray out and uncheck channels without any value."""
+        for idx in range(self.channel_list_widget.count()):
+            item = self.channel_list_widget.item(idx)
+            ratio = fill_ratio.get(item.text(), 0.0)
+            if ratio == 0.0:
+                # Empty channels stay listed (marked, not dropped) but are not plotted by default
+                item.setCheckState(Qt.CheckState.Unchecked)
+                item.setForeground(Qt.GlobalColor.gray)
+                item.setToolTip("No values (fill ratio 0 %)")
+            else:
+                item.setCheckState(Qt.CheckState.Checked)
+                item.setData(Qt.ItemDataRole.ForegroundRole, None)
+                item.setToolTip(f"Fill ratio: {ratio * 100:.0f} %")
+
+    def _fill_run_table(self) -> None:
+        """List all runs with size, timing, parameters and an 'aborted' badge (P10, P11, P18)."""
+        self.run_table.blockSignals(True)
+        self.run_table.setRowCount(0)
+        self._run_keys = []
+        ds = self._dataset
+        if ds is None or not ds.run_columns:
+            self.run_group.setHidden(True)
+            self.run_table.blockSignals(False)
+            return
+
+        runs = ds.runs
+        self.run_table.setRowCount(len(runs) + 1)
+        self.run_table.setItem(0, 0, QTableWidgetItem("All runs"))
+        self.run_table.setItem(0, 1, QTableWidgetItem(f"{len(ds):,}"))
+        for col in range(2, self.run_table.columnCount()):
+            self.run_table.setItem(0, col, QTableWidgetItem(""))
+        self._run_keys.append(None)
+
+        for row, run in enumerate(runs.iter_rows(named=True), start=1):
+            key = tuple(run[c] for c in ds.run_columns)
+            self._run_keys.append(key)
+            params = ", ".join(f"{p}={run[p]:g}" for p in ds.parameters if run.get(p) is not None)
+            duration, dt = run["duration_s"], run["median_dt_s"]
+            cells = [
+                " / ".join(str(v) for v in key),
+                f"{run['n_samples']:,}",
+                f"{duration:.1f} s" if duration is not None else "-",
+                f"{dt:.3g} s" if dt is not None else "-",
+                params,
+                "aborted" if run["aborted"] else "",
+            ]
+            for col, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if run["aborted"]:
+                    item.setForeground(Qt.GlobalColor.red)
+                self.run_table.setItem(row, col, item)
+
+        self.run_group.setHidden(False)
+        self.run_table.selectRow(0)
+        self.run_table.blockSignals(False)
+
+    def select_run(self, key: tuple | None) -> None:
+        """Select a run by key (None = all runs); emits `run_selected`."""
+        if key not in self._run_keys:
+            raise KeyError(f"Run {key!r} not listed.")
+        self.run_table.selectRow(self._run_keys.index(key))
+
+    def _on_run_selection_changed(self) -> None:
+        rows = self.run_table.selectionModel().selectedRows()
+        if not rows or self._dataset is None:
+            return
+        key = self._run_keys[rows[0].row()]
+        if key is None:
+            ratios = self._dataset.fill_ratio
+        else:
+            avail = self._dataset.channel_availability
+            for c, v in zip(self._dataset.run_columns, key):
+                avail = avail.filter(avail[c].is_null() if v is None else avail[c] == v)
+            ratios = avail.row(0, named=True)
+        self._is_updating_ui = True
+        self._apply_fill_ratios(ratios)
+        self._is_updating_ui = False
+        self.run_selected.emit(key)
 
     def get_selected_channels(self) -> list[str]:
         """Return list of channel names currently checked."""

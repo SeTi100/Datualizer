@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Sequence
 import numpy as np
 import polars as pl
 
+from datualizer_core import runs as _runs
 from datualizer_core.pipeline.operators import unpivot
 from datualizer_core.schema import ColumnKind
 
@@ -104,12 +105,16 @@ class DualModeDataset:
         channel_attrs: dict[str, dict[str, Any]] | None = None,
         source_format: str = "wide",
         ingestion_spec: IngestionConfig | None = None,
+        run_columns: Sequence[str] = (),
+        aborted_run_fraction: float = 0.1,
     ) -> None:
         self._df = df
         self._audit_log = audit_log if audit_log is not None else AuditLog()
         self._channel_attrs = channel_attrs or {}
         self._source_format = source_format
         self._ingestion_spec = ingestion_spec
+        self._run_columns = list(run_columns)
+        self._aborted_run_fraction = aborted_run_fraction
         if time_col in df.columns:
             self._time_col = time_col
         elif "time_seconds" in df.columns:
@@ -123,6 +128,8 @@ class DualModeDataset:
         self._column_kinds = self._derive_column_kinds(column_kinds or {})
         self._cached_long_df: pl.DataFrame | None = None
         self._fill_ratio: dict[str, float] | None = None
+        self._runs: pl.DataFrame | None = None
+        self._channel_availability: pl.DataFrame | None = None
 
     def _derive_column_kinds(self, given: dict[str, ColumnKind]) -> dict[str, ColumnKind]:
         """Complete column kinds from dtypes for columns the caller did not classify."""
@@ -204,6 +211,64 @@ class DualModeDataset:
         They are marked, not dropped: the column stays in `df` and keeps its role.
         """
         return [c for c, r in self.fill_ratio.items() if r == 0.0]
+
+    @property
+    def run_columns(self) -> list[str]:
+        """Return the columns that together identify a run (empty if the data has no runs)."""
+        return list(self._run_columns)
+
+    @property
+    def runs(self) -> pl.DataFrame:
+        """Return one row per run: size, timing, sampling interval, parameter values, `aborted`.
+
+        See `datualizer_core.runs.summarize_runs`. Empty if the data has no runs.
+        """
+        if self._runs is None:
+            self._runs = _runs.summarize_runs(
+                self._df, self._time_col, self._run_columns, self.parameters, self._aborted_run_fraction
+            )
+        return self._runs
+
+    @property
+    def channel_availability(self) -> pl.DataFrame:
+        """Return the fill ratio of every channel inside every run (empty if the data has no runs)."""
+        if self._channel_availability is None:
+            self._channel_availability = _runs.channel_availability(
+                self._df, self._run_columns, self.channels
+            )
+        return self._channel_availability
+
+    def run_time(self) -> pl.Series:
+        """Return seconds since the start of each row's run; the global time stays in `time_col`."""
+        return _runs.run_time(self._df, self._time_col, self._run_columns)
+
+    def select_run(self, key: Sequence[Any]) -> "DualModeDataset":
+        """Return a new dataset with only the rows of one run and a run-relative time column.
+
+        `key` holds one value per run column, e.g. `(2,)`. The original data is not changed.
+        Raises KeyError if the dataset has no runs or the run does not exist.
+        """
+        key = tuple(key)
+        if not self._run_columns or len(key) != len(self._run_columns):
+            raise KeyError(f"Run {key!r} does not match run columns {self._run_columns}.")
+        mask = pl.all_horizontal(
+            pl.col(c).is_null() if v is None else pl.col(c) == v
+            for c, v in zip(self._run_columns, key)
+        )
+        df = self._df.with_columns(self.run_time()).filter(mask)
+        if df.is_empty():
+            raise KeyError(f"Run {key!r} not found.")
+        return DualModeDataset(
+            df=df,
+            audit_log=self._audit_log,
+            time_col=self._time_col,
+            column_kinds=self._column_kinds,
+            channel_attrs=self._channel_attrs,
+            source_format=self._source_format,
+            ingestion_spec=self._ingestion_spec,
+            run_columns=self._run_columns,
+            aborted_run_fraction=self._aborted_run_fraction,
+        )
 
     @property
     def channel_attrs(self) -> dict[str, dict[str, Any]]:

@@ -50,6 +50,7 @@ class MultiChannelPlotCanvas(QWidget):
         self._crosshair_lines: list[pg.InfiniteLine] = []
         self._time_data: np.ndarray | None = None
         self._cached_channel_arrays: dict[str, np.ndarray] = {}
+        self._x_label = "Time (seconds)"
 
         self._init_ui()
         if dataset is not None:
@@ -97,6 +98,11 @@ class MultiChannelPlotCanvas(QWidget):
         return list(self._active_channels)
 
     @property
+    def x_label(self) -> str:
+        """Return the label of the shared X-axis."""
+        return self._x_label
+
+    @property
     def plot_items(self) -> dict[str, pg.PlotItem]:
         """Return dictionary mapping channel name to its pg.PlotItem."""
         return self._plot_items
@@ -110,9 +116,11 @@ class MultiChannelPlotCanvas(QWidget):
         self,
         dataset: DualModeDataset | None,
         active_channels: Sequence[str] | None = None,
+        x_label: str = "Time (seconds)",
     ) -> None:
         """Set a new dataset and refresh the subplots."""
         self._dataset = dataset
+        self._x_label = x_label
         self._cached_channel_arrays.clear()
         self._time_data = None
 
@@ -202,7 +210,7 @@ class MultiChannelPlotCanvas(QWidget):
             else:
                 # Bottom-most subplot shows the master X-axis
                 p.showAxis("bottom", True)
-                p.setLabel("bottom", "Time (seconds)", color="#a0a0a0")
+                p.setLabel("bottom", self._x_label, color="#a0a0a0")
 
             # Plot series data
             p.plot(

@@ -62,6 +62,7 @@ Das ist genauso wichtig für die Priorisierung:
 1. **Typ- und Rollen-Inferenz** (P4, P5, P7, P9): Behebt den akuten Audit-Bug und ist Voraussetzung für alles Weitere.
    *✅ Typ-Teil erledigt:* `ingestion/type_inference.py` unterscheidet NUMERIC, IDENTIFIER und CATEGORICAL; `DualModeDataset.channels` und `metadata_columns` sind neu. *Offen:* Rollen Messwert vs. Parameter (P7) und leere Spalten markieren (P9).
 2. **Schema-Sniffer wide/long** + `pivot_wider` für long (P1, P19): Aus Etappe 3 vorziehen, als Minimalversion.
+   *✅ Erledigt:* `ingestion/long_format.py` erkennt Long-Tabellen am Header und an der Datenform und pivotiert sie nach wide. `unit` und `is_calculated` landen in `DualModeDataset.channel_attrs`, doppelte Schlüssel im Audit. Wide- und Long-Export derselben Messung ergeben nachweislich dieselbe Tabelle. *Offen:* Kanäle ganz ohne Werte (P19) werden wie im Wide-Format als leere Spalte behalten; das Markieren erfolgt einheitlich mit P9.
 3. **Run-Segmentierung** (`run_id` als erstklassige Dimension, P10, P11, P18): Der Inspector zeigt Runs statt einer flachen Tabelle.
 4. **Multi-File-Merge mit Dedupe** (P2, P3).
 5. **Qualitäts-Flags** (P12–P17) als separate Flag-Spalten, keine destruktive Bereinigung. Das passt zum Nicht-destruktiv-Prinzip.

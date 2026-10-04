@@ -10,6 +10,7 @@ from typing import Sequence, TextIO
 import polars as pl
 
 from datualizer_core.dataset import AuditEntry, AuditLog, DualModeDataset
+from datualizer_core.ingestion.long_format import detect_long_format, pivot_long_to_wide
 from datualizer_core.ingestion.pre_scanner import PreScanResult, pre_scan
 from datualizer_core.ingestion.type_inference import ColumnKind, infer_column_kind, parse_number
 from datualizer_core.pipeline.operators import clean_column_name, clean_names, drop_footer
@@ -23,9 +24,11 @@ class CSVLoader:
         time_column: str | None = None,
         clean_column_names: bool = True,
         sentinels: Sequence[str] | None = None,
+        pivot_long: bool = True,
     ) -> None:
         self.time_column = time_column
         self.clean_column_names = clean_column_names
+        self.pivot_long = pivot_long
         raw_sentinels = (
             sentinels
             if sentinels is not None
@@ -141,6 +144,24 @@ class CSVLoader:
                     break
             if trailing_drop > 0:
                 df = df.slice(0, len(df) - trailing_drop)
+
+        # 4. Long-format sources (time, variable, value) are pivoted to the wide primary mode
+        spec = detect_long_format(df, column_kinds, time_col)
+        if spec is not None and not self.pivot_long:
+            return DualModeDataset(
+                df=df, audit_log=audit_log, time_col=time_col,
+                column_kinds=column_kinds, source_format="long",
+            )
+        if spec is not None:
+            pivoted = pivot_long_to_wide(df, spec, column_kinds, time_col, audit_log)
+            return DualModeDataset(
+                df=pivoted.df,
+                audit_log=audit_log,
+                time_col=time_col,
+                column_kinds=pivoted.column_kinds,
+                channel_attrs=pivoted.channel_attrs,
+                source_format="long",
+            )
 
         return DualModeDataset(
             df=df, audit_log=audit_log, time_col=time_col, column_kinds=column_kinds
@@ -346,11 +367,13 @@ def load_csv(
     clean_column_names: bool = True,
     sentinels: Sequence[str] | None = None,
     pre_scan_result: PreScanResult | None = None,
+    pivot_long: bool = True,
 ) -> DualModeDataset:
     """Convenience function to load a CSV into DualModeDataset."""
     loader = CSVLoader(
         time_column=time_column,
         clean_column_names=clean_column_names,
         sentinels=sentinels,
+        pivot_long=pivot_long,
     )
     return loader.load(source, pre_scan_result=pre_scan_result)

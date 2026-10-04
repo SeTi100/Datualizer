@@ -549,3 +549,37 @@ def test_main_window_load_invalid_file(qapp: QApplication, monkeypatch: pytest.M
     win.load_file("completely_missing_file_12345.csv")
     assert win.dataset is None
 
+
+
+# ==============================================================================
+# Leere Kanäle (Datenkatalog P9, P19)
+# ==============================================================================
+
+ALL_MESSY = Path(__file__).resolve().parent / "fixtures" / "runs_export" / "runs_export_20261004_123307_ALL_MESSY.csv"
+
+
+def test_inspector_lists_empty_channels_unchecked(qapp: QApplication) -> None:
+    """Empty channels stay visible in the list, but are not plotted by default."""
+    ds = load_csv(ALL_MESSY)
+    inspector = InspectorPanel()
+    inspector.set_dataset(ds, file_path=ALL_MESSY)
+
+    listed = [inspector.channel_list_widget.item(i).text() for i in range(inspector.channel_list_widget.count())]
+    assert listed == ds.channels
+    selected = inspector.get_selected_channels()
+    assert "snad" in listed and "snad" not in selected
+    assert selected == [c for c in ds.channels if c not in ds.empty_columns]
+
+    item = inspector.channel_list_widget.findItems("snad", Qt.MatchFlag.MatchExactly)[0]
+    assert "0 %" in item.toolTip()
+
+    inspector.select_all_channels()
+    assert "snad" in inspector.get_selected_channels()
+
+
+def test_canvas_default_skips_empty_channels(qapp: QApplication) -> None:
+    ds = load_csv(ALL_MESSY)
+    canvas = MultiChannelPlotCanvas()
+    canvas.set_dataset(ds)
+    assert "snad" not in canvas.active_channels
+    assert "masse" in canvas.active_channels

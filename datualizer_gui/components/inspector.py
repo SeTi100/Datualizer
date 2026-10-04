@@ -215,11 +215,20 @@ class InspectorPanel(QWidget):
         # 2. Channels Checklist
         self.channel_list_widget.clear()
         self._all_channels = list(self._dataset.channels)
+        fill_ratio = self._dataset.fill_ratio
 
         for ch in self._all_channels:
             item = QListWidgetItem(ch)
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked)
+            ratio = fill_ratio.get(ch, 0.0)
+            item.setToolTip(f"Fill ratio: {ratio * 100:.0f} %")
+            if ratio == 0.0:
+                # Empty channels stay listed (marked, not dropped) but are not plotted by default
+                item.setCheckState(Qt.CheckState.Unchecked)
+                item.setForeground(Qt.GlobalColor.gray)
+                item.setToolTip("No values (fill ratio 0 %)")
+            else:
+                item.setCheckState(Qt.CheckState.Checked)
             self.channel_list_widget.addItem(item)
 
         # 3. Audit Log Entries

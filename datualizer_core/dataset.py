@@ -122,6 +122,7 @@ class DualModeDataset:
             self._time_col = time_col
         self._column_kinds = self._derive_column_kinds(column_kinds or {})
         self._cached_long_df: pl.DataFrame | None = None
+        self._fill_ratio: dict[str, float] | None = None
 
     def _derive_column_kinds(self, given: dict[str, ColumnKind]) -> dict[str, ColumnKind]:
         """Complete column kinds from dtypes for columns the caller did not classify."""
@@ -182,6 +183,27 @@ class DualModeDataset:
     def parameters(self) -> list[str]:
         """Return numeric parameter columns (setpoints constant per run, not plotted)."""
         return [c for c, k in self._column_kinds.items() if k is ColumnKind.PARAMETER]
+
+    @property
+    def fill_ratio(self) -> dict[str, float]:
+        """Return the share of non-null values per column (time column excluded), 0.0 to 1.0."""
+        if self._fill_ratio is None:
+            n = len(self._df)
+            nulls = self._df.null_count().row(0, named=True) if self._df.width else {}
+            self._fill_ratio = {
+                c: (1.0 - nulls[c] / n) if n else 0.0
+                for c in self._df.columns
+                if c != self._time_col
+            }
+        return dict(self._fill_ratio)
+
+    @property
+    def empty_columns(self) -> list[str]:
+        """Return columns without a single value (e.g. a channel that was never recorded).
+
+        They are marked, not dropped: the column stays in `df` and keeps its role.
+        """
+        return [c for c, r in self.fill_ratio.items() if r == 0.0]
 
     @property
     def channel_attrs(self) -> dict[str, dict[str, Any]]:

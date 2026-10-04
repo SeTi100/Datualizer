@@ -104,6 +104,28 @@ if ds.audit_log.has_errors():
     print(ds.audit_log.to_dataframe())     # Welche Zelle war kaputt, und warum?
 ```
 
+### Automatik schlägt vor, du entscheidest
+
+Jede Heuristik (Zeitspalte, Spaltentypen, Long-Format, Namens-Vokabulare, Schwellen) ist über eine `IngestionConfig` überschreibbar. Und jedes geladene Dataset verrät, was die Automatik entschieden hat:
+
+```python
+from datualizer_core import ColumnKind, IngestionConfig, LongFormatConfig, load_csv
+
+ds = load_csv("export.csv")
+spec = ds.ingestion_spec                     # alle Entscheidungen, ausgeschrieben
+print(spec.model_dump_json(indent=2))        # → speichern, prüfen, korrigieren …
+
+cfg = IngestionConfig(
+    column_kinds={"Versuch": ColumnKind.IDENTIFIER},          # Spaltentyp erzwingen
+    long_format=LongFormatConfig(variable_col="Groesse",      # Long-Rollen selbst festlegen
+                                 value_col="Betrag",
+                                 channel_attr_cols=["Masseinheit"]),
+)
+ds = load_csv("export.csv", config=cfg)      # … und reproduzierbar neu laden
+```
+
+Die mitgelieferten Namenslisten (`Vocabulary`) sind nur Startwerte und keine Konvention, an die sich deine Daten halten müssen.
+
 ### Tests
 
 ```bash

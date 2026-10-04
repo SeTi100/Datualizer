@@ -1,23 +1,19 @@
-"""Column type inference: decides per column whether it is numeric, categorical or an identifier."""
+"""Column type inference: decides per column whether it is numeric, categorical or an identifier.
+
+All name hints come from a configurable `Vocabulary`; explicit per-column kinds in
+`IngestionConfig.column_kinds` are applied by the loader before this heuristic runs.
+"""
 
 from __future__ import annotations
 
 import re
 from typing import Iterable
 
+from datualizer_core.ingestion.config import Vocabulary
 from datualizer_core.schema import ColumnKind
 
-# Name tokens that mark a column as metadata/identifier, regardless of how its values look.
-# Prevents e.g. experiment_name = "250" from becoming the float 250.0.
-_METADATA_TOKENS = frozenset({
-    "id", "name", "status", "phase", "unit", "einheit", "type", "typ",
-    "label", "comment", "kommentar", "bemerkung", "note", "notiz",
-})
-
 _INT_RE = re.compile(r"^[+-]?\d+$")
-
-# Minimum share of parseable values (among non-empty, non-sentinel cells) for a column to count as numeric.
-NUMERIC_RATIO_THRESHOLD = 0.5
+_DEFAULT_VOCABULARY = Vocabulary()
 
 
 def name_tokens(raw_name: str) -> set[str]:
@@ -25,9 +21,19 @@ def name_tokens(raw_name: str) -> set[str]:
     return {t for t in re.split(r"[^0-9a-zäöüß]+", raw_name.lower()) if t}
 
 
-def is_metadata_name(raw_name: str) -> bool:
+def has_token(raw_name: str, tokens: Iterable[str]) -> bool:
+    """True if the header contains one of the given tokens (case-insensitive)."""
+    return bool(name_tokens(raw_name) & {t.lower() for t in tokens})
+
+
+def is_metadata_name(raw_name: str, vocabulary: Vocabulary | None = None) -> bool:
     """Return True if the header name marks the column as metadata/identifier."""
-    return bool(name_tokens(raw_name) & _METADATA_TOKENS)
+    return has_token(raw_name, (vocabulary or _DEFAULT_VOCABULARY).metadata_tokens)
+
+
+def is_integer_text(v_str: str) -> bool:
+    """True if a stripped cell holds a plain integer."""
+    return bool(_INT_RE.match(v_str))
 
 
 def parse_number(v_str: str, decimal_sep: str) -> float | None:
@@ -51,8 +57,11 @@ def infer_column_kind(
     values: Iterable[object],
     decimal_sep: str,
     upper_sentinels: set[str],
+    vocabulary: Vocabulary | None = None,
+    numeric_ratio_threshold: float = 0.5,
 ) -> ColumnKind:
     """Infer the ColumnKind of a non-time column from its header name and raw string values."""
+    vocab = vocabulary or _DEFAULT_VOCABULARY
     candidates = []
     for raw in values:
         if raw is None:
@@ -61,10 +70,13 @@ def infer_column_kind(
         if v_str and v_str.upper() not in upper_sentinels:
             candidates.append(v_str)
 
-    tokens = name_tokens(raw_name)
-    if tokens & _METADATA_TOKENS:
-        # Only explicit *_id columns become integer keys; names like "250" stay text.
-        if "id" in tokens and candidates and all(_INT_RE.match(v) for v in candidates):
+    if has_token(raw_name, vocab.metadata_tokens):
+        # Only identifier-token columns become integer keys; names like "250" stay text.
+        if (
+            has_token(raw_name, vocab.identifier_tokens)
+            and candidates
+            and all(is_integer_text(v) for v in candidates)
+        ):
             return ColumnKind.IDENTIFIER
         return ColumnKind.CATEGORICAL
 
@@ -73,6 +85,6 @@ def infer_column_kind(
         return ColumnKind.NUMERIC
 
     n_numeric = sum(parse_number(v, decimal_sep) is not None for v in candidates)
-    if n_numeric / len(candidates) >= NUMERIC_RATIO_THRESHOLD:
+    if n_numeric / len(candidates) >= numeric_ratio_threshold:
         return ColumnKind.NUMERIC
     return ColumnKind.CATEGORICAL

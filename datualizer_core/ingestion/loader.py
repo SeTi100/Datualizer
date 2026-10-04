@@ -10,34 +10,48 @@ from typing import Sequence, TextIO
 import polars as pl
 
 from datualizer_core.dataset import AuditEntry, AuditLog, DualModeDataset
+from datualizer_core.ingestion.config import IngestionConfig, LongFormatConfig, LongFormatMode
 from datualizer_core.ingestion.long_format import detect_long_format, pivot_long_to_wide
 from datualizer_core.ingestion.pre_scanner import PreScanResult, pre_scan
-from datualizer_core.ingestion.type_inference import ColumnKind, infer_column_kind, parse_number
+from datualizer_core.ingestion.type_inference import (
+    ColumnKind,
+    infer_column_kind,
+    is_integer_text,
+    parse_number,
+)
 from datualizer_core.pipeline.operators import clean_column_name, clean_names, drop_footer
 
 
 class CSVLoader:
-    """Configurable loader for measurement and sensor CSV data."""
+    """Configurable loader for measurement and sensor CSV data.
+
+    All behaviour is driven by an `IngestionConfig`. The keyword shortcuts override the
+    corresponding config fields. The returned dataset carries the fully resolved config
+    in `ingestion_spec`, which reproduces the same result when passed back in.
+    """
 
     def __init__(
         self,
+        config: IngestionConfig | None = None,
+        *,
         time_column: str | None = None,
-        clean_column_names: bool = True,
+        clean_column_names: bool | None = None,
         sentinels: Sequence[str] | None = None,
-        pivot_long: bool = True,
+        pivot_long: bool | None = None,
     ) -> None:
-        self.time_column = time_column
-        self.clean_column_names = clean_column_names
-        self.pivot_long = pivot_long
-        raw_sentinels = (
-            sentinels
-            if sentinels is not None
-            else [
-                "", "NA", "N/A", "null", "NULL", "NaN", "None", "-999", "ERR", "#N/A", "#VALUE!",
-                "nan", "NAN", "error", "ERROR", "undef", "UNDEF", "overflow", "OVERFLOW"
-            ]
-        )
-        self.sentinels = {s.strip() for s in raw_sentinels}
+        cfg = (config or IngestionConfig()).model_copy(deep=True)
+        if time_column is not None:
+            cfg.time_column = time_column
+        if clean_column_names is not None:
+            cfg.clean_column_names = clean_column_names
+        if sentinels is not None:
+            cfg.sentinels = list(sentinels)
+        if pivot_long is not None:
+            cfg.long_format.pivot = pivot_long
+        self.config = cfg
+        self.time_column = cfg.time_column
+        self.clean_column_names = cfg.clean_column_names
+        self.sentinels = {s.strip() for s in cfg.sentinels}
         self.upper_sentinels = {s.upper() for s in self.sentinels}
 
     def load(
@@ -102,18 +116,24 @@ class CSVLoader:
         # 2. Infer column kinds, then cast only numeric channels with error harvesting
         processed_series: list[pl.Series] = [time_seconds]
         column_kinds: dict[str, ColumnKind] = {time_seconds.name: ColumnKind.TIME}
+        resolved_kinds: dict[str, ColumnKind] = {}
         channel_names: list[str] = [c for c in df_raw.columns if c != detected_time_col]
 
         for col_name in channel_names:
             series = df_raw[col_name]
             clean_name = raw_to_clean[col_name]
-            kind = infer_column_kind(
-                col_name,
-                series.to_list(),
-                decimal_sep=pre_scan_result.decimal_separator,
-                upper_sentinels=self.upper_sentinels,
-            )
+            kind = self.config.kind_override(col_name, clean_name)
+            if kind is None or kind is ColumnKind.TIME:
+                kind = infer_column_kind(
+                    col_name,
+                    series.to_list(),
+                    decimal_sep=pre_scan_result.decimal_separator,
+                    upper_sentinels=self.upper_sentinels,
+                    vocabulary=self.config.vocabulary,
+                    numeric_ratio_threshold=self.config.numeric_ratio_threshold,
+                )
             column_kinds[clean_name] = kind
+            resolved_kinds[col_name] = kind
             if kind is ColumnKind.NUMERIC:
                 processed_series.append(self._harvest_and_cast_channel(
                     series,
@@ -123,7 +143,9 @@ class CSVLoader:
                     audit_log=audit_log,
                 ))
             else:
-                processed_series.append(self._clean_text_column(series, clean_name, kind))
+                processed_series.append(
+                    self._clean_text_column(series, clean_name, col_name, kind, audit_log)
+                )
 
         df = pl.DataFrame(processed_series)
 
@@ -146,13 +168,26 @@ class CSVLoader:
                 df = df.slice(0, len(df) - trailing_drop)
 
         # 4. Long-format sources (time, variable, value) are pivoted to the wide primary mode
-        spec = detect_long_format(df, column_kinds, time_col)
-        if spec is not None and not self.pivot_long:
-            return DualModeDataset(
-                df=df, audit_log=audit_log, time_col=time_col,
-                column_kinds=column_kinds, source_format="long",
+        lf_cfg = self._long_config_with_clean_names(raw_to_clean)
+        spec = detect_long_format(df, column_kinds, time_col, lf_cfg, self.config.vocabulary)
+
+        # Freeze every decision into a replayable spec
+        resolved = self.config.model_copy(deep=True)
+        resolved.time_column = detected_time_col
+        resolved.column_kinds = resolved_kinds
+        if spec is None:
+            resolved.long_format = LongFormatConfig(mode=LongFormatMode.OFF, pivot=lf_cfg.pivot)
+        else:
+            resolved.long_format = LongFormatConfig(
+                mode=LongFormatMode.FORCE,
+                pivot=lf_cfg.pivot,
+                variable_col=spec.variable_col,
+                value_col=spec.value_col,
+                channel_attr_cols=list(spec.channel_attr_cols),
+                row_meta_cols=list(spec.row_meta_cols),
             )
-        if spec is not None:
+
+        if spec is not None and lf_cfg.pivot:
             pivoted = pivot_long_to_wide(df, spec, column_kinds, time_col, audit_log)
             return DualModeDataset(
                 df=pivoted.df,
@@ -161,19 +196,46 @@ class CSVLoader:
                 column_kinds=pivoted.column_kinds,
                 channel_attrs=pivoted.channel_attrs,
                 source_format="long",
+                ingestion_spec=resolved,
             )
 
         return DualModeDataset(
-            df=df, audit_log=audit_log, time_col=time_col, column_kinds=column_kinds
+            df=df,
+            audit_log=audit_log,
+            time_col=time_col,
+            column_kinds=column_kinds,
+            source_format="wide" if spec is None else "long",
+            ingestion_spec=resolved,
         )
 
+    def _long_config_with_clean_names(self, raw_to_clean: dict[str, str]) -> LongFormatConfig:
+        """Translate user-given raw header names in the long-format config to loaded column names."""
+        lf = self.config.long_format
+
+        def name(c: str) -> str:
+            return raw_to_clean.get(c, c)
+
+        return lf.model_copy(update={
+            "variable_col": name(lf.variable_col) if lf.variable_col else None,
+            "value_col": name(lf.value_col) if lf.value_col else None,
+            "channel_attr_cols": (
+                [name(c) for c in lf.channel_attr_cols] if lf.channel_attr_cols is not None else None
+            ),
+            "row_meta_cols": (
+                [name(c) for c in lf.row_meta_cols] if lf.row_meta_cols is not None else None
+            ),
+        })
+
     def _resolve_time_column(self, columns: list[str]) -> str:
-        if self.time_column:
+        explicit = self.time_column or next(
+            (c for c, k in self.config.column_kinds.items() if k is ColumnKind.TIME), None
+        )
+        if explicit:
             for c in columns:
-                if c == self.time_column or c.lower() == self.time_column.lower():
+                if c == explicit or c.lower() == explicit.lower():
                     return c
 
-        candidates = ["time", "time_seconds", "zeit", "timestamp", "datetime", "date"]
+        candidates = [n.lower() for n in self.config.vocabulary.time_names]
         for c in columns:
             if c.lower() in candidates:
                 return c
@@ -346,7 +408,14 @@ class CSVLoader:
 
         return pl.Series(col_name, f64_vals, dtype=pl.Float64)
 
-    def _clean_text_column(self, series: pl.Series, col_name: str, kind: ColumnKind) -> pl.Series:
+    def _clean_text_column(
+        self,
+        series: pl.Series,
+        col_name: str,
+        raw_col_name: str,
+        kind: ColumnKind,
+        audit_log: AuditLog,
+    ) -> pl.Series:
         """Strip text cells and map empty/sentinel cells to null; identifiers become Int64."""
         vals: list[str | None] = []
         for raw in series.to_list():
@@ -357,20 +426,29 @@ class CSVLoader:
                 vals.append(v_str)
 
         if kind is ColumnKind.IDENTIFIER:
-            return pl.Series(col_name, [int(v) if v is not None else None for v in vals], dtype=pl.Int64)
+            ints: list[int | None] = []
+            for idx, v in enumerate(vals):
+                if v is not None and not is_integer_text(v):
+                    # Only reachable when the user forces IDENTIFIER on a non-integer column
+                    audit_log.add(idx, col_name, v, "non_convertible_int", raw_column=raw_col_name)
+                    v = None
+                ints.append(int(v) if v is not None else None)
+            return pl.Series(col_name, ints, dtype=pl.Int64)
         return pl.Series(col_name, vals, dtype=pl.String)
 
 
 def load_csv(
     source: str | Path | TextIO,
     time_column: str | None = None,
-    clean_column_names: bool = True,
+    clean_column_names: bool | None = None,
     sentinels: Sequence[str] | None = None,
     pre_scan_result: PreScanResult | None = None,
-    pivot_long: bool = True,
+    pivot_long: bool | None = None,
+    config: IngestionConfig | None = None,
 ) -> DualModeDataset:
     """Convenience function to load a CSV into DualModeDataset."""
     loader = CSVLoader(
+        config,
         time_column=time_column,
         clean_column_names=clean_column_names,
         sentinels=sentinels,

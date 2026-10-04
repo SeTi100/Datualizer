@@ -57,7 +57,16 @@ Das ist genauso wichtig für die Priorisierung:
 
 → **Konsequenz für den Etappenplan:** Bei diesem Datentyp liegen die Probleme nicht in der Dateistruktur (Block-Segmentation, Ragged-Rows). Sie liegen in **Semantik und Qualität**: Typen, Rollen, Duplikate, Plausibilität. Etappe 2 sollte entsprechend umgewichtet werden (siehe Abschnitt 5).
 
-## 5. Vorgeschlagene Umpriorisierung von Etappe 2
+## 5. Grundsatz: Automatik schlägt vor, Nutzer entscheidet
+
+Alle Namenshinweise in diesem Katalog (`roi_name`, `unit`, `is_calculated`, `snad` …) stammen aus *diesem* Korpus. Andere Anlagen benennen dieselben Dinge anders. Deshalb gilt für jede Heuristik:
+
+- Ihre Vokabulare und Schwellen sind konfigurierbar (`IngestionConfig.vocabulary`, `numeric_ratio_threshold`).
+- Explizite Vorgaben (`column_kinds`, `long_format.*`, `time_column`) schlagen jede Heuristik.
+- Das Ergebnis trägt die aufgelöste Konfiguration (`DualModeDataset.ingestion_spec`). Sie ist ein Fixpunkt: Erneut geladen ergibt sie dieselbe Tabelle (getestet für alle Fixtures).
+- Erzwungene, aber unpassende Vorgaben schlagen laut fehl (`LongFormatError`) statt still falsche Daten zu liefern.
+
+## 6. Vorgeschlagene Umpriorisierung von Etappe 2
 
 1. **Typ- und Rollen-Inferenz** (P4, P5, P7, P9): Behebt den akuten Audit-Bug und ist Voraussetzung für alles Weitere.
    *✅ Typ-Teil erledigt:* `ingestion/type_inference.py` unterscheidet NUMERIC, IDENTIFIER und CATEGORICAL; `DualModeDataset.channels` und `metadata_columns` sind neu. *Offen:* Rollen Messwert vs. Parameter (P7) und leere Spalten markieren (P9).

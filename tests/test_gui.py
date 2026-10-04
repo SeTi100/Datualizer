@@ -642,3 +642,46 @@ def test_main_window_plots_selected_run(qapp: QApplication) -> None:
     win.inspector.select_run(None)
     assert len(canvas.dataset) == len(win.dataset)
     assert canvas.x_label == "Time (seconds)"
+
+
+# ==============================================================================
+# Multi-File-Merge (Datenkatalog P2, P3)
+# ==============================================================================
+
+RUNS_EXPORT = Path(__file__).resolve().parent / "fixtures" / "runs_export"
+
+
+def test_main_window_merges_snapshots(qapp: QApplication) -> None:
+    win = DatualizerMainWindow(auto_load=False)
+    win.load_file(RUNS_EXPORT / "runs_export_20261004_123102_konst_T_V.csv")
+    assert len(win.dataset) == 2488
+    win.add_files([RUNS_EXPORT / "runs_export_20261004_123115_konst_T_V_long.csv"])
+    assert len(win.dataset) == 2592
+    assert len(win.plot_canvas.dataset) == 2592
+    assert "2 files merged" in win.inspector.lbl_filepath.text()
+    assert "merged" in win.status_bar.currentMessage()
+
+
+def test_main_window_warns_on_duplicate_file(qapp: QApplication, monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda _parent, title, _text, *a, **k: warnings.append(title)
+    )
+    win = DatualizerMainWindow(auto_load=False)
+    win.load_files([
+        RUNS_EXPORT / "runs_export_20261004_123129_rand_params.csv",
+        RUNS_EXPORT / "runs_export_20261004_123138_rand_params_long.csv",
+    ])
+    assert warnings == ["File Already Loaded"]
+    assert len(win.dataset) == 1861
+    assert "duplicate of" in win.inspector.lbl_filepath.text()
+
+
+def test_main_window_merge_error_does_not_crash(qapp: QApplication, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: QMessageBox.StandardButton.Ok)
+    win = DatualizerMainWindow(auto_load=False)
+    win.load_files([
+        RUNS_EXPORT / "runs_export_20261004_115422.csv",
+        RUNS_EXPORT / "runs_export_20261004_115428_long.csv",  # wide + long: MergeError
+    ])
+    assert win.dataset is None

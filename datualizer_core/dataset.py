@@ -88,6 +88,22 @@ class AuditLog:
         return f"AuditLog(total_entries={len(self.entries)})"
 
 
+SOURCES_SCHEMA = {
+    "source": pl.String,
+    "sha256": pl.String,
+    "n_rows": pl.Int64,
+    "n_kept": pl.Int64,
+    "n_replaced": pl.Int64,
+    "n_conflicts": pl.Int64,
+    "duplicate_of": pl.String,
+}
+
+
+def empty_sources() -> pl.DataFrame:
+    """Return an empty source table (see `DualModeDataset.sources`)."""
+    return pl.DataFrame(schema=SOURCES_SCHEMA)
+
+
 class DualModeDataset:
     """Dual-Mode Dataset encapsulating wide-format DataFrame with on-demand long-format.
 
@@ -107,8 +123,10 @@ class DualModeDataset:
         ingestion_spec: IngestionConfig | None = None,
         run_columns: Sequence[str] = (),
         aborted_run_fraction: float = 0.1,
+        sources: pl.DataFrame | None = None,
     ) -> None:
         self._df = df
+        self._sources = sources if sources is not None else empty_sources()
         self._audit_log = audit_log if audit_log is not None else AuditLog()
         self._channel_attrs = channel_attrs or {}
         self._source_format = source_format
@@ -268,7 +286,19 @@ class DualModeDataset:
             ingestion_spec=self._ingestion_spec,
             run_columns=self._run_columns,
             aborted_run_fraction=self._aborted_run_fraction,
+            sources=self._sources,
         )
+
+    @property
+    def sources(self) -> pl.DataFrame:
+        """Return one row per source file: path, SHA-256 and what the merge did with its rows.
+
+        Columns: `source`, `sha256`, `n_rows` (data rows in the file), `n_kept` (rows in this
+        dataset), `n_replaced` (rows superseded by a later file with the same key), `n_conflicts`
+        (values of this file that differed from the winning file) and `duplicate_of` (set for
+        byte-identical files, which are skipped). Empty for datasets built in memory.
+        """
+        return self._sources
 
     @property
     def channel_attrs(self) -> dict[str, dict[str, Any]]:

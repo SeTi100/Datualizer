@@ -32,8 +32,9 @@ flowchart TD
         E2_Long --> E2_Role[Rollen Messwert/Parameter - FERTIG]
         E2_Role --> E2_Empty[Leere Spalten markieren - FERTIG]
         E2_Empty --> E2_Run[Run-Segmentierung - FERTIG]
-        E2_Run --> E2_Merge[Multi-File-Merge + Qualitäts-Flags]
-        E2_Merge --> E2_Block[Block-Segmentation + Ragged-Healer]
+        E2_Run --> E2_Merge[Multi-File-Merge + Dedupe - FERTIG]
+        E2_Merge --> E2_Flags[Qualitäts-Flags]
+        E2_Flags --> E2_Block[Block-Segmentation + Ragged-Healer]
     end
 
     subgraph E3 [Etappe 3: Tidy & Reshaping DSL]
@@ -103,7 +104,7 @@ flowchart TD
 4. ✅ **Rollen Messwert vs. Parameter** (P7): `ColumnKind.PARAMETER` für numerische Spalten, die in jedem Run konstant sind; Runs und Erkennung über `RoleConfig`, Overrides über `column_kinds`.
    ✅ **Leere Spalten markieren** (P9, P19): `fill_ratio` und `empty_columns`, markiert statt gelöscht; leere Kanäle werden nicht geplottet. ⏳ Parameter ohne Einheit (braucht P20).
 5. ✅ **Run-Segmentierung:** `ds.runs` (Samples, Dauer, Median-Δt, Parameter, `aborted`), `channel_availability`, `run_time()`, `select_run()`; Run-Tabelle und Run-Filter im Inspector (P10, P11, P18).
-6. ⏳ **Multi-File-Merge mit Dedupe:** Hash-Erkennung, überlappende Snapshots (P2, P3).
+6. ✅ **Multi-File-Merge mit Dedupe:** `load_csvs()`, SHA-256 pro Quelle (`ds.sources`), Duplikate übersprungen und auditiert, überlappende Snapshots über den Schlüssel dedupliziert (spätere Datei gewinnt, Konflikte ins Audit), `MergeConfig` (P2, P3). GUI: Mehrfachauswahl und „Add CSV (merge)“.
 7. ⏳ **Qualitäts-Flags** als separate Spalten: Lücken, Dropout, Sprünge, eingefrorene Sensoren, unplausible Werte (P12–P17).
 8. ⏳ **Block-Segmentation** (Metadaten-Kopf, Multi-Row-Header, Footer-Statistiken) und **Ragged-CSV-Healer**, sobald Gerätedaten mit Kopfblöcken vorliegen.
 9. ⏳ **Encoding-Matrix** (UTF-16, CP1252) sowie Spektren- und Matrix-Exporte.

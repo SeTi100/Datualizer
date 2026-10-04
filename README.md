@@ -106,7 +106,7 @@ if ds.audit_log.has_errors():
 
 ### Automatik schlägt vor, du entscheidest
 
-Jede Heuristik (Zeitspalte, Spaltentypen, Long-Format, Namens-Vokabulare, Schwellen) ist über eine `IngestionConfig` überschreibbar. Und jedes geladene Dataset verrät, was die Automatik entschieden hat:
+Jede Heuristik (Zeitspalte, Spaltentypen, Long-Format, Messwert vs. Parameter, Namens-Vokabulare, Schwellen) ist über eine `IngestionConfig` überschreibbar. Und jedes geladene Dataset verrät, was die Automatik entschieden hat:
 
 ```python
 from datualizer_core import ColumnKind, IngestionConfig, LongFormatConfig, load_csv
@@ -116,13 +116,16 @@ spec = ds.ingestion_spec                     # alle Entscheidungen, ausgeschrieb
 print(spec.model_dump_json(indent=2))        # → speichern, prüfen, korrigieren …
 
 cfg = IngestionConfig(
-    column_kinds={"Versuch": ColumnKind.IDENTIFIER},          # Spaltentyp erzwingen
+    column_kinds={"Versuch": ColumnKind.IDENTIFIER,           # Spaltentyp erzwingen
+                  "Temperatur": ColumnKind.NUMERIC},          # konstanter Sensor bleibt Messkanal
     long_format=LongFormatConfig(variable_col="Groesse",      # Long-Rollen selbst festlegen
                                  value_col="Betrag",
                                  channel_attr_cols=["Masseinheit"]),
 )
 ds = load_csv("export.csv", config=cfg)      # … und reproduzierbar neu laden
 ```
+
+**Messwert oder Parameter?** Eine numerische Spalte, die in jedem Run konstant ist (Sollwerte wie `Rotameter` oder `target_temperature`), wird als `ColumnKind.PARAMETER` eingestuft. Sie bleibt in `ds.df`, steht in `ds.parameters` und wird nicht als Kanal geplottet (`ds.channels`). Runs erkennt der Loader an Spalten wie `run_id` (`Vocabulary.run_tokens`), oder du gibst sie vor: `IngestionConfig(roles=RoleConfig(run_columns=["Charge"]))`. Ein Sensor, der zufällig konstant misst, sieht genauso aus wie ein Sollwert. Den stufst du per `column_kinds` zurück auf `NUMERIC`.
 
 Die mitgelieferten Namenslisten (`Vocabulary`) sind nur Startwerte und keine Konvention, an die sich deine Daten halten müssen.
 

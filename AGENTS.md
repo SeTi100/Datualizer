@@ -34,7 +34,7 @@ Was echte Daten an Problemen mitbringen: [`docs/DATENKATALOG_RUNS_EXPORT.md`](do
    - Daten, die verworfen werden, stehen im Audit (z. B. `dropped_long_column`).
 4. **Nicht destruktiv.** Keine In-place-Mutation von DataFrames. Jede Transformation ist ein nachvollziehbarer, umkehrbarer Schritt. Qualitätsprobleme werden *markiert*, nicht gelöscht.
 5. **Realdaten zuerst.** Jedes Ingestion-Feature braucht einen Testfall mit dem echten Problem. Gibt es eine passende Fixture, wird sie benutzt, sonst kommt eine minimale synthetische CSV in den Test. Fixtures werden **nie** verändert.
-6. **Wide und Long.** Wide (`DualModeDataset.df`) ist der primäre Modus für Mathematik und Zero-Copy-Plotting. Long gibt es auf Abruf über `to_long()`. Metadaten (`metadata_columns`) werden nie mitgeschmolzen oder geplottet. Nur `channels` sind Messkanäle.
+6. **Wide und Long.** Wide (`DualModeDataset.df`) ist der primäre Modus für Mathematik und Zero-Copy-Plotting. Long gibt es auf Abruf über `to_long()`. Metadaten (`metadata_columns`) und Parameter (`parameters`) werden nie mitgeschmolzen oder geplottet. Nur `channels` sind Messkanäle.
 
 ---
 
@@ -42,20 +42,21 @@ Was echte Daten an Problemen mitbringen: [`docs/DATENKATALOG_RUNS_EXPORT.md`](do
 
 ```
 datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
-├── schema.py                     # ColumnKind (TIME/NUMERIC/IDENTIFIER/CATEGORICAL), importzyklusfrei
+├── schema.py                     # ColumnKind (TIME/NUMERIC/PARAMETER/IDENTIFIER/CATEGORICAL), importzyklusfrei
 ├── dataset.py                    # DualModeDataset, AuditLog
 ├── ingestion/
-│   ├── config.py                 # IngestionConfig, Vocabulary, LongFormatConfig  ← alle Stellschrauben
+│   ├── config.py                 # IngestionConfig, Vocabulary, LongFormatConfig, RoleConfig  ← alle Stellschrauben
 │   ├── pre_scanner.py            # Delimiter, Dezimal, BOM, Header, Footer
 │   ├── type_inference.py         # Spaltentyp pro Spalte
 │   ├── long_format.py            # Long erkennen + nach wide pivotieren
+│   ├── roles.py                  # Messwert vs. Parameter (konstant pro Run)
 │   └── loader.py                 # CSV → DualModeDataset (orchestriert alles, baut ingestion_spec)
 └── pipeline/operators.py         # clean_names, drop_footer, unpivot
 datualizer_gui/                   # PySide6-App, Einstieg: python -m datualizer_gui.app
 tests/fixtures/runs_export/       # 13 echte Pipeline-Exporte (unveränderlich!)
 ```
 
-Ablauf: `load_csv(path, config=…)` → PreScanner → Zeitspalte → Typ-Inferenz (Overrides zuerst) → Casting mit Audit → Long-Erkennung und Pivot → `DualModeDataset` (mit `column_kinds`, `channels`, `channel_attrs`, `source_format`, `ingestion_spec`).
+Ablauf: `load_csv(path, config=…)` → PreScanner → Zeitspalte → Typ-Inferenz (Overrides zuerst) → Casting mit Audit → Long-Erkennung und Pivot → Rollen (Parameter) → `DualModeDataset` (mit `column_kinds`, `channels`, `parameters`, `channel_attrs`, `source_format`, `ingestion_spec`).
 
 **Import-Regel:** `dataset.py` darf nichts aus `ingestion/` zur Laufzeit importieren, sonst entsteht ein Zyklus. Gemeinsame Typen gehören nach `schema.py`. Typ-Hinweise gehen über `TYPE_CHECKING`.
 
@@ -103,14 +104,14 @@ Ablauf: `load_csv(path, config=…)` → PreScanner → Zeitspalte → Typ-Infer
   - Typ-Inferenz pro Spalte
   - Long-Format-Erkennung und Pivot
   - `IngestionConfig` mit replaybarer `ingestion_spec`
+  - Rollen Messwert vs. Parameter (P7): `ColumnKind.PARAMETER`, `RoleConfig`
 
 **Nächste offene Punkte** (Reihenfolge nach [Datenkatalog §6](docs/DATENKATALOG_RUNS_EXPORT.md)):
 
-1. **Rollen Messwert vs. Parameter (P7):** Sollwerte wie `target_temperature`, `Rotameter`, `param_Temperatur` sind pro Run konstant und sollen nicht als Messkanal geplottet werden. Die Heuristik „konstant pro Run → Parameter“ muss über `IngestionConfig` überschreibbar sein.
-2. **Leere und kryptische Spalten markieren (P9, P19):** z. B. `snad` (0 % Füllgrad), Kanäle ohne jeden Wert.
-3. **Run-Segmentierung (P10, P11, P18):** `run_id` als eigene Dimension, Kanalverfügbarkeit pro Run, Qualitäts-Score bzw. „abgebrochen“-Badge.
-4. **Multi-File-Merge mit Dedupe (P2, P3):** Hash beim Import, überlappende Snapshots über den Schlüssel zusammenführen.
-5. **Qualitäts-Flags (P12–P17)** als separate Flag-Spalten: Lücken, Dropout als 0.0, Nachfüll-Sprünge, eingefrorene Sensoren, unplausible Werte.
-6. Danach: Block-Segmentation und Ragged-Healer (ursprünglicher Etappe-2-Plan), sobald Gerätedaten mit Kopfblöcken vorliegen.
+1. **Leere und kryptische Spalten markieren (P9, P19):** z. B. `snad` (0 % Füllgrad), Kanäle ohne jeden Wert.
+2. **Run-Segmentierung (P10, P11, P18):** `run_id` als eigene Dimension, Kanalverfügbarkeit pro Run, Qualitäts-Score bzw. „abgebrochen“-Badge.
+3. **Multi-File-Merge mit Dedupe (P2, P3):** Hash beim Import, überlappende Snapshots über den Schlüssel zusammenführen.
+4. **Qualitäts-Flags (P12–P17)** als separate Flag-Spalten: Lücken, Dropout als 0.0, Nachfüll-Sprünge, eingefrorene Sensoren, unplausible Werte.
+5. Danach: Block-Segmentation und Ragged-Healer (ursprünglicher Etappe-2-Plan), sobald Gerätedaten mit Kopfblöcken vorliegen.
 
 Langfristig ist `IngestionConfig` die Keimzelle des **Recipe-AST** (Etappe 3) und des **Ingestion-Wizards** (Etappe 6). Neue Einstellungen deshalb sauber typisiert und serialisierbar halten.

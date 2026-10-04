@@ -29,8 +29,9 @@ flowchart TD
 
     subgraph E2 [Etappe 2: Ingestion-Festung - IN ARBEIT]
         E2_Type[Typ-Inferenz + IngestionConfig - FERTIG] --> E2_Long[Wide/Long-Erkennung + Pivot - FERTIG]
-        E2_Long --> E2_Role[Rollen Messwert/Parameter + Run-Segmentierung]
-        E2_Role --> E2_Merge[Multi-File-Merge + Qualitäts-Flags]
+        E2_Long --> E2_Role[Rollen Messwert/Parameter - FERTIG]
+        E2_Role --> E2_Run[Leere Spalten + Run-Segmentierung]
+        E2_Run --> E2_Merge[Multi-File-Merge + Qualitäts-Flags]
         E2_Merge --> E2_Block[Block-Segmentation + Ragged-Healer]
     end
 
@@ -98,7 +99,8 @@ flowchart TD
 1. ✅ **Typ-Inferenz pro Spalte:** NUMERIC / IDENTIFIER / CATEGORICAL; nur numerische Kanäle werden gecastet, auditiert und geplottet (P4, P5).
 2. ✅ **`IngestionConfig`:** Vokabulare, Schwellen, Spalten-Overrides, Long-Format-Rollen; aufgelöste, replaybare `ingestion_spec`.
 3. ✅ **Wide/Long-Erkennung + Pivot:** Erkennung über Header und Datenform statt Dateiname; Kanal-Attribute (`unit` …) in `channel_attrs` (P1, P19).
-4. ⏳ **Rollen Messwert vs. Parameter** (P7) und **leere Spalten markieren** (P9).
+4. ✅ **Rollen Messwert vs. Parameter** (P7): `ColumnKind.PARAMETER` für numerische Spalten, die in jedem Run konstant sind; Runs und Erkennung über `RoleConfig`, Overrides über `column_kinds`.
+   ⏳ **Leere Spalten markieren** (P9).
 5. ⏳ **Run-Segmentierung:** `run_id` als eigene Dimension, Kanalverfügbarkeit und Qualitäts-Score pro Run (P10, P11, P18).
 6. ⏳ **Multi-File-Merge mit Dedupe:** Hash-Erkennung, überlappende Snapshots (P2, P3).
 7. ⏳ **Qualitäts-Flags** als separate Spalten: Lücken, Dropout, Sprünge, eingefrorene Sensoren, unplausible Werte (P12–P17).

@@ -1,0 +1,64 @@
+name: Python Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pytest-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python - <<'PY'
+          import tomllib
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          pyproject = tomllib.loads(Path('pyproject.toml').read_text(encoding='utf-8'))
+          project = pyproject.get('project', {})
+          base_deps = list(project.get('dependencies', []))
+          optional = project.get('optional-dependencies', {})
+          dev_deps = list(optional.get('dev', []))
+
+          install_targets = [*base_deps, *dev_deps]
+          if not install_targets:
+              raise SystemExit('No dependencies found in pyproject.toml')
+
+          cmds = [[sys.executable, '-m', 'pip', 'install', *install_targets]]
+
+          for cmd in cmds:
+              print('+', ' '.join(cmd))
+              subprocess.check_call(cmd)
+          PY
+
+      - name: Run pytest
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest

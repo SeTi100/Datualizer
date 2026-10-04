@@ -13,6 +13,7 @@ from datualizer_core.dataset import SOURCES_SCHEMA, AuditEntry, AuditLog, DualMo
 from datualizer_core.ingestion.config import IngestionConfig, LongFormatConfig, LongFormatMode
 from datualizer_core.ingestion.long_format import detect_long_format, pivot_long_to_wide
 from datualizer_core.ingestion.pre_scanner import PreScanResult, pre_scan
+from datualizer_core.ingestion.quality_rules import resolve_quality, to_settings
 from datualizer_core.ingestion.roles import RoleConfigError, assign_parameter_roles, resolve_run_columns
 from datualizer_core.ingestion.sources import read_source
 from datualizer_core.ingestion.type_inference import (
@@ -195,6 +196,7 @@ class CSVLoader:
         spec = detect_long_format(df, column_kinds, time_col, lf_cfg, self.config.vocabulary)
 
         channel_attrs: dict[str, dict] = {}
+        raw_variables: dict[str, str] = {}
         source_format = "wide" if spec is None else "long"
         if spec is not None and lf_cfg.pivot:
             pivoted = pivot_long_to_wide(df, spec, column_kinds, time_col, audit_log)
@@ -222,8 +224,16 @@ class CSVLoader:
             df, column_kinds, run_columns, explicit, self.config.roles, audit_log
         )
 
+        # 6. Quality flag settings (flags themselves are computed lazily by the dataset)
+        channels = [c for c, k in column_kinds.items() if k is ColumnKind.NUMERIC]
+        names = {**raw_to_clean, **{raw: ch for ch, raw in raw_variables.items()}}
+        quality = resolve_quality(
+            self.config.quality, df, channels, run_columns, channel_attrs, names, self.config.vocabulary
+        )
+
         # Freeze every decision into a replayable spec
         resolved = self.config.model_copy(deep=True)
+        resolved.quality = quality
         resolved.time_column = detected_time_col
         resolved.column_kinds = {
             raw: column_kinds.get(raw_to_clean[raw], kind) for raw, kind in resolved_kinds.items()
@@ -253,6 +263,7 @@ class CSVLoader:
             run_columns=run_columns,
             aborted_run_fraction=self.config.runs.aborted_fraction,
             sources=sources,
+            quality=to_settings(quality),
         )
 
     def _long_config_with_clean_names(self, raw_to_clean: dict[str, str]) -> LongFormatConfig:

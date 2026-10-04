@@ -45,12 +45,14 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 ├── schema.py                     # ColumnKind (TIME/NUMERIC/PARAMETER/IDENTIFIER/CATEGORICAL), importzyklusfrei
 ├── dataset.py                    # DualModeDataset, AuditLog
 ├── runs.py                       # Run-Übersicht, Kanalverfügbarkeit, Zeit pro Run
+├── quality.py                    # Qualitäts-Flags als Ereignistabelle (markieren, nie ändern)
 ├── ingestion/
-│   ├── config.py                 # IngestionConfig, Vocabulary, LongFormatConfig, RoleConfig, RunConfig  ← alle Stellschrauben
+│   ├── config.py                 # IngestionConfig, Vocabulary, LongFormatConfig, RoleConfig, RunConfig, QualityConfig, MergeConfig  ← alle Stellschrauben
 │   ├── pre_scanner.py            # Delimiter, Dezimal, BOM, Header, Footer
 │   ├── type_inference.py         # Spaltentyp pro Spalte
 │   ├── long_format.py            # Long erkennen + nach wide pivotieren
 │   ├── roles.py                  # Messwert vs. Parameter (konstant pro Run)
+│   ├── quality_rules.py          # QualityConfig auflösen: Namen übersetzen, Sprungschwellen vorschlagen
 │   ├── loader.py                 # CSV → DualModeDataset (orchestriert alles, baut ingestion_spec)
 │   ├── sources.py                # Quelle lesen, SHA-256-Fingerabdruck
 │   └── merge.py                  # load_csvs: mehrere Dateien → ein Dataset (Duplikate, Snapshots)
@@ -59,7 +61,7 @@ datualizer_gui/                   # PySide6-App, Einstieg: python -m datualizer_
 tests/fixtures/runs_export/       # 13 echte Pipeline-Exporte (unveränderlich!)
 ```
 
-Ablauf: `load_csv(path, config=…)` → PreScanner → Zeitspalte → Typ-Inferenz (Overrides zuerst) → Casting mit Audit → Long-Erkennung und Pivot → Rollen (Parameter) → `DualModeDataset` (mit `column_kinds`, `channels`, `parameters`, `empty_columns`, `runs`, `channel_attrs`, `source_format`, `ingestion_spec`, `sources`).
+Ablauf: `load_csv(path, config=…)` → PreScanner → Zeitspalte → Typ-Inferenz (Overrides zuerst) → Casting mit Audit → Long-Erkennung und Pivot → Rollen (Parameter) → Qualitäts-Einstellungen auflösen → `DualModeDataset` (mit `column_kinds`, `channels`, `parameters`, `empty_columns`, `runs`, `channel_attrs`, `source_format`, `ingestion_spec`, `sources`, `quality_flags`).
 Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft gleiches Layout, dedupliziert über den Schlüssel (spätere Datei gewinnt) und lädt die gemischte Rohtabelle einmal durch denselben Loader.
 
 **Import-Regel:** `dataset.py` darf nichts aus `ingestion/` zur Laufzeit importieren, sonst entsteht ein Zyklus. Gemeinsame Typen gehören nach `schema.py`. Typ-Hinweise gehen über `TYPE_CHECKING`.
@@ -112,11 +114,12 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
   - Leere Spalten markieren (P9, P19): `fill_ratio`, `empty_columns`
   - Run-Segmentierung (P10, P11, P18): `runs`, `channel_availability`, `select_run`, `RunConfig`, Run-Tabelle im Inspector
   - Multi-File-Merge mit Dedupe (P2, P3): `load_csvs`, `MergeConfig`, `sources`, „Add CSV (merge)“ in der GUI
+  - Qualitäts-Flags (P12–P17): `quality_flags`, `flag_mask`, `with_flag_columns`, `QualityConfig`, Plot ohne Linien über Lücken
 
 **Nächste offene Punkte** (Reihenfolge nach [Datenkatalog §6](docs/DATENKATALOG_RUNS_EXPORT.md)):
 
-1. **Qualitäts-Flags (P12–P17)** als separate Flag-Spalten: Lücken, Dropout als 0.0, Nachfüll-Sprünge, eingefrorene Sensoren, unplausible Werte.
-2. **Einheiten aus Headern extrahieren (P20)** nach `channel_attrs`, danach Parameter ohne Einheit markieren (Rest von P9).
+1. **Einheiten aus Headern extrahieren (P20)** nach `channel_attrs`, danach Parameter ohne Einheit markieren (Rest von P9).
+2. **Wert und Einheit in einer Zelle (P6)** (`Konzentration = "20 °C"`) und widersprüchliche Metadaten anzeigen (P8).
 3. Danach: Block-Segmentation und Ragged-Healer (ursprünglicher Etappe-2-Plan), sobald Gerätedaten mit Kopfblöcken vorliegen.
 
 Langfristig ist `IngestionConfig` die Keimzelle des **Recipe-AST** (Etappe 3) und des **Ingestion-Wizards** (Etappe 6). Neue Einstellungen deshalb sauber typisiert und serialisierbar halten.

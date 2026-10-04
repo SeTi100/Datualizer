@@ -54,6 +54,10 @@ class Vocabulary(BaseModel):
         default_factory=lambda: ["unit", "einheit", "calculated", "computed", "derived", "berechnet"],
         description="Long-table columns that describe a variable even if they are constant everywhere.",
     )
+    calculated_tokens: list[str] = Field(
+        default_factory=lambda: ["calculated", "computed", "derived", "berechnet"],
+        description="A channel attribute with one of these tokens and a true value marks a calculated channel.",
+    )
     run_tokens: list[str] = Field(
         default_factory=lambda: ["run", "lauf", "batch"],
         description="Identifier/categorical columns with these tokens define a run (used for parameter roles).",
@@ -113,6 +117,45 @@ class RunConfig(BaseModel):
     )
 
 
+class QualityConfig(BaseModel):
+    """Quality flags (Datenkatalog P12–P17). Samples are marked in `DualModeDataset.quality_flags`,
+    never changed or dropped.
+
+    Channel names may be raw headers, loaded names or (long tables) variable names. The resolved
+    spec holds loaded names and a jump threshold for every channel.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    detect: bool = Field(True, description="Compute quality flags at all.")
+    gap_factor: float = Field(
+        5.0, ge=0.0, description="A time step above this multiple of the run's median step is a gap. 0 = off."
+    )
+    stuck_min_duration_s: float = Field(
+        30.0, ge=0.0, description="Identical values for at least this long count as a stuck sensor. 0 = off."
+    )
+    stuck_min_samples: int = Field(3, ge=2, description="Minimum repeated samples for a stuck flag.")
+    jump_factor: float = Field(
+        10.0, ge=0.0,
+        description="Automatic jump threshold: this multiple of the 99th percentile of step sizes per channel.",
+    )
+    jump_thresholds: dict[str, float] = Field(
+        default_factory=dict,
+        description="Explicit jump threshold per channel (0 = off). Channels not listed get the automatic one.",
+    )
+    dropout_max_duration_s: float = Field(
+        60.0, ge=0.0, description="A jump away and back to the previous level within this time is a dropout."
+    )
+    ranges: dict[str, tuple[float | None, float | None]] = Field(
+        default_factory=dict,
+        description="Plausible (min, max) per channel; None = open side. Values outside are flagged.",
+    )
+    calculated_channels: list[str] | None = Field(
+        None,
+        description="Channels computed from others (nulls flagged separately). None = from channel attributes.",
+    )
+
+
 class MergeConflictMode(str, Enum):
     NEWEST = "newest"  # the later file wins, every replaced differing value is audited
     ERROR = "error"    # any differing value for the same key raises MergeError
@@ -162,6 +205,7 @@ class IngestionConfig(BaseModel):
     long_format: LongFormatConfig = Field(default_factory=LongFormatConfig)
     roles: RoleConfig = Field(default_factory=RoleConfig)
     runs: RunConfig = Field(default_factory=RunConfig)
+    quality: QualityConfig = Field(default_factory=QualityConfig)
     merge: MergeConfig = Field(default_factory=MergeConfig)
     vocabulary: Vocabulary = Field(default_factory=Vocabulary)
 

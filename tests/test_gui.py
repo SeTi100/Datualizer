@@ -685,3 +685,32 @@ def test_main_window_merge_error_does_not_crash(qapp: QApplication, monkeypatch:
         RUNS_EXPORT / "runs_export_20261004_115428_long.csv",  # wide + long: MergeError
     ])
     assert win.dataset is None
+
+
+# ==============================================================================
+# Qualitäts-Flags (Datenkatalog P12–P17)
+# ==============================================================================
+
+
+def test_canvas_does_not_connect_across_gaps(qapp: QApplication) -> None:
+    ds = load_csv(ALL_MESSY)
+    canvas = MultiChannelPlotCanvas()
+    canvas.set_dataset(ds, active_channels=["masse"])
+    connect = canvas._connect_mask(canvas._cached_channel_arrays["masse"])
+    assert not connect[535] and not connect[899]  # Lücken vor Zeile 536 und 900
+    assert connect[100]
+    assert not connect[3]  # Leerfeld in Zeile 4 bleibt eine Lücke
+
+
+def test_inspector_quality_table(qapp: QApplication) -> None:
+    inspector = InspectorPanel()
+    inspector.set_dataset(load_csv(ALL_MESSY))
+    assert not inspector.quality_group.isHidden()
+    rows = {
+        (inspector.quality_table.item(i, 0).text(), inspector.quality_table.item(i, 1).text())
+        for i in range(inspector.quality_table.rowCount())
+    }
+    assert ("masse", "dropout") in rows
+    assert ("(all rows)", "gap") in rows
+    inspector.set_dataset(None)
+    assert inspector.quality_group.isHidden()

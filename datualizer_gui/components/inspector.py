@@ -161,6 +161,22 @@ class InspectorPanel(QWidget):
 
         layout.addWidget(chan_group)
 
+        # 3b. Quality flags (P12–P17): counted per channel, the data stays unchanged
+        self.quality_group = QGroupBox("Quality Flags")
+        quality_layout = QVBoxLayout(self.quality_group)
+        quality_layout.setSpacing(4)
+        self.quality_table = QTableWidget(0, 3)
+        self.quality_table.setHorizontalHeaderLabels(["Channel", "Flag", "Samples"])
+        self.quality_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.quality_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.quality_table.verticalHeader().setVisible(False)
+        self.quality_table.setMaximumHeight(160)
+        quality_layout.addWidget(self.quality_table)
+        self.quality_group.setHidden(True)
+        layout.addWidget(self.quality_group)
+
         # 4. Error Audit Area
         audit_group = QGroupBox("Conversion Audit Log")
         audit_layout = QVBoxLayout(audit_group)
@@ -206,6 +222,7 @@ class InspectorPanel(QWidget):
             self.channel_list_widget.clear()
             self._all_channels = []
             self._fill_run_table()
+            self._fill_quality_table()
             self.lbl_audit_summary.setText("Audit Log: No dataset loaded")
             self.audit_table.setRowCount(0)
             self._is_updating_ui = False
@@ -256,6 +273,7 @@ class InspectorPanel(QWidget):
             self.channel_list_widget.addItem(item)
         self._apply_fill_ratios(self._dataset.fill_ratio)
         self._fill_run_table()
+        self._fill_quality_table()
 
         # 3. Audit Log Entries
         audit_log = self._dataset.audit_log
@@ -291,6 +309,19 @@ class InspectorPanel(QWidget):
                 item.setCheckState(Qt.CheckState.Checked)
                 item.setData(Qt.ItemDataRole.ForegroundRole, None)
                 item.setToolTip(f"Fill ratio: {ratio * 100:.0f} %")
+
+    def _fill_quality_table(self) -> None:
+        summary = self._dataset.quality_summary if self._dataset is not None else None
+        if summary is None or summary.is_empty():
+            self.quality_table.setRowCount(0)
+            self.quality_group.setHidden(True)
+            return
+        self.quality_table.setRowCount(len(summary))
+        for i, row in enumerate(summary.iter_rows(named=True)):
+            self.quality_table.setItem(i, 0, QTableWidgetItem(row["channel"] or "(all rows)"))
+            self.quality_table.setItem(i, 1, QTableWidgetItem(row["flag"]))
+            self.quality_table.setItem(i, 2, QTableWidgetItem(f"{row['n']:,}"))
+        self.quality_group.setHidden(False)
 
     def _fill_run_table(self) -> None:
         """List all runs with size, timing, parameters and an 'aborted' badge (P10, P11, P18)."""

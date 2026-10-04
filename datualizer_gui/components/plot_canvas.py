@@ -49,6 +49,7 @@ class MultiChannelPlotCanvas(QWidget):
         self._plot_items: dict[str, pg.PlotItem] = {}
         self._crosshair_lines: list[pg.InfiniteLine] = []
         self._time_data: np.ndarray | None = None
+        self._gap_rows: np.ndarray = np.array([], dtype=np.int64)
         self._cached_channel_arrays: dict[str, np.ndarray] = {}
         self._x_label = "Time (seconds)"
 
@@ -123,6 +124,7 @@ class MultiChannelPlotCanvas(QWidget):
         self._x_label = x_label
         self._cached_channel_arrays.clear()
         self._time_data = None
+        self._gap_rows = np.array([], dtype=np.int64)
 
         if self._dataset is None:
             self._active_channels = []
@@ -135,6 +137,9 @@ class MultiChannelPlotCanvas(QWidget):
             self._time_data = self._dataset.to_numpy(time_col, allow_copy=False)
         except Exception:
             self._time_data = self._dataset.to_numpy(time_col, allow_copy=True)
+
+        # Session gaps (P12): never draw a line across them
+        self._gap_rows = self._dataset.flag_mask(["gap"]).arg_true().to_numpy().astype(np.int64)
 
         if active_channels is not None:
             self._active_channels = [c for c in active_channels if c in self._dataset.columns]
@@ -167,6 +172,16 @@ class MultiChannelPlotCanvas(QWidget):
             return self._dataset.to_numpy(col, allow_copy=False)
         except Exception:
             return self._dataset.to_numpy(col, allow_copy=True)
+
+    def _connect_mask(self, values: np.ndarray) -> np.ndarray:
+        """Connect sample i to i+1 only if both are finite and no gap starts at i+1."""
+        finite = np.isfinite(np.asarray(values, dtype=np.float64))
+        connect = finite & np.roll(finite, -1)
+        if len(connect):
+            connect[-1] = False
+        gap_rows = self._gap_rows[(self._gap_rows > 0) & (self._gap_rows < len(connect))]
+        connect[gap_rows - 1] = False
+        return connect
 
     def _rebuild_plots(self) -> None:
         """Reconstruct the stacked subplots, link X-axes, and attach crosshair lines."""
@@ -218,7 +233,7 @@ class MultiChannelPlotCanvas(QWidget):
                 ch_data,
                 pen=pg.mkPen(color=color, width=1.5),
                 name=ch,
-                connect="finite",
+                connect=self._connect_mask(ch_data),
             )
 
             # Add crosshair vertical line

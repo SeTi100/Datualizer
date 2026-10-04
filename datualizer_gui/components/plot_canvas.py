@@ -131,8 +131,9 @@ class MultiChannelPlotCanvas(QWidget):
         if active_channels is not None:
             self._active_channels = [c for c in active_channels if c in self._dataset.columns]
         else:
-            # Default to all numeric measurement channels (metadata is not plotted)
-            self._active_channels = list(self._dataset.channels)
+            # Default to all numeric measurement channels with values (metadata is not plotted)
+            empty = set(self._dataset.empty_columns)
+            self._active_channels = [c for c in self._dataset.channels if c not in empty]
 
         self._rebuild_plots()
 

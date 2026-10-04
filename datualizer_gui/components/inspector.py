@@ -1,0 +1,310 @@
+"""Inspector Panel: File loading, metadata inspection, channel checklist, and error audit."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Sequence
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from datualizer_core.dataset import DualModeDataset
+from datualizer_core.ingestion.pre_scanner import pre_scan
+
+
+class InspectorPanel(QWidget):
+    """Inspector panel providing file management, metadata readout, channel selection,
+
+    and audit error inspection.
+    """
+
+    file_selected = Signal(str)
+    channels_toggled = Signal(list)  # Emits list of selected channel names
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._dataset: DualModeDataset | None = None
+        self._file_path: str = ""
+        self._all_channels: list[str] = []
+        self._is_updating_ui = False
+
+        self._init_ui()
+
+    def _init_ui(self) -> None:
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(4, 4, 4, 4)
+        main_layout.setSpacing(6)
+
+        # Scroll area container for long content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(8)
+
+        # 1. File Actions
+        file_group = QGroupBox("File & Ingestion")
+        file_layout = QVBoxLayout(file_group)
+        file_layout.setSpacing(4)
+
+        btn_row = QHBoxLayout()
+        self.btn_open = QPushButton("Open CSV...")
+        self.btn_open.setStyleSheet("font-weight: bold;")
+        self.btn_open.clicked.connect(self._on_open_file_clicked)
+        btn_row.addWidget(self.btn_open)
+
+        self.btn_quick_load = QPushButton("Quick Load: SA_testmessung_1")
+        self.btn_quick_load.clicked.connect(self._on_quick_load_clicked)
+        btn_row.addWidget(self.btn_quick_load)
+
+        file_layout.addLayout(btn_row)
+
+        self.lbl_filepath = QLabel("No file loaded")
+        self.lbl_filepath.setWordWrap(True)
+        self.lbl_filepath.setStyleSheet("color: #888888; font-size: 10px;")
+        file_layout.addWidget(self.lbl_filepath)
+
+        layout.addWidget(file_group)
+
+        # 2. Metadata Inspection Area
+        meta_group = QGroupBox("Dataset Metadata")
+        meta_layout = QVBoxLayout(meta_group)
+        meta_layout.setSpacing(3)
+
+        self.lbl_rows = QLabel("Rows: -")
+        self.lbl_cols = QLabel("Columns: -")
+        self.lbl_delimiter = QLabel("Delimiter: -")
+        self.lbl_decimal = QLabel("Decimal Separator: -")
+        self.lbl_timespan = QLabel("Time Span: -")
+
+        for lbl in (
+            self.lbl_rows,
+            self.lbl_cols,
+            self.lbl_delimiter,
+            self.lbl_decimal,
+            self.lbl_timespan,
+        ):
+            lbl.setStyleSheet("font-size: 11px;")
+            meta_layout.addWidget(lbl)
+
+        layout.addWidget(meta_group)
+
+        # 3. Channel Checklist
+        chan_group = QGroupBox("Channels & Subplots")
+        chan_layout = QVBoxLayout(chan_group)
+        chan_layout.setSpacing(4)
+
+        chan_btn_row = QHBoxLayout()
+        self.btn_select_all = QPushButton("Select All")
+        self.btn_select_all.clicked.connect(self.select_all_channels)
+        chan_btn_row.addWidget(self.btn_select_all)
+
+        self.btn_deselect_all = QPushButton("Deselect All")
+        self.btn_deselect_all.clicked.connect(self.deselect_all_channels)
+        chan_btn_row.addWidget(self.btn_deselect_all)
+
+        chan_layout.addLayout(chan_btn_row)
+
+        self.channel_list_widget = QListWidget()
+        self.channel_list_widget.setStyleSheet(
+            "QListWidget::item { padding: 4px; border-bottom: 1px solid #2d2d38; }"
+        )
+        self.channel_list_widget.itemChanged.connect(self._on_item_changed)
+        chan_layout.addWidget(self.channel_list_widget)
+
+        layout.addWidget(chan_group)
+
+        # 4. Error Audit Area
+        audit_group = QGroupBox("Conversion Audit Log")
+        audit_layout = QVBoxLayout(audit_group)
+        audit_layout.setSpacing(4)
+
+        self.lbl_audit_summary = QLabel("Audit Log: No dataset loaded")
+        self.lbl_audit_summary.setStyleSheet("font-weight: bold; font-size: 11px;")
+        audit_layout.addWidget(self.lbl_audit_summary)
+
+        self.audit_table = QTableWidget(0, 4)
+        self.audit_table.setHorizontalHeaderLabels(["Row", "Column", "Raw Value", "Reason"])
+        self.audit_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.audit_table.setAlternatingRowColors(True)
+        self.audit_table.setMaximumHeight(150)
+        audit_layout.addWidget(self.audit_table)
+
+        layout.addWidget(audit_group)
+
+        scroll.setWidget(container)
+        main_layout.addWidget(scroll)
+
+    def set_dataset(
+        self,
+        dataset: DualModeDataset | None,
+        file_path: str | Path = "",
+        delimiter: str = ",",
+        decimal_sep: str = ",",
+    ) -> None:
+        """Bind dataset, update metadata, channel list, and audit entries."""
+        self._dataset = dataset
+        self._file_path = str(file_path)
+        self._is_updating_ui = True
+
+        if self._dataset is None:
+            self.lbl_filepath.setText("No file loaded")
+            self.lbl_rows.setText("Rows: -")
+            self.lbl_cols.setText("Columns: -")
+            self.lbl_delimiter.setText("Delimiter: -")
+            self.lbl_decimal.setText("Decimal Separator: -")
+            self.lbl_timespan.setText("Time Span: -")
+            self.channel_list_widget.clear()
+            self._all_channels = []
+            self.lbl_audit_summary.setText("Audit Log: No dataset loaded")
+            self.audit_table.setRowCount(0)
+            self._is_updating_ui = False
+            return
+
+        # 1. File path & Metadata
+        if self._file_path:
+            p = Path(self._file_path)
+            self.lbl_filepath.setText(f"{p.name} ({p.resolve()})")
+        else:
+            self.lbl_filepath.setText("In-Memory Dataset")
+
+        n_rows = len(self._dataset)
+        n_cols = len(self._dataset.columns)
+        self.lbl_rows.setText(f"Rows: {n_rows:,}")
+        self.lbl_cols.setText(f"Columns: {n_cols}")
+        self.lbl_delimiter.setText(f"Delimiter: {repr(delimiter)}")
+        self.lbl_decimal.setText(f"Decimal Separator: {repr(decimal_sep)}")
+
+        # Time span
+        time_col = self._dataset.time_col
+        if time_col in self._dataset.columns and len(self._dataset) > 0:
+            time_series = self._dataset[time_col]
+            t_min = time_series.min()
+            t_max = time_series.max()
+            if t_min is not None and t_max is not None:
+                duration_s = t_max - t_min
+                m, s = divmod(int(duration_s), 60)
+                h, m = divmod(m, 60)
+                span_str = (
+                    f"{t_min:.1f}s – {t_max:.1f}s (Duration: {h:02d}:{m:02d}:{s:02d})"
+                )
+                self.lbl_timespan.setText(f"Time Span: {span_str}")
+            else:
+                self.lbl_timespan.setText("Time Span: Empty time range")
+        else:
+            self.lbl_timespan.setText("Time Span: N/A")
+
+        # 2. Channels Checklist
+        self.channel_list_widget.clear()
+        self._all_channels = [
+            c for c in self._dataset.columns if c != time_col and c != "time"
+        ]
+
+        for ch in self._all_channels:
+            item = QListWidgetItem(ch)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
+            self.channel_list_widget.addItem(item)
+
+        # 3. Audit Log Entries
+        audit_log = self._dataset.audit_log
+        err_count = len(audit_log)
+        if err_count == 0:
+            self.lbl_audit_summary.setText("Audit Log: 0 Conversion Errors (Clean)")
+            self.lbl_audit_summary.setStyleSheet("color: #2ecc71; font-weight: bold; font-size: 11px;")
+            self.audit_table.setRowCount(0)
+        else:
+            self.lbl_audit_summary.setText(f"Audit Log: {err_count} Conversion Anomalies")
+            self.lbl_audit_summary.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 11px;")
+            self.audit_table.setRowCount(err_count)
+            for row_idx, entry in enumerate(audit_log.entries):
+                self.audit_table.setItem(row_idx, 0, QTableWidgetItem(str(entry.row_index)))
+                self.audit_table.setItem(row_idx, 1, QTableWidgetItem(str(entry.column)))
+                self.audit_table.setItem(row_idx, 2, QTableWidgetItem(str(entry.raw_value)))
+                self.audit_table.setItem(row_idx, 3, QTableWidgetItem(str(entry.reason)))
+
+        self._is_updating_ui = False
+        self.channels_toggled.emit(self.get_selected_channels())
+
+    def get_selected_channels(self) -> list[str]:
+        """Return list of channel names currently checked."""
+        selected: list[str] = []
+        for idx in range(self.channel_list_widget.count()):
+            item = self.channel_list_widget.item(idx)
+            if item.checkState() == Qt.CheckState.Checked:
+                selected.append(item.text())
+        return selected
+
+    def set_selected_channels(self, channels: Sequence[str]) -> None:
+        """Set check state for specific channels."""
+        self._is_updating_ui = True
+        target = set(channels)
+        for idx in range(self.channel_list_widget.count()):
+            item = self.channel_list_widget.item(idx)
+            state = Qt.CheckState.Checked if item.text() in target else Qt.CheckState.Unchecked
+            item.setCheckState(state)
+        self._is_updating_ui = False
+        self.channels_toggled.emit(self.get_selected_channels())
+
+    def select_all_channels(self) -> None:
+        """Select all available channels in the list."""
+        self._is_updating_ui = True
+        for idx in range(self.channel_list_widget.count()):
+            self.channel_list_widget.item(idx).setCheckState(Qt.CheckState.Checked)
+        self._is_updating_ui = False
+        self.channels_toggled.emit(self.get_selected_channels())
+
+    def deselect_all_channels(self) -> None:
+        """Deselect all channels in the list."""
+        self._is_updating_ui = True
+        for idx in range(self.channel_list_widget.count()):
+            self.channel_list_widget.item(idx).setCheckState(Qt.CheckState.Unchecked)
+        self._is_updating_ui = False
+        self.channels_toggled.emit(self.get_selected_channels())
+
+    def _on_item_changed(self, item: QListWidgetItem) -> None:
+        if not self._is_updating_ui:
+            self.channels_toggled.emit(self.get_selected_channels())
+
+    def _on_open_file_clicked(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Measurement CSV",
+            "",
+            "CSV / Delimited Files (*.csv *.tsv *.txt);;All Files (*)",
+        )
+        if file_path:
+            self.file_selected.emit(file_path)
+
+    def _on_quick_load_clicked(self) -> None:
+        target_name = "SA_testmessung_1.csv"
+        # Check current working directory or relative to project root
+        candidates = [
+            Path.cwd() / target_name,
+            Path(__file__).resolve().parent.parent.parent / target_name,
+        ]
+        for c in candidates:
+            if c.exists():
+                self.file_selected.emit(str(c))
+                return
+
+        # Fallback emit target name directly
+        self.file_selected.emit(target_name)

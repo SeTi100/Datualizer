@@ -1,0 +1,22 @@
+[project]
+name = "datualizer"
+version = "0.1.0"
+description = "High-Performance Tidy Data Wrangling & Visualization Framework for Sensor & Engineering Data"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "polars>=1.0.0",
+    "pyarrow>=15.0.0",
+    "pyside6>=6.6.0",
+    "pyqtgraph>=0.13.3",
+    "pydantic>=2.0.0",
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

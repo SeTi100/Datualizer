@@ -214,9 +214,7 @@ class InspectorPanel(QWidget):
 
         # 2. Channels Checklist
         self.channel_list_widget.clear()
-        self._all_channels = [
-            c for c in self._dataset.columns if c != time_col and c != "time"
-        ]
+        self._all_channels = list(self._dataset.channels)
 
         for ch in self._all_channels:
             item = QListWidgetItem(ch)

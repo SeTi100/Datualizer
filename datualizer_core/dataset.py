@@ -9,6 +9,7 @@ import numpy as np
 import polars as pl
 
 from datualizer_core.pipeline.operators import unpivot
+from datualizer_core.schema import ColumnKind
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,7 @@ class DualModeDataset:
         df: pl.DataFrame,
         audit_log: AuditLog | None = None,
         time_col: str = "time_seconds",
+        column_kinds: dict[str, ColumnKind] | None = None,
     ) -> None:
         self._df = df
         self._audit_log = audit_log if audit_log is not None else AuditLog()
@@ -109,7 +111,22 @@ class DualModeDataset:
             self._time_col = df.columns[0]
         else:
             self._time_col = time_col
+        self._column_kinds = self._derive_column_kinds(column_kinds or {})
         self._cached_long_df: pl.DataFrame | None = None
+
+    def _derive_column_kinds(self, given: dict[str, ColumnKind]) -> dict[str, ColumnKind]:
+        """Complete column kinds from dtypes for columns the caller did not classify."""
+        kinds: dict[str, ColumnKind] = {}
+        for col, dtype in self._df.schema.items():
+            if col in given:
+                kinds[col] = given[col]
+            elif col == self._time_col:
+                kinds[col] = ColumnKind.TIME
+            elif dtype.is_numeric():
+                kinds[col] = ColumnKind.NUMERIC
+            else:
+                kinds[col] = ColumnKind.CATEGORICAL
+        return kinds
 
     @classmethod
     def from_file(cls, path: str | Path, **kwargs) -> "DualModeDataset":
@@ -141,6 +158,24 @@ class DualModeDataset:
     def columns(self) -> list[str]:
         """Return column names of the wide DataFrame."""
         return self._df.columns
+
+    @property
+    def column_kinds(self) -> dict[str, ColumnKind]:
+        """Return the inferred ColumnKind for every column."""
+        return dict(self._column_kinds)
+
+    @property
+    def channels(self) -> list[str]:
+        """Return the numeric measurement channels (plottable columns, excluding time and metadata)."""
+        return [c for c, k in self._column_kinds.items() if k is ColumnKind.NUMERIC]
+
+    @property
+    def metadata_columns(self) -> list[str]:
+        """Return identifier and categorical columns (e.g. run_id, phase_status)."""
+        return [
+            c for c, k in self._column_kinds.items()
+            if k in (ColumnKind.IDENTIFIER, ColumnKind.CATEGORICAL)
+        ]
 
     @property
     def schema(self) -> pl.Schema:
@@ -214,12 +249,16 @@ class DualModeDataset:
             return self._cached_long_df
 
         if id_vars is None:
+            # Metadata columns stay as identifiers; only numeric channels are melted.
             if self._time_col in self._df.columns:
                 effective_id = [self._time_col]
             elif len(self._df.columns) > 0:
                 effective_id = [self._df.columns[0]]
             else:
                 effective_id = []
+            effective_id += [c for c in self.metadata_columns if c not in effective_id]
+            if value_vars is None:
+                value_vars = [c for c in self.channels if c not in effective_id]
         elif isinstance(id_vars, str):
             effective_id = [id_vars]
         else:

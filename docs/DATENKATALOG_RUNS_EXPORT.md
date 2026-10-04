@@ -55,7 +55,7 @@ Das ist genauso wichtig für die Priorisierung:
 - Encoding ist durchgehend UTF-8 ohne BOM, Trennzeichen `,`, Dezimalpunkt `.`, ISO-8601-Zeitstempel mit µs.
 - Es gibt weder Metadaten-Kopfblöcke noch mehrzeilige Header, Footer-Statistiken oder abgeschnittene Zeilen.
 
-→ **Konsequenz für den Etappenplan:** Bei diesem Datentyp liegen die Probleme nicht in der Dateistruktur (Block-Segmentation, Ragged-Rows). Sie liegen in **Semantik und Qualität**: Typen, Rollen, Duplikate, Plausibilität. Etappe 2 sollte entsprechend umgewichtet werden (siehe Abschnitt 5).
+→ **Konsequenz für den Etappenplan:** Bei diesem Datentyp liegen die Probleme nicht in der Dateistruktur (Block-Segmentation, Ragged-Rows). Sie liegen in **Semantik und Qualität**: Typen, Rollen, Duplikate, Plausibilität. Etappe 2 sollte entsprechend umgewichtet werden (siehe Abschnitt 6).
 
 ## 5. Grundsatz: Automatik schlägt vor, Nutzer entscheidet
 

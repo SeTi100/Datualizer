@@ -212,7 +212,7 @@ Was genau darin steckt und welche Anforderungen daraus folgen, steht im [Datenka
 
 ## Mitmachen
 
-Issues, Bug-Reports und Pull Requests sind willkommen. Ein paar Hausregeln:
+Issues, Bug-Reports und Pull Requests sind willkommen. KI-Agenten (und gern auch Menschen) lesen vorher [`AGENTS.md`](AGENTS.md): Dort stehen Ziel, Prinzipien, Arbeitsablauf und die nächsten offenen Punkte. Ein paar Hausregeln:
 
 - `pytest -v` muss grün sein, bevor etwas gemergt wird.
 - Neue Ingestion-Features bekommen eine Fixture mit dem Problemfall dazu.

@@ -102,8 +102,8 @@ class TestRunsExportCorpus:
         assert ds["experiment_name"].unique().to_list() == ["250"]  # P5: Name bleibt String
         assert len(ds.audit_log) == 0
 
-    def test_long_export_column_kinds(self) -> None:
-        ds = load_csv(FIXTURES / "runs_export_20261004_115519_long.csv")
+    def test_long_export_column_kinds_without_pivot(self) -> None:
+        ds = load_csv(FIXTURES / "runs_export_20261004_115519_long.csv", pivot_long=False)
         assert ds.column_kinds["roi_name"] is ColumnKind.CATEGORICAL
         assert ds.column_kinds["unit"] is ColumnKind.CATEGORICAL
         assert ds["roi_name"].n_unique() == 4

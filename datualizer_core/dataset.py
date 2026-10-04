@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 import numpy as np
 import polars as pl
 
 from datualizer_core.pipeline.operators import unpivot
 from datualizer_core.schema import ColumnKind
+
+if TYPE_CHECKING:
+    from datualizer_core.ingestion.config import IngestionConfig
 
 
 @dataclass(frozen=True)
@@ -98,9 +101,15 @@ class DualModeDataset:
         audit_log: AuditLog | None = None,
         time_col: str = "time_seconds",
         column_kinds: dict[str, ColumnKind] | None = None,
+        channel_attrs: dict[str, dict[str, Any]] | None = None,
+        source_format: str = "wide",
+        ingestion_spec: IngestionConfig | None = None,
     ) -> None:
         self._df = df
         self._audit_log = audit_log if audit_log is not None else AuditLog()
+        self._channel_attrs = channel_attrs or {}
+        self._source_format = source_format
+        self._ingestion_spec = ingestion_spec
         if time_col in df.columns:
             self._time_col = time_col
         elif "time_seconds" in df.columns:
@@ -168,6 +177,25 @@ class DualModeDataset:
     def channels(self) -> list[str]:
         """Return the numeric measurement channels (plottable columns, excluding time and metadata)."""
         return [c for c, k in self._column_kinds.items() if k is ColumnKind.NUMERIC]
+
+    @property
+    def channel_attrs(self) -> dict[str, dict[str, Any]]:
+        """Return per-channel attributes such as unit or is_calculated (filled for long-format sources)."""
+        return {ch: dict(attrs) for ch, attrs in self._channel_attrs.items()}
+
+    @property
+    def ingestion_spec(self) -> IngestionConfig | None:
+        """Return the fully resolved IngestionConfig used to load this dataset (None if built in memory).
+
+        Every automatic decision is written out explicitly, so the spec can be edited and passed
+        back to `load_csv(..., config=spec)` to reproduce or correct the result.
+        """
+        return self._ingestion_spec.model_copy(deep=True) if self._ingestion_spec else None
+
+    @property
+    def source_format(self) -> str:
+        """Return the layout of the source file: 'wide' or 'long'."""
+        return self._source_format
 
     @property
     def metadata_columns(self) -> list[str]:
@@ -292,5 +320,6 @@ class DualModeDataset:
     def __repr__(self) -> str:
         return (
             f"DualModeDataset(rows={len(self._df)}, columns={len(self._df.columns)}, "
-            f"time_col='{self._time_col}', audit_errors={len(self._audit_log)})"
+            f"time_col='{self._time_col}', source_format='{self._source_format}', "
+            f"audit_errors={len(self._audit_log)})"
         )

@@ -27,10 +27,11 @@ flowchart TD
         E1_GUI --> E1_Done[STATUS: ABGESCHLOSSEN & VERIFIZIERT - 62 Tests]
     end
 
-    subgraph E2 [Etappe 2: Ingestion-Festung]
-        E2_Block[Block-Segmentation Engine] --> E2_Ragged[Ragged-CSV Healer]
-        E2_Ragged --> E2_Conc[Konzentrations- & Spektren-Handler]
-        E2_Conc --> E2_Audit[Deep Error Harvesting]
+    subgraph E2 [Etappe 2: Ingestion-Festung - IN ARBEIT]
+        E2_Type[Typ-Inferenz + IngestionConfig - FERTIG] --> E2_Long[Wide/Long-Erkennung + Pivot - FERTIG]
+        E2_Long --> E2_Role[Rollen Messwert/Parameter + Run-Segmentierung]
+        E2_Role --> E2_Merge[Multi-File-Merge + Qualitäts-Flags]
+        E2_Merge --> E2_Block[Block-Segmentation + Ragged-Healer]
     end
 
     subgraph E3 [Etappe 3: Tidy & Reshaping DSL]
@@ -87,22 +88,22 @@ flowchart TD
 
 ---
 
-### 🧱 Etappe 2: Die Ingestion-Festung für chaotische Realdaten
-*Ziel: Kein Messgeräte-Export bringt Datualizer zum Absturz.*
-1. **Block-Segmentation Engine:**
-   - Pre-Scanner zerlegt Dateien heuristisch in:
-     - `Metadata Block`: Header-Kommentare, Geräte-Seriennummern, Kalibrierdaten.
-     - `Column Header Block`: Einzelne oder mehrzeilige Spaltenköpfe mit Einheiten.
-     - `Data Block`: Tabellarische Nutzdaten.
-     - `Footer Block`: Zusammenfassungen (MIN, MAX, AVG) oder abgeschnittene Logger-Zeilen.
-2. **Ragged-CSV & Crash Healer:**
-   - Erkennung asynchroner Spaltenbreiten (z. B. wenn der Datenlogger vorzeitig abgebrochen ist).
-   - Strategien: Automatische Null-Auffüllung (`pad_ragged_rows`) oder Abschneiden ab erstem strukturellen Bruch.
-3. **Konzentrationsmessungs- & Spektren-Handler:**
-   - Spezielle Parser für nicht-äquidistante Messungen, Matrix-Exporte (z. B. Wellenlänge vs. Absorption vs. Konzentration) und Batch-Runs mit variablen Metadatenblöcken.
-4. **Encoding & Locale Matrix:**
-   - Vollständige Unterstützung von UTF-8, UTF-16 LE/BE, Latin1/CP1252 (Standard bei älteren deutschen Messgeräten).
-   - Sniffer für gemischte Sonderzeichen.
+### 🧱 Etappe 2: Die Ingestion-Festung für chaotische Realdaten (IN ARBEIT)
+*Ziel: Kein Messgeräte-Export bringt Datualizer zum Absturz oder verfälscht still die Daten.*
+
+> **Umpriorisiert (2026-10-04)** auf Basis echter Pipeline-Exporte, siehe [`DATENKATALOG_RUNS_EXPORT.md`](DATENKATALOG_RUNS_EXPORT.md).
+> Die Probleme realer Daten lagen bei **Semantik und Qualität** (Typen, Rollen, Duplikate, Plausibilität), nicht in der Dateistruktur.
+> Leitprinzip: **Automatik schlägt vor, Nutzer entscheidet.** Jede Heuristik ist über `IngestionConfig` überschreibbar, jede Entscheidung steht replaybar in `ingestion_spec`.
+
+1. ✅ **Typ-Inferenz pro Spalte:** NUMERIC / IDENTIFIER / CATEGORICAL; nur numerische Kanäle werden gecastet, auditiert und geplottet (P4, P5).
+2. ✅ **`IngestionConfig`:** Vokabulare, Schwellen, Spalten-Overrides, Long-Format-Rollen; aufgelöste, replaybare `ingestion_spec`.
+3. ✅ **Wide/Long-Erkennung + Pivot:** Erkennung über Header und Datenform statt Dateiname; Kanal-Attribute (`unit` …) in `channel_attrs` (P1, P19).
+4. ⏳ **Rollen Messwert vs. Parameter** (P7) und **leere Spalten markieren** (P9).
+5. ⏳ **Run-Segmentierung:** `run_id` als eigene Dimension, Kanalverfügbarkeit und Qualitäts-Score pro Run (P10, P11, P18).
+6. ⏳ **Multi-File-Merge mit Dedupe:** Hash-Erkennung, überlappende Snapshots (P2, P3).
+7. ⏳ **Qualitäts-Flags** als separate Spalten: Lücken, Dropout, Sprünge, eingefrorene Sensoren, unplausible Werte (P12–P17).
+8. ⏳ **Block-Segmentation** (Metadaten-Kopf, Multi-Row-Header, Footer-Statistiken) und **Ragged-CSV-Healer**, sobald Gerätedaten mit Kopfblöcken vorliegen.
+9. ⏳ **Encoding-Matrix** (UTF-16, CP1252) sowie Spektren- und Matrix-Exporte.
 
 ---
 
@@ -187,6 +188,8 @@ flowchart TD
 ---
 
 ## Richtlinien für spezialisierte Agenten
+
+> Verbindliche, aktuelle Agenten-Regeln stehen in [`AGENTS.md`](../AGENTS.md). Die folgenden Punkte sind ein Auszug.
 
 - **Schnittstellen-Verträge beachten:** Jede Datenübergabe zwischen Ingestion, Pipeline und GUI nutzt `DualModeDataset` bzw. das Pydantic `RecipeAST`.
 - **Zero-Copy vorziehen:** Für PyQtGraph immer NumPy/Arrow-Views ohne Speicherduplikation verwenden (`df[col].to_numpy()`).

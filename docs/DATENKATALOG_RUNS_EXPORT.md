@@ -55,13 +55,23 @@ Das ist genauso wichtig für die Priorisierung:
 - Encoding ist durchgehend UTF-8 ohne BOM, Trennzeichen `,`, Dezimalpunkt `.`, ISO-8601-Zeitstempel mit µs.
 - Es gibt weder Metadaten-Kopfblöcke noch mehrzeilige Header, Footer-Statistiken oder abgeschnittene Zeilen.
 
-→ **Konsequenz für den Etappenplan:** Bei diesem Datentyp liegen die Probleme nicht in der Dateistruktur (Block-Segmentation, Ragged-Rows). Sie liegen in **Semantik und Qualität**: Typen, Rollen, Duplikate, Plausibilität. Etappe 2 sollte entsprechend umgewichtet werden (siehe Abschnitt 5).
+→ **Konsequenz für den Etappenplan:** Bei diesem Datentyp liegen die Probleme nicht in der Dateistruktur (Block-Segmentation, Ragged-Rows). Sie liegen in **Semantik und Qualität**: Typen, Rollen, Duplikate, Plausibilität. Etappe 2 sollte entsprechend umgewichtet werden (siehe Abschnitt 6).
 
-## 5. Vorgeschlagene Umpriorisierung von Etappe 2
+## 5. Grundsatz: Automatik schlägt vor, Nutzer entscheidet
+
+Alle Namenshinweise in diesem Katalog (`roi_name`, `unit`, `is_calculated`, `snad` …) stammen aus *diesem* Korpus. Andere Anlagen benennen dieselben Dinge anders. Deshalb gilt für jede Heuristik:
+
+- Ihre Vokabulare und Schwellen sind konfigurierbar (`IngestionConfig.vocabulary`, `numeric_ratio_threshold`).
+- Explizite Vorgaben (`column_kinds`, `long_format.*`, `time_column`) schlagen jede Heuristik.
+- Das Ergebnis trägt die aufgelöste Konfiguration (`DualModeDataset.ingestion_spec`). Sie ist ein Fixpunkt: Erneut geladen ergibt sie dieselbe Tabelle (getestet für alle Fixtures).
+- Erzwungene, aber unpassende Vorgaben schlagen laut fehl (`LongFormatError`) statt still falsche Daten zu liefern.
+
+## 6. Vorgeschlagene Umpriorisierung von Etappe 2
 
 1. **Typ- und Rollen-Inferenz** (P4, P5, P7, P9): Behebt den akuten Audit-Bug und ist Voraussetzung für alles Weitere.
    *✅ Typ-Teil erledigt:* `ingestion/type_inference.py` unterscheidet NUMERIC, IDENTIFIER und CATEGORICAL; `DualModeDataset.channels` und `metadata_columns` sind neu. *Offen:* Rollen Messwert vs. Parameter (P7) und leere Spalten markieren (P9).
 2. **Schema-Sniffer wide/long** + `pivot_wider` für long (P1, P19): Aus Etappe 3 vorziehen, als Minimalversion.
+   *✅ Erledigt:* `ingestion/long_format.py` erkennt Long-Tabellen am Header und an der Datenform und pivotiert sie nach wide. `unit` und `is_calculated` landen in `DualModeDataset.channel_attrs`, doppelte Schlüssel im Audit. Wide- und Long-Export derselben Messung ergeben nachweislich dieselbe Tabelle. *Offen:* Kanäle ganz ohne Werte (P19) werden wie im Wide-Format als leere Spalte behalten; das Markieren erfolgt einheitlich mit P9.
 3. **Run-Segmentierung** (`run_id` als erstklassige Dimension, P10, P11, P18): Der Inspector zeigt Runs statt einer flachen Tabelle.
 4. **Multi-File-Merge mit Dedupe** (P2, P3).
 5. **Qualitäts-Flags** (P12–P17) als separate Flag-Spalten, keine destruktive Bereinigung. Das passt zum Nicht-destruktiv-Prinzip.

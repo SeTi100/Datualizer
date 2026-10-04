@@ -9,11 +9,12 @@ import re
 from typing import Sequence, TextIO
 import polars as pl
 
-from datualizer_core.dataset import AuditEntry, AuditLog, DualModeDataset
+from datualizer_core.dataset import SOURCES_SCHEMA, AuditEntry, AuditLog, DualModeDataset
 from datualizer_core.ingestion.config import IngestionConfig, LongFormatConfig, LongFormatMode
 from datualizer_core.ingestion.long_format import detect_long_format, pivot_long_to_wide
 from datualizer_core.ingestion.pre_scanner import PreScanResult, pre_scan
 from datualizer_core.ingestion.roles import RoleConfigError, assign_parameter_roles, resolve_run_columns
+from datualizer_core.ingestion.sources import read_source
 from datualizer_core.ingestion.type_inference import (
     ColumnKind,
     infer_column_kind,
@@ -21,6 +22,18 @@ from datualizer_core.ingestion.type_inference import (
     parse_number,
 )
 from datualizer_core.pipeline.operators import clean_column_name, clean_names, drop_footer
+
+
+def read_raw_table(pre_scan_result: PreScanResult) -> pl.DataFrame:
+    """Read the pre-scanned text as an all-String table (empty frame for empty input)."""
+    if not pre_scan_result.cleaned_text.strip():
+        return pl.DataFrame()
+    return pl.read_csv(
+        io.StringIO(pre_scan_result.cleaned_text),
+        separator=pre_scan_result.delimiter,
+        infer_schema_length=0,
+        has_header=True,
+    )
 
 
 class CSVLoader:
@@ -63,32 +76,16 @@ class CSVLoader:
         """Load CSV data into a DualModeDataset with non-strict casting and error harvesting."""
         if pre_scan_result is None:
             pre_scan_result = pre_scan(source)
+        df_raw = read_raw_table(pre_scan_result)
+        return self.load_frame(df_raw, pre_scan_result.decimal_separator)
 
-        if not pre_scan_result.cleaned_text.strip():
-            empty_df = pl.DataFrame(schema={"time_seconds": pl.Float64})
-            return DualModeDataset(df=empty_df, audit_log=AuditLog(), time_col="time_seconds")
-
-        df_raw = pl.read_csv(
-            io.StringIO(pre_scan_result.cleaned_text),
-            separator=pre_scan_result.delimiter,
-            infer_schema_length=0,
-            has_header=True,
-        )
-
-        if len(df_raw) == 0:
-            empty_df = pl.DataFrame(schema={"time_seconds": pl.Float64})
-            return DualModeDataset(df=empty_df, audit_log=AuditLog(), time_col="time_seconds")
-
-        audit_log = AuditLog()
-
-        # Identify time column
-        detected_time_col = self._resolve_time_column(df_raw.columns)
-
-        # Build column name mapping (raw -> cleaned)
+    def column_name_map(self, columns: Sequence[str]) -> dict[str, str]:
+        """Return the loaded (cleaned, de-duplicated) name for every raw header."""
+        time_col = self._resolve_time_column(list(columns))
         clean_col_names: list[str] = []
         seen: dict[str, int] = {}
-        for i, col in enumerate(df_raw.columns):
-            if col == detected_time_col:
+        for i, col in enumerate(columns):
+            if col == time_col:
                 clean_name = "time_seconds" if self.clean_column_names else col
             elif self.clean_column_names:
                 clean_name = clean_column_name(col, index=i)
@@ -97,14 +94,36 @@ class CSVLoader:
 
             count = seen.get(clean_name, 0)
             if count > 0:
-                unique_name = f"{clean_name}_{count}"
+                clean_col_names.append(f"{clean_name}_{count}")
                 seen[clean_name] = count + 1
-                clean_col_names.append(unique_name)
             else:
                 seen[clean_name] = 1
                 clean_col_names.append(clean_name)
+        return dict(zip(columns, clean_col_names))
 
-        raw_to_clean = dict(zip(df_raw.columns, clean_col_names))
+    def load_frame(
+        self,
+        df_raw: pl.DataFrame,
+        decimal_separator: str = ".",
+        audit_log: AuditLog | None = None,
+        sources: pl.DataFrame | None = None,
+    ) -> DualModeDataset:
+        """Build a DualModeDataset from a raw all-String table (one column per header).
+
+        `audit_log` may carry entries recorded before loading (e.g. merge conflicts); their row
+        indices refer to rows of `df_raw`, like every entry the loader adds.
+        """
+        if df_raw.width == 0 or len(df_raw) == 0:
+            empty_df = pl.DataFrame(schema={"time_seconds": pl.Float64})
+            return DualModeDataset(
+                df=empty_df, audit_log=audit_log or AuditLog(), time_col="time_seconds", sources=sources
+            )
+
+        audit_log = audit_log if audit_log is not None else AuditLog()
+
+        # Identify time column and build column name mapping (raw -> cleaned)
+        detected_time_col = self._resolve_time_column(df_raw.columns)
+        raw_to_clean = self.column_name_map(df_raw.columns)
 
         # 1. Parse and convert time column to relative seconds
         time_seconds = self._convert_time_column(
@@ -131,7 +150,7 @@ class CSVLoader:
                 kind = infer_column_kind(
                     col_name,
                     series.to_list(),
-                    decimal_sep=pre_scan_result.decimal_separator,
+                    decimal_sep=decimal_separator,
                     upper_sentinels=self.upper_sentinels,
                     vocabulary=self.config.vocabulary,
                     numeric_ratio_threshold=self.config.numeric_ratio_threshold,
@@ -143,7 +162,7 @@ class CSVLoader:
                     series,
                     col_name=clean_name,
                     raw_col_name=col_name,
-                    decimal_sep=pre_scan_result.decimal_separator,
+                    decimal_sep=decimal_separator,
                     audit_log=audit_log,
                 ))
             else:
@@ -233,6 +252,7 @@ class CSVLoader:
             ingestion_spec=resolved,
             run_columns=run_columns,
             aborted_run_fraction=self.config.runs.aborted_fraction,
+            sources=sources,
         )
 
     def _long_config_with_clean_names(self, raw_to_clean: dict[str, str]) -> LongFormatConfig:
@@ -473,7 +493,10 @@ def load_csv(
     pivot_long: bool | None = None,
     config: IngestionConfig | None = None,
 ) -> DualModeDataset:
-    """Convenience function to load a CSV into DualModeDataset."""
+    """Convenience function to load a CSV into DualModeDataset.
+
+    The result records the file and its SHA-256 in `sources`. Several files: see `load_csvs`.
+    """
     loader = CSVLoader(
         config,
         time_column=time_column,
@@ -481,4 +504,20 @@ def load_csv(
         sentinels=sentinels,
         pivot_long=pivot_long,
     )
-    return loader.load(source, pre_scan_result=pre_scan_result)
+    info = read_source(source)
+    if pre_scan_result is None:
+        pre_scan_result = pre_scan(info.scan_input)
+    df_raw = read_raw_table(pre_scan_result)
+    sources = pl.DataFrame(
+        [{
+            "source": info.label,
+            "sha256": info.sha256,
+            "n_rows": len(df_raw),
+            "n_kept": len(df_raw),
+            "n_replaced": 0,
+            "n_conflicts": 0,
+            "duplicate_of": None,
+        }],
+        schema=SOURCES_SCHEMA,
+    )
+    return loader.load_frame(df_raw, pre_scan_result.decimal_separator, sources=sources)

@@ -33,6 +33,8 @@ class InspectorPanel(QWidget):
     """
 
     file_selected = Signal(str)
+    files_selected = Signal(list)  # Several files to load and merge
+    files_added = Signal(list)  # Files to merge into the current data
     channels_toggled = Signal(list)  # Emits list of selected channel names
     run_selected = Signal(object)  # Emits the run key tuple, or None for all runs
 
@@ -71,6 +73,11 @@ class InspectorPanel(QWidget):
         self.btn_open.setStyleSheet("font-weight: bold;")
         self.btn_open.clicked.connect(self._on_open_file_clicked)
         btn_row.addWidget(self.btn_open)
+
+        self.btn_add = QPushButton("Add (merge)...")
+        self.btn_add.setToolTip("Merge further files into the current data; later files win on overlaps")
+        self.btn_add.clicked.connect(self._on_add_files_clicked)
+        btn_row.addWidget(self.btn_add)
 
         self.btn_quick_load = QPushButton("Quick Load: SA_testmessung_1")
         self.btn_quick_load.clicked.connect(self._on_quick_load_clicked)
@@ -205,7 +212,10 @@ class InspectorPanel(QWidget):
             return
 
         # 1. File path & Metadata
-        if self._file_path:
+        sources = self._dataset.sources
+        if len(sources) > 1:
+            self.lbl_filepath.setText(self._sources_text(sources))
+        elif self._file_path:
             p = Path(self._file_path)
             self.lbl_filepath.setText(f"{p.name} ({p.resolve()})")
         else:
@@ -387,15 +397,42 @@ class InspectorPanel(QWidget):
         if not self._is_updating_ui:
             self.channels_toggled.emit(self.get_selected_channels())
 
+    @staticmethod
+    def _sources_text(sources) -> str:
+        """One line per merged file: rows kept, replaced by a later file, or skipped as duplicate."""
+        lines = [f"{len(sources)} files merged:"]
+        for row in sources.iter_rows(named=True):
+            name = Path(row["source"]).name
+            if row["duplicate_of"] is not None:
+                lines.append(f"• {name}: duplicate of {Path(row['duplicate_of']).name}, skipped")
+            else:
+                text = f"• {name}: {row['n_kept']:,} of {row['n_rows']:,} rows kept"
+                if row["n_conflicts"]:
+                    text += f", {row['n_conflicts']} conflicting values"
+                lines.append(text)
+        return "\n".join(lines)
+
     def _on_open_file_clicked(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(
+        file_paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Open Measurement CSV",
+            "Open Measurement CSV (select several to merge)",
             "",
             "CSV / Delimited Files (*.csv *.tsv *.txt);;All Files (*)",
         )
-        if file_path:
-            self.file_selected.emit(file_path)
+        if len(file_paths) == 1:
+            self.file_selected.emit(file_paths[0])
+        elif file_paths:
+            self.files_selected.emit(file_paths)
+
+    def _on_add_files_clicked(self) -> None:
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Add Measurement CSV (merge into current data)",
+            "",
+            "CSV / Delimited Files (*.csv *.tsv *.txt);;All Files (*)",
+        )
+        if file_paths:
+            self.files_added.emit(file_paths)
 
     def _on_quick_load_clicked(self) -> None:
         target_name = "SA_testmessung_1.csv"

@@ -131,6 +131,8 @@ ds = load_csv("export.csv", config=cfg)      # … und reproduzierbar neu laden
 
 **Runs** sind eine eigene Dimension: `ds.runs` zeigt pro Run Samples, Dauer, Median-Δt, Parameterwerte und ein `aborted`-Flag für Mini-Runs (Schwelle über `IngestionConfig(runs=RunConfig(aborted_fraction=0.1))`). `ds.channel_availability` liefert den Füllgrad je Run und Kanal, `ds.select_run((2,))` ein neues Dataset nur mit Run 2 und run-relativer Zeit. In der GUI plottet ein Klick in die Run-Tabelle nur diesen Run.
 
+**Mehrere Dateien zusammenführen:** `load_csvs([alt, neu])` lädt mehrere Exporte als ein Dataset. Byte-identische Dateien erkennt der Loader am SHA-256 und lädt sie nur einmal (Audit: `duplicate_file`). Überlappende Snapshots werden über den Schlüssel dedupliziert (Zeit, bei Long-Tabellen Zeit und Variable): Die später angegebene Datei gewinnt, abweichende Werte der früheren Datei stehen als `merge_conflict` im Audit. Mit `IngestionConfig(merge=MergeConfig(conflict=MergeConflictMode.ERROR))` schlägt jeder Konflikt laut fehl, `MergeConfig(key_columns=[...])` setzt den Schlüssel selbst. `ds.sources` zeigt pro Datei Hash, übernommene, ersetzte und widersprüchliche Zeilen. Wide und Long oder verschiedene Dezimaltrenner werden nicht gemischt (`MergeError`). In der GUI: Mehrfachauswahl unter *Open CSV…* oder *File → Add CSV (merge)…*.
+
 Die mitgelieferten Namenslisten (`Vocabulary`) sind nur Startwerte und keine Konvention, an die sich deine Daten halten müssen.
 
 ### Tests
@@ -171,7 +173,8 @@ Datualizer/
 │   ├── dataset.py              # DualModeDataset, AuditLog
 │   ├── ingestion/
 │   │   ├── pre_scanner.py      # Format-Sniffing
-│   │   └── loader.py           # CSV → DualModeDataset
+│   │   ├── loader.py           # CSV → DualModeDataset
+│   │   └── merge.py            # mehrere CSVs → ein Dataset (Dedupe)
 │   └── pipeline/
 │       └── operators.py        # clean_names, drop_footer, unpivot
 ├── datualizer_gui/             # PySide6-Desktop-App

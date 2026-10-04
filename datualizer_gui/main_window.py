@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Sequence
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPalette
 from PySide6.QtWidgets import (
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from datualizer_core import DualModeDataset, load_csv, pre_scan
+from datualizer_core import DualModeDataset, load_csv, load_csvs, pre_scan
 from datualizer_gui.components.data_grid import DataGridWidget
 from datualizer_gui.components.inspector import InspectorPanel
 from datualizer_gui.components.plot_canvas import MultiChannelPlotCanvas
@@ -65,6 +66,7 @@ class DatualizerMainWindow(QMainWindow):
 
         self._dataset: DualModeDataset | None = None
         self._current_file: Path | None = None
+        self._current_files: list[Path] = []
 
         self._create_components()
         self._setup_docking_layout()
@@ -125,6 +127,8 @@ class DatualizerMainWindow(QMainWindow):
         """Wire signals across components."""
         # Inspector -> Load File
         self.inspector.file_selected.connect(self.load_file)
+        self.inspector.files_selected.connect(self.load_files)
+        self.inspector.files_added.connect(self.add_files)
 
         # Inspector -> Channel Checklist changed -> Update Plots
         self.inspector.channels_toggled.connect(self.plot_canvas.set_active_channels)
@@ -151,6 +155,11 @@ class DatualizerMainWindow(QMainWindow):
         action_open.setShortcut(QKeySequence.StandardKey.Open)
         action_open.triggered.connect(self._on_menu_open_file)
         menu_file.addAction(action_open)
+
+        action_add = QAction("&Add CSV (merge)...", self)
+        action_add.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        action_add.triggered.connect(self._on_menu_add_files)
+        menu_file.addAction(action_add)
 
         action_quick = QAction("&Quick Load SA_testmessung_1.csv", self)
         action_quick.triggered.connect(self._auto_load_default)
@@ -192,31 +201,48 @@ class DatualizerMainWindow(QMainWindow):
 
     def load_file(self, file_path: str | Path) -> None:
         """Load and parse measurement CSV into DualModeDataset and distribute to all views."""
-        p = Path(file_path)
-        if not p.is_file():
-            # Try resolving relative to workspace if needed
-            workspace_candidate = Path.cwd() / file_path
-            if workspace_candidate.is_file():
-                p = workspace_candidate
-            else:
-                QMessageBox.warning(
-                    self, "File Not Found", f"Could not find measurement file: {file_path}"
-                )
-                return
+        self.load_files([file_path])
+
+    def add_files(self, file_paths: Sequence[str | Path]) -> None:
+        """Merge further files into the current data (later files win on overlapping rows)."""
+        self.load_files([*self._current_files, *file_paths])
+
+    def load_files(self, file_paths: Sequence[str | Path]) -> None:
+        """Load one file, or merge several (duplicates skipped, overlaps deduplicated)."""
+        paths: list[Path] = []
+        for file_path in file_paths:
+            p = Path(file_path)
+            if not p.is_file():
+                # Try resolving relative to workspace if needed
+                workspace_candidate = Path.cwd() / file_path
+                if workspace_candidate.is_file():
+                    p = workspace_candidate
+                else:
+                    QMessageBox.warning(
+                        self, "File Not Found", f"Could not find measurement file: {file_path}"
+                    )
+                    return
+            paths.append(p)
+        if not paths:
+            return
 
         try:
             # 1. Pre-scan for metadata inspection
-            res = pre_scan(p)
+            res = pre_scan(paths[0])
 
             # 2. Ingest into DualModeDataset
-            dataset = load_csv(p, pre_scan_result=res)
+            if len(paths) == 1:
+                dataset = load_csv(paths[0], pre_scan_result=res)
+            else:
+                dataset = load_csvs(paths)
             self._dataset = dataset
-            self._current_file = p
+            self._current_file = paths[-1]
+            self._current_files = paths
 
             # 3. Distribute to views
             self.inspector.set_dataset(
                 dataset,
-                file_path=p,
+                file_path=paths[0] if len(paths) == 1 else "",
                 delimiter=res.delimiter,
                 decimal_sep=res.decimal_separator,
             )
@@ -227,19 +253,33 @@ class DatualizerMainWindow(QMainWindow):
             self.recipe_panel.set_dataset(dataset)
 
             # 4. Status Bar message
+            name = paths[0].name if len(paths) == 1 else f"{len(paths)} files (merged)"
             msg = (
-                f"Loaded {p.name}: {len(dataset):,} rows, "
+                f"Loaded {name}: {len(dataset):,} rows, "
                 f"{len(channels)} active channels | Audit Errors: {len(dataset.audit_log)}"
             )
             self.status_bar.showMessage(msg)
             logger.info(msg)
 
+            duplicates = dataset.sources.filter(dataset.sources["duplicate_of"].is_not_null())
+            if len(duplicates):
+                lines = "\n".join(
+                    f"{Path(src).name} = {Path(orig).name}"
+                    for src, orig in duplicates.select("source", "duplicate_of").iter_rows()
+                )
+                QMessageBox.warning(
+                    self,
+                    "File Already Loaded",
+                    f"Skipped byte-identical file(s):\n\n{lines}",
+                )
+
         except Exception as exc:
             logger.exception("Failed to load measurement file: %s", exc)
+            names = ", ".join(p.name for p in paths)
             QMessageBox.critical(
                 self,
                 "Loading Error",
-                f"An error occurred while loading {p.name}:\n\n{exc}",
+                f"An error occurred while loading {names}:\n\n{exc}",
             )
 
     def _on_run_selected(self, key: tuple | None) -> None:
@@ -266,14 +306,24 @@ class DatualizerMainWindow(QMainWindow):
         self.set_view_mode(new_mode)
 
     def _on_menu_open_file(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(
+        file_paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Open Measurement CSV",
+            "Open Measurement CSV (select several to merge)",
             "",
             "CSV / Delimited Files (*.csv *.tsv *.txt);;All Files (*)",
         )
-        if file_path:
-            self.load_file(file_path)
+        if file_paths:
+            self.load_files(file_paths)
+
+    def _on_menu_add_files(self) -> None:
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Add Measurement CSV (merge into current data)",
+            "",
+            "CSV / Delimited Files (*.csv *.tsv *.txt);;All Files (*)",
+        )
+        if file_paths:
+            self.add_files(file_paths)
 
     def _auto_load_default(self) -> None:
         """Automatically load SA_testmessung_1.csv if present in the environment."""

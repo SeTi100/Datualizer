@@ -113,6 +113,33 @@ class RunConfig(BaseModel):
     )
 
 
+class MergeConflictMode(str, Enum):
+    NEWEST = "newest"  # the later file wins, every replaced differing value is audited
+    ERROR = "error"    # any differing value for the same key raises MergeError
+
+
+class MergeConfig(BaseModel):
+    """Merging several files into one dataset (Datenkatalog P2, P3), see `load_csvs`.
+
+    Byte-identical files are always skipped (and audited). Rows of different files with the same
+    key are one sample: the file given later wins. Single-file loads ignore these settings.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    key_columns: list[str] | None = Field(
+        None,
+        description=(
+            "Raw headers that identify a sample across files. None = time column, plus the "
+            "variable column for long tables."
+        ),
+    )
+    conflict: MergeConflictMode = Field(
+        MergeConflictMode.NEWEST,
+        description="What to do if files disagree on a value for the same key.",
+    )
+
+
 class IngestionConfig(BaseModel):
     """Every decision the loader makes, as editable and JSON-serializable settings."""
 
@@ -135,6 +162,7 @@ class IngestionConfig(BaseModel):
     long_format: LongFormatConfig = Field(default_factory=LongFormatConfig)
     roles: RoleConfig = Field(default_factory=RoleConfig)
     runs: RunConfig = Field(default_factory=RunConfig)
+    merge: MergeConfig = Field(default_factory=MergeConfig)
     vocabulary: Vocabulary = Field(default_factory=Vocabulary)
 
     def kind_override(self, raw_name: str, clean_name: str) -> ColumnKind | None:

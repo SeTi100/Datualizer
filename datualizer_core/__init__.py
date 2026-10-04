@@ -1,7 +1,13 @@
 """Datualizer Core: High-Performance Tidy Data Wrangling & Visualization Framework for Sensor & Engineering Data."""
 
 from datualizer_core.dataset import AuditEntry, AuditLog, DualModeDataset
-from datualizer_core.ingestion.config import IngestionConfig, LongFormatConfig, LongFormatMode, Vocabulary
+from datualizer_core.ingestion.config import (
+    IngestionConfig,
+    LongFormatConfig,
+    LongFormatMode,
+    RoleConfig,
+    Vocabulary,
+)
 from datualizer_core.ingestion.loader import CSVLoader, load_csv
 from datualizer_core.ingestion.pre_scanner import PreScanResult, PreScanner, pre_scan
 from datualizer_core.schema import ColumnKind
@@ -16,6 +22,7 @@ __all__ = [
     "IngestionConfig",
     "LongFormatConfig",
     "LongFormatMode",
+    "RoleConfig",
     "Vocabulary",
     "load_csv",
     "PreScanResult",

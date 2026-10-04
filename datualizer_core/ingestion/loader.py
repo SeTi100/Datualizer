@@ -13,6 +13,7 @@ from datualizer_core.dataset import AuditEntry, AuditLog, DualModeDataset
 from datualizer_core.ingestion.config import IngestionConfig, LongFormatConfig, LongFormatMode
 from datualizer_core.ingestion.long_format import detect_long_format, pivot_long_to_wide
 from datualizer_core.ingestion.pre_scanner import PreScanResult, pre_scan
+from datualizer_core.ingestion.roles import RoleConfigError, assign_parameter_roles, resolve_run_columns
 from datualizer_core.ingestion.type_inference import (
     ColumnKind,
     infer_column_kind,
@@ -117,12 +118,15 @@ class CSVLoader:
         processed_series: list[pl.Series] = [time_seconds]
         column_kinds: dict[str, ColumnKind] = {time_seconds.name: ColumnKind.TIME}
         resolved_kinds: dict[str, ColumnKind] = {}
+        explicit: set[str] = set()
         channel_names: list[str] = [c for c in df_raw.columns if c != detected_time_col]
 
         for col_name in channel_names:
             series = df_raw[col_name]
             clean_name = raw_to_clean[col_name]
             kind = self.config.kind_override(col_name, clean_name)
+            if kind is not None and kind is not ColumnKind.TIME:
+                explicit.add(clean_name)
             if kind is None or kind is ColumnKind.TIME:
                 kind = infer_column_kind(
                     col_name,
@@ -134,7 +138,7 @@ class CSVLoader:
                 )
             column_kinds[clean_name] = kind
             resolved_kinds[col_name] = kind
-            if kind is ColumnKind.NUMERIC:
+            if kind in (ColumnKind.NUMERIC, ColumnKind.PARAMETER):
                 processed_series.append(self._harvest_and_cast_channel(
                     series,
                     col_name=clean_name,
@@ -171,10 +175,42 @@ class CSVLoader:
         lf_cfg = self._long_config_with_clean_names(raw_to_clean)
         spec = detect_long_format(df, column_kinds, time_col, lf_cfg, self.config.vocabulary)
 
+        channel_attrs: dict[str, dict] = {}
+        source_format = "wide" if spec is None else "long"
+        if spec is not None and lf_cfg.pivot:
+            pivoted = pivot_long_to_wide(df, spec, column_kinds, time_col, audit_log)
+            raw_variables = {
+                clean_column_name(v): v for v in df[spec.variable_col].drop_nulls().unique().to_list()
+            }
+            df, channel_attrs = pivoted.df, pivoted.channel_attrs
+            column_kinds = pivoted.column_kinds
+            for ch in channel_attrs:
+                kind = self.config.kind_override(raw_variables.get(ch, ch), ch)
+                if kind is None:
+                    continue
+                if kind not in (ColumnKind.NUMERIC, ColumnKind.PARAMETER):
+                    raise RoleConfigError(
+                        f"Long-format channel '{ch}' can only be NUMERIC or PARAMETER, not {kind.value}."
+                    )
+                column_kinds[ch] = kind
+                explicit.add(ch)
+
+        # 5. Measurement vs. parameter roles (constant per run -> PARAMETER)
+        run_columns = resolve_run_columns(
+            df, column_kinds, self.config.roles, self.config.vocabulary, raw_to_clean
+        )
+        column_kinds = assign_parameter_roles(
+            df, column_kinds, run_columns, explicit, self.config.roles, audit_log
+        )
+
         # Freeze every decision into a replayable spec
         resolved = self.config.model_copy(deep=True)
         resolved.time_column = detected_time_col
-        resolved.column_kinds = resolved_kinds
+        resolved.column_kinds = {
+            raw: column_kinds.get(raw_to_clean[raw], kind) for raw, kind in resolved_kinds.items()
+        }
+        resolved.column_kinds.update({ch: column_kinds[ch] for ch in channel_attrs})
+        resolved.roles.run_columns = run_columns
         if spec is None:
             resolved.long_format = LongFormatConfig(mode=LongFormatMode.OFF, pivot=lf_cfg.pivot)
         else:
@@ -187,24 +223,13 @@ class CSVLoader:
                 row_meta_cols=list(spec.row_meta_cols),
             )
 
-        if spec is not None and lf_cfg.pivot:
-            pivoted = pivot_long_to_wide(df, spec, column_kinds, time_col, audit_log)
-            return DualModeDataset(
-                df=pivoted.df,
-                audit_log=audit_log,
-                time_col=time_col,
-                column_kinds=pivoted.column_kinds,
-                channel_attrs=pivoted.channel_attrs,
-                source_format="long",
-                ingestion_spec=resolved,
-            )
-
         return DualModeDataset(
             df=df,
             audit_log=audit_log,
             time_col=time_col,
             column_kinds=column_kinds,
-            source_format="wide" if spec is None else "long",
+            channel_attrs=channel_attrs,
+            source_format=source_format,
             ingestion_spec=resolved,
         )
 

@@ -54,6 +54,10 @@ class Vocabulary(BaseModel):
         default_factory=lambda: ["unit", "einheit", "calculated", "computed", "derived", "berechnet"],
         description="Long-table columns that describe a variable even if they are constant everywhere.",
     )
+    run_tokens: list[str] = Field(
+        default_factory=lambda: ["run", "lauf", "batch"],
+        description="Identifier/categorical columns with these tokens define a run (used for parameter roles).",
+    )
 
 
 class LongFormatMode(str, Enum):
@@ -79,6 +83,25 @@ class LongFormatConfig(BaseModel):
     )
 
 
+class RoleConfig(BaseModel):
+    """Measurement vs. parameter roles (Datenkatalog P7).
+
+    A numeric column that is constant inside every run is a parameter (setpoint, setting) and not
+    a plotted channel. Explicit kinds in `IngestionConfig.column_kinds` always win over this heuristic.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    detect_parameters: bool = Field(True, description="Classify numeric columns constant per run as PARAMETER.")
+    run_columns: list[str] | None = Field(
+        None, description="Columns that together identify a run. None = auto via vocabulary.run_tokens."
+    )
+    min_samples_per_run: int = Field(
+        2, ge=2,
+        description="A column counts as constant only if at least one run has this many values of it.",
+    )
+
+
 class IngestionConfig(BaseModel):
     """Every decision the loader makes, as editable and JSON-serializable settings."""
 
@@ -93,9 +116,13 @@ class IngestionConfig(BaseModel):
     )
     column_kinds: dict[str, ColumnKind] = Field(
         default_factory=dict,
-        description="Explicit kind per column, keyed by raw or cleaned name. Overrides all heuristics.",
+        description=(
+            "Explicit kind per column, keyed by raw or cleaned name (for long sources also by variable "
+            "name). Overrides all heuristics."
+        ),
     )
     long_format: LongFormatConfig = Field(default_factory=LongFormatConfig)
+    roles: RoleConfig = Field(default_factory=RoleConfig)
     vocabulary: Vocabulary = Field(default_factory=Vocabulary)
 
     def kind_override(self, raw_name: str, clean_name: str) -> ColumnKind | None:

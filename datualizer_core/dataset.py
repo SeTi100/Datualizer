@@ -179,6 +179,11 @@ class DualModeDataset:
         return [c for c, k in self._column_kinds.items() if k is ColumnKind.NUMERIC]
 
     @property
+    def parameters(self) -> list[str]:
+        """Return numeric parameter columns (setpoints constant per run, not plotted)."""
+        return [c for c, k in self._column_kinds.items() if k is ColumnKind.PARAMETER]
+
+    @property
     def channel_attrs(self) -> dict[str, dict[str, Any]]:
         """Return per-channel attributes such as unit or is_calculated (filled for long-format sources)."""
         return {ch: dict(attrs) for ch, attrs in self._channel_attrs.items()}
@@ -277,14 +282,16 @@ class DualModeDataset:
             return self._cached_long_df
 
         if id_vars is None:
-            # Metadata columns stay as identifiers; only numeric channels are melted.
             if self._time_col in self._df.columns:
                 effective_id = [self._time_col]
             elif len(self._df.columns) > 0:
                 effective_id = [self._df.columns[0]]
             else:
                 effective_id = []
-            effective_id += [c for c in self.metadata_columns if c not in effective_id]
+            # Metadata and parameter columns stay as identifiers; only numeric channels are melted.
+            effective_id += [
+                c for c in (*self.metadata_columns, *self.parameters) if c not in effective_id
+            ]
             if value_vars is None:
                 value_vars = [c for c in self.channels if c not in effective_id]
         elif isinstance(id_vars, str):

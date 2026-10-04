@@ -60,6 +60,7 @@ Das ist genauso wichtig für die Priorisierung:
 ## 5. Vorgeschlagene Umpriorisierung von Etappe 2
 
 1. **Typ- und Rollen-Inferenz** (P4, P5, P7, P9): Behebt den akuten Audit-Bug und ist Voraussetzung für alles Weitere.
+   *✅ Typ-Teil erledigt:* `ingestion/type_inference.py` unterscheidet NUMERIC, IDENTIFIER und CATEGORICAL; `DualModeDataset.channels` und `metadata_columns` sind neu. *Offen:* Rollen Messwert vs. Parameter (P7) und leere Spalten markieren (P9).
 2. **Schema-Sniffer wide/long** + `pivot_wider` für long (P1, P19): Aus Etappe 3 vorziehen, als Minimalversion.
 3. **Run-Segmentierung** (`run_id` als erstklassige Dimension, P10, P11, P18): Der Inspector zeigt Runs statt einer flachen Tabelle.
 4. **Multi-File-Merge mit Dedupe** (P2, P3).

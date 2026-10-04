@@ -11,6 +11,7 @@ import polars as pl
 
 from datualizer_core.dataset import AuditEntry, AuditLog, DualModeDataset
 from datualizer_core.ingestion.pre_scanner import PreScanResult, pre_scan
+from datualizer_core.ingestion.type_inference import ColumnKind, infer_column_kind, parse_number
 from datualizer_core.pipeline.operators import clean_column_name, clean_names, drop_footer
 
 
@@ -95,21 +96,31 @@ class CSVLoader:
             audit_log=audit_log,
         )
 
-        # 2. Parse measurement channels with error harvesting
+        # 2. Infer column kinds, then cast only numeric channels with error harvesting
         processed_series: list[pl.Series] = [time_seconds]
+        column_kinds: dict[str, ColumnKind] = {time_seconds.name: ColumnKind.TIME}
         channel_names: list[str] = [c for c in df_raw.columns if c != detected_time_col]
 
         for col_name in channel_names:
             series = df_raw[col_name]
             clean_name = raw_to_clean[col_name]
-            f64_series = self._harvest_and_cast_channel(
-                series,
-                col_name=clean_name,
-                raw_col_name=col_name,
+            kind = infer_column_kind(
+                col_name,
+                series.to_list(),
                 decimal_sep=pre_scan_result.decimal_separator,
-                audit_log=audit_log,
+                upper_sentinels=self.upper_sentinels,
             )
-            processed_series.append(f64_series)
+            column_kinds[clean_name] = kind
+            if kind is ColumnKind.NUMERIC:
+                processed_series.append(self._harvest_and_cast_channel(
+                    series,
+                    col_name=clean_name,
+                    raw_col_name=col_name,
+                    decimal_sep=pre_scan_result.decimal_separator,
+                    audit_log=audit_log,
+                ))
+            else:
+                processed_series.append(self._clean_text_column(series, clean_name, kind))
 
         df = pl.DataFrame(processed_series)
 
@@ -131,7 +142,9 @@ class CSVLoader:
             if trailing_drop > 0:
                 df = df.slice(0, len(df) - trailing_drop)
 
-        return DualModeDataset(df=df, audit_log=audit_log, time_col=time_col)
+        return DualModeDataset(
+            df=df, audit_log=audit_log, time_col=time_col, column_kinds=column_kinds
+        )
 
     def _resolve_time_column(self, columns: list[str]) -> str:
         if self.time_column:
@@ -305,25 +318,26 @@ class CSVLoader:
                 f64_vals.append(None)
                 continue
 
-            # Normalize decimal and thousand separators
-            norm = v_str
-            if decimal_sep == ",":
-                if re.match(r"^-?\d{1,3}(?:\.\d{3})+(?:,\d+)?$", norm):
-                    norm = norm.replace(".", "").replace(",", ".")
-                else:
-                    norm = norm.replace(",", ".")
-            else:
-                if re.match(r"^-?\d{1,3}(?:,\d{3})+(?:\.\d+)?$", norm):
-                    norm = norm.replace(",", "")
-
-            try:
-                val_f64 = float(norm)
-                f64_vals.append(val_f64)
-            except ValueError:
+            val_f64 = parse_number(v_str, decimal_sep)
+            if val_f64 is None:
                 audit_log.add(idx, col_name, raw, "non_convertible_float", raw_column=raw_col_name)
-                f64_vals.append(None)
+            f64_vals.append(val_f64)
 
         return pl.Series(col_name, f64_vals, dtype=pl.Float64)
+
+    def _clean_text_column(self, series: pl.Series, col_name: str, kind: ColumnKind) -> pl.Series:
+        """Strip text cells and map empty/sentinel cells to null; identifiers become Int64."""
+        vals: list[str | None] = []
+        for raw in series.to_list():
+            v_str = str(raw).strip() if raw is not None else ""
+            if not v_str or v_str.upper() in self.upper_sentinels:
+                vals.append(None)
+            else:
+                vals.append(v_str)
+
+        if kind is ColumnKind.IDENTIFIER:
+            return pl.Series(col_name, [int(v) if v is not None else None for v in vals], dtype=pl.Int64)
+        return pl.Series(col_name, vals, dtype=pl.String)
 
 
 def load_csv(

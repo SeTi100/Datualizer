@@ -127,8 +127,12 @@ class DualModeDataset:
         sources: pl.DataFrame | None = None,
         quality: _quality.QualitySettings | None = None,
         units: dict[str, str] | None = None,
+        unit_conflicts: pl.DataFrame | None = None,
     ) -> None:
         self._df = df
+        self._unit_conflicts = unit_conflicts if unit_conflicts is not None else pl.DataFrame(
+            schema={"column": pl.String, "cell_unit": pl.String, "column_unit": pl.String, "n_rows": pl.Int64}
+        )
         self._units = {c: u for c, u in (units or {}).items() if u}
         self._quality = quality
         self._quality_flags: pl.DataFrame | None = None
@@ -295,7 +299,17 @@ class DualModeDataset:
             sources=self._sources,
             quality=self._quality,
             units=self._units,
+            unit_conflicts=self._unit_conflicts,
         )
+
+    @property
+    def unit_conflicts(self) -> pl.DataFrame:
+        """Return cells whose unit disagrees with their column (P6), e.g. '20 °C' in `Konzentration`.
+
+        Columns: `column`, `cell_unit`, `column_unit` (null if the column has none), `n_rows`. The
+        values are kept; every affected cell is in the audit log as `unit_conflict`.
+        """
+        return self._unit_conflicts
 
     @property
     def units(self) -> dict[str, str]:

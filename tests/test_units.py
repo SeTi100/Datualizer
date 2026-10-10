@@ -124,3 +124,69 @@ class TestConfig:
         ds = load_csvs(files, config=cfg)
         assert ds.units["masse"] == "g"
         assert ds.units["massenstrom_waage"] == "g/s"
+
+
+class TestCellUnits:
+    """P6: Wert und Einheit in einer Zelle (`Konzentration = "20 °C"`)."""
+
+    def test_fixture_value_kept_and_conflict_marked(self) -> None:
+        ds = load_csv(ALL_MESSY)
+        run7 = ds.select_run((7,))
+        assert run7["konzentration"].unique().to_list() == [20.0]
+        conflicts = ds.unit_conflicts.row(0, named=True)
+        assert conflicts == {"column": "konzentration", "cell_unit": "°C", "column_unit": None, "n_rows": 306}
+        reasons = {e.reason for e in ds.audit_log.for_column("konzentration")}
+        assert reasons == {"unit_conflict"}
+        assert len(ds.audit_log) == 306
+        assert "konzentration" not in ds.units  # kein Raten: 200/400 tragen keine Einheit
+
+    def test_consistent_cell_unit_becomes_column_unit(self) -> None:
+        ds = load_csv("time;p\n00:00:00;12,5 bar\n00:00:01;12,7 bar\n")
+        assert ds["p"].to_list() == [12.5, 12.7]
+        assert ds.units == {"p": "bar"}
+        assert ds.unit_conflicts.is_empty()
+        assert [e.reason for e in ds.audit_log] == ["value_with_unit"] * 2
+
+    def test_cell_unit_matching_header(self) -> None:
+        ds = load_csv("time,p (bar)\n00:00:00,1.0\n00:00:01,1.2 bar\n")
+        assert ds.units == {"p": "bar"}
+        assert ds.unit_conflicts.is_empty()
+
+    def test_cell_unit_contradicting_header(self) -> None:
+        ds = load_csv("time,p (bar)\n00:00:00,1.0\n00:00:01,120 kPa\n")
+        assert ds["p"].to_list() == [1.0, 120.0]  # markiert, nicht umgerechnet
+        row = ds.unit_conflicts.row(0, named=True)
+        assert (row["cell_unit"], row["column_unit"]) == ("kPa", "bar")
+
+    def test_different_cell_units(self) -> None:
+        ds = load_csv("time,p\n00:00:00,1 bar\n00:00:01,2 mbar\n")
+        assert "p" not in ds.units
+        assert set(ds.unit_conflicts["cell_unit"]) == {"bar", "mbar"}
+
+    def test_mostly_text_column_stays_text(self) -> None:
+        ds = load_csv("time,comment\n00:00:00,Run 7\n00:00:01,ok\n00:00:02,nachgefüllt\n")
+        assert ds.column_kinds["comment"].value == "categorical"
+
+    def test_switch_off_restores_strict_parsing(self) -> None:
+        ds = load_csv(ALL_MESSY, config=IngestionConfig(units=UnitConfig(split_cell_units=False)))
+        assert ds.select_run((7,))["konzentration"].null_count() == 306
+        assert {e.reason for e in ds.audit_log} == {"non_convertible_float"}
+        assert ds.unit_conflicts.is_empty()
+
+    def test_explicit_column_unit_decides(self) -> None:
+        cfg = IngestionConfig(units=UnitConfig(units={"Konzentration": "°C"}))
+        ds = load_csv(ALL_MESSY, config=cfg)
+        assert ds.unit_conflicts.is_empty()  # Nutzer sagt: Spalte ist in °C
+        assert ds.units["konzentration"] == "°C"
+
+    def test_replay(self) -> None:
+        for text in ("time,p\n00:00:00,12.5 bar\n00:00:01,12.7 bar\n", ALL_MESSY):
+            first = load_csv(text)
+            again = load_csv(text, config=first.ingestion_spec)
+            assert again.ingestion_spec == first.ingestion_spec
+            assert again.unit_conflicts.equals(first.unit_conflicts)
+            assert again.df.equals(first.df)
+
+    def test_bad_cell_pattern_fails_loudly(self) -> None:
+        with pytest.raises(UnitConfigError, match="named groups"):
+            load_csv(ALL_MESSY, config=IngestionConfig(units=UnitConfig(cell_pattern=r"(\d+)\s*(\S+)")))

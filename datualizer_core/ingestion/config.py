@@ -129,6 +129,14 @@ DEFAULT_UNIT_PATTERNS = [
 ]
 
 
+# A number followed by a unit in the same cell, e.g. "20 °C" or "12,5 bar" (Datenkatalog P6).
+# The unit starts with a letter or a unit symbol and contains no ASCII digits ("m3" stays text).
+DEFAULT_CELL_UNIT_PATTERN = (
+    r"^(?P<value>[+-]?(?:\d[\d.,]*|[.,]\d+)(?:[eE][+-]?\d+)?)\s*"
+    r"(?P<unit>(?:[^\W\d_]|[°%‰µΩ])[^\s0-9]*(?:[ /][^\s0-9]+)?)$"
+)
+
+
 class UnitConfig(BaseModel):
     """Units of numeric columns (Datenkatalog P20, P9).
 
@@ -147,6 +155,17 @@ class UnitConfig(BaseModel):
     units: dict[str, str] = Field(
         default_factory=dict,
         description="Explicit unit per numeric column (raw, loaded or variable name). '' = no unit.",
+    )
+    split_cell_units: bool = Field(
+        True,
+        description=(
+            "Read cells like '20 °C' in numeric columns as value plus unit (audited). Off = such "
+            "cells are not convertible and become null, as any other text."
+        ),
+    )
+    cell_pattern: str = Field(
+        DEFAULT_CELL_UNIT_PATTERN,
+        description="Regular expression with named groups 'value' and 'unit' for a cell with unit.",
     )
 
 

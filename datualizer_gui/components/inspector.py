@@ -105,6 +105,9 @@ class InspectorPanel(QWidget):
         self.lbl_unitless = QLabel("")
         self.lbl_unitless.setWordWrap(True)
         self.lbl_unitless.setHidden(True)
+        self.lbl_unit_conflicts = QLabel("")
+        self.lbl_unit_conflicts.setWordWrap(True)
+        self.lbl_unit_conflicts.setHidden(True)
 
         for lbl in (
             self.lbl_rows,
@@ -113,6 +116,7 @@ class InspectorPanel(QWidget):
             self.lbl_decimal,
             self.lbl_timespan,
             self.lbl_unitless,
+            self.lbl_unit_conflicts,
         ):
             lbl.setStyleSheet("font-size: 11px;")
             meta_layout.addWidget(lbl)
@@ -224,6 +228,7 @@ class InspectorPanel(QWidget):
             self.lbl_decimal.setText("Decimal Separator: -")
             self.lbl_timespan.setText("Time Span: -")
             self.lbl_unitless.setHidden(True)
+            self.lbl_unit_conflicts.setHidden(True)
             self.channel_list_widget.clear()
             self._all_channels = []
             self._fill_run_table()
@@ -273,6 +278,16 @@ class InspectorPanel(QWidget):
         unitless = self._dataset.unitless_columns
         self.lbl_unitless.setText(f"Without unit: {', '.join(unitless)}" if unitless else "")
         self.lbl_unitless.setHidden(not unitless)
+
+        # Cells whose unit contradicts their column (P6): values kept, conflict shown
+        conflicts = [
+            f"{r['column']}: {r['cell_unit']} in {r['n_rows']:,} rows"
+            + (f" (column: {r['column_unit']})" if r["column_unit"] else "")
+            for r in self._dataset.unit_conflicts.iter_rows(named=True)
+        ]
+        self.lbl_unit_conflicts.setText(f"Unit conflicts: {'; '.join(conflicts)}" if conflicts else "")
+        self.lbl_unit_conflicts.setStyleSheet("color: #e67e22; font-size: 11px;")
+        self.lbl_unit_conflicts.setHidden(not conflicts)
 
         # 2. Channels Checklist
         self.channel_list_widget.clear()

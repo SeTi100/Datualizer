@@ -735,3 +735,12 @@ def test_inspector_lists_unitless_columns(qapp: QApplication) -> None:
     assert not inspector.lbl_unitless.isHidden()
     assert "snad2" in inspector.lbl_unitless.text()
     assert "massenstrom_waage" not in inspector.lbl_unitless.text()
+
+
+def test_inspector_shows_unit_conflicts(qapp: QApplication) -> None:
+    inspector = InspectorPanel()
+    inspector.set_dataset(load_csv(ALL_MESSY))
+    assert not inspector.lbl_unit_conflicts.isHidden()
+    assert "konzentration: °C in 306 rows" in inspector.lbl_unit_conflicts.text()
+    inspector.set_dataset(load_csv(RUNS_EXPORT / "runs_export_20261004_123102_konst_T_V.csv"))
+    assert inspector.lbl_unit_conflicts.isHidden()

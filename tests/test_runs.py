@@ -74,9 +74,12 @@ class TestChannelAvailability:
         assert filled == [r for r in range(4, 21) if r != 17]
 
     def test_parameter_presence_per_run(self, messy: DualModeDataset) -> None:
-        """P10 für Parameter: `Konzentration` ist nur in Run 9–14 gesetzt."""
+        """P10 für Parameter: `Konzentration` ist nur in Run 7 und 9–14 gesetzt.
+
+        Run 7 steht als '20 °C' im Export; der Wert bleibt, die Einheit ist als Konflikt markiert (P6).
+        """
         present = messy.runs.filter(pl.col("konzentration").is_not_null())["run_id"].to_list()
-        assert present == list(range(9, 15))
+        assert present == [7, *range(9, 15)]
 
     def test_run_without_calculated_values(self, messy: DualModeDataset) -> None:
         """P18: Run 17 hat keinen einzigen Rechenwert."""

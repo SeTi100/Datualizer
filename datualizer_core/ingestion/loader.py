@@ -16,12 +16,18 @@ from datualizer_core.ingestion.pre_scanner import PreScanResult, pre_scan
 from datualizer_core.ingestion.quality_rules import resolve_quality, to_settings
 from datualizer_core.ingestion.roles import RoleConfigError, assign_parameter_roles, resolve_run_columns
 from datualizer_core.ingestion.sources import read_source
-from datualizer_core.ingestion.units import resolve_units, split_header_unit
+from datualizer_core.ingestion.units import (
+    compile_cell_pattern,
+    reconcile_cell_units,
+    resolve_units,
+    split_header_unit,
+)
 from datualizer_core.ingestion.type_inference import (
     ColumnKind,
     infer_column_kind,
     is_integer_text,
     parse_number,
+    split_value_unit,
 )
 from datualizer_core.pipeline.operators import clean_column_name, clean_names, drop_footer
 
@@ -125,6 +131,8 @@ class CSVLoader:
             )
 
         audit_log = audit_log if audit_log is not None else AuditLog()
+        cell_pattern = compile_cell_pattern(self.config.units)
+        cell_units: dict[str, dict[int, tuple[str, str]]] = {}
 
         # Identify time column and build column name mapping (raw -> cleaned)
         detected_time_col = self._resolve_time_column(df_raw.columns)
@@ -159,6 +167,7 @@ class CSVLoader:
                     upper_sentinels=self.upper_sentinels,
                     vocabulary=self.config.vocabulary,
                     numeric_ratio_threshold=self.config.numeric_ratio_threshold,
+                    cell_unit_pattern=cell_pattern,
                 )
             column_kinds[clean_name] = kind
             resolved_kinds[col_name] = kind
@@ -169,6 +178,8 @@ class CSVLoader:
                     raw_col_name=col_name,
                     decimal_sep=decimal_separator,
                     audit_log=audit_log,
+                    cell_pattern=cell_pattern,
+                    cell_units=cell_units,
                 ))
             else:
                 processed_series.append(
@@ -240,6 +251,19 @@ class CSVLoader:
         units = resolve_units(
             self.config.units, numeric, raw_to_clean, names, channel_attrs, self.config.vocabulary
         )
+        # Units written in cells (P6): adopt a consistent one, mark the ones that disagree
+        explicit_units = {names.get(n, n) for n in self.config.units.units}
+        cells = reconcile_cell_units(
+            cell_units,
+            units,
+            numeric,
+            explicit_units,
+            {c: df[c].count() for c in cell_units if c in df.columns},
+            {clean: raw for raw, clean in raw_to_clean.items()},
+        )
+        units = cells.units
+        for row, col, raw, reason, raw_col in cells.audit:
+            audit_log.add(row, col, raw, reason, raw_column=raw_col)
 
         # Freeze every decision into a replayable spec
         resolved = self.config.model_copy(deep=True)
@@ -276,6 +300,7 @@ class CSVLoader:
             sources=sources,
             quality=to_settings(quality),
             units=units,
+            unit_conflicts=cells.conflicts,
         )
 
     def _long_config_with_clean_names(self, raw_to_clean: dict[str, str]) -> LongFormatConfig:
@@ -452,8 +477,14 @@ class CSVLoader:
         raw_col_name: str,
         decimal_sep: str,
         audit_log: AuditLog,
+        cell_pattern: re.Pattern[str] | None = None,
+        cell_units: dict[str, dict[int, tuple[str, str]]] | None = None,
     ) -> pl.Series:
-        """Perform non-strict casting to Float64 while harvesting errors into the AuditLog."""
+        """Perform non-strict casting to Float64 while harvesting errors into the AuditLog.
+
+        Cells like '20 °C' (P6) keep their value; the unit goes to `cell_units` and is audited
+        once the column unit is known.
+        """
         vals = series.to_list()
         f64_vals: list[float | None] = []
 
@@ -472,6 +503,11 @@ class CSVLoader:
                 continue
 
             val_f64 = parse_number(v_str, decimal_sep)
+            if val_f64 is None and cell_pattern is not None and cell_units is not None:
+                split = split_value_unit(v_str, decimal_sep, cell_pattern)
+                if split is not None:
+                    val_f64 = split[0]
+                    cell_units.setdefault(col_name, {})[idx] = (str(raw), split[1])
             if val_f64 is None:
                 audit_log.add(idx, col_name, raw, "non_convertible_float", raw_column=raw_col_name)
             f64_vals.append(val_f64)

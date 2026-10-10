@@ -107,6 +107,7 @@ flowchart TD
 6. ✅ **Multi-File-Merge mit Dedupe:** `load_csvs()`, SHA-256 pro Quelle (`ds.sources`), Duplikate übersprungen und auditiert, überlappende Snapshots über den Schlüssel dedupliziert (spätere Datei gewinnt, Konflikte ins Audit), `MergeConfig` (P2, P3). GUI: Mehrfachauswahl und „Add CSV (merge)“.
 7. ✅ **Qualitäts-Flags:** `ds.quality_flags` (Ereignistabelle), `flag_mask()`, `with_flag_columns()`; `gap`, `missing`/`missing_calculated`, `stuck`, `jump`, `dropout`, `out_of_range`; Schwellen in `QualityConfig`, vorgeschlagene Sprungschwellen in der Spec; Plot ohne Linien über Lücken, Flag-Tabelle im Inspector (P12–P17).
 8. ✅ **Einheiten aus Headern** (P20): `ds.units` aus Header-Mustern, Long-Attribut oder `UnitConfig`; Einheit aus dem Namen gelöst statt verworfen; Achsenbeschriftung mit Einheit.
+   ✅ **Wert und Einheit in einer Zelle** (P6): `20 °C` → Wert 20.0 + Einheit; abweichende Einheiten als `unit_conflict` markiert (`ds.unit_conflicts`), nicht verworfen.
 9. ⏳ **Block-Segmentation** (Metadaten-Kopf, Multi-Row-Header, Footer-Statistiken) und **Ragged-CSV-Healer**, sobald Gerätedaten mit Kopfblöcken vorliegen.
 10. ⏳ **Encoding-Matrix** (UTF-16, CP1252) sowie Spektren- und Matrix-Exporte.
 

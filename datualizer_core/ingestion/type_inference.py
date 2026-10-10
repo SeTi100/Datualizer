@@ -52,6 +52,18 @@ def parse_number(v_str: str, decimal_sep: str) -> float | None:
         return None
 
 
+def split_value_unit(v_str: str, decimal_sep: str, pattern: re.Pattern[str]) -> tuple[float, str] | None:
+    """Split a cell like '20 °C' into (20.0, '°C'); None if the cell is not number plus unit."""
+    match = pattern.match(v_str)
+    if match is None:
+        return None
+    value = parse_number(match.group("value"), decimal_sep)
+    unit = match.group("unit").strip()
+    if value is None or not unit:
+        return None
+    return value, unit
+
+
 def infer_column_kind(
     raw_name: str,
     values: Iterable[object],
@@ -59,6 +71,7 @@ def infer_column_kind(
     upper_sentinels: set[str],
     vocabulary: Vocabulary | None = None,
     numeric_ratio_threshold: float = 0.5,
+    cell_unit_pattern: re.Pattern[str] | None = None,
 ) -> ColumnKind:
     """Infer the ColumnKind of a non-time column from its header name and raw string values."""
     vocab = vocabulary or _DEFAULT_VOCABULARY
@@ -84,7 +97,11 @@ def infer_column_kind(
     if not candidates:
         return ColumnKind.NUMERIC
 
-    n_numeric = sum(parse_number(v, decimal_sep) is not None for v in candidates)
+    n_numeric = sum(
+        parse_number(v, decimal_sep) is not None
+        or (cell_unit_pattern is not None and split_value_unit(v, decimal_sep, cell_unit_pattern) is not None)
+        for v in candidates
+    )
     if n_numeric / len(candidates) >= numeric_ratio_threshold:
         return ColumnKind.NUMERIC
     return ColumnKind.CATEGORICAL

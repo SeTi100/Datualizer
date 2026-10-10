@@ -50,9 +50,12 @@ def load_csvs(
     if not sources:
         raise MergeError("No sources given.")
     cfg = (config or IngestionConfig()).model_copy(deep=True)
-    # Single files are only loaded to resolve their layout; quality settings may name channels
-    # that exist in the merged table only.
-    loader = CSVLoader(cfg.model_copy(update={"quality": QualityConfig(detect=False)}))
+    # Single files are only loaded to resolve their layout; quality and unit settings may name
+    # channels that exist in the merged table only.
+    probe_cfg = cfg.model_copy(deep=True)
+    probe_cfg.quality = QualityConfig(detect=False)
+    probe_cfg.units.units = {}
+    loader = CSVLoader(probe_cfg)
     audit_log = AuditLog()
 
     # 1. Fingerprint, skip byte-identical files

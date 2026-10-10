@@ -10,11 +10,13 @@ from datualizer_core.ingestion.config import (
     QualityConfig,
     RoleConfig,
     RunConfig,
+    UnitConfig,
     Vocabulary,
 )
 from datualizer_core.ingestion.loader import CSVLoader, load_csv
 from datualizer_core.ingestion.merge import MergeError, load_csvs
 from datualizer_core.ingestion.quality_rules import QualityConfigError
+from datualizer_core.ingestion.units import UnitConfigError
 from datualizer_core.ingestion.pre_scanner import PreScanResult, PreScanner, pre_scan
 from datualizer_core.schema import ColumnKind
 from datualizer_core.pipeline.operators import clean_column_name, clean_names, drop_footer, unpivot
@@ -35,6 +37,8 @@ __all__ = [
     "QualityConfigError",
     "RoleConfig",
     "RunConfig",
+    "UnitConfig",
+    "UnitConfigError",
     "Vocabulary",
     "load_csv",
     "load_csvs",

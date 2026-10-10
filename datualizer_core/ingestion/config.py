@@ -54,6 +54,10 @@ class Vocabulary(BaseModel):
         default_factory=lambda: ["unit", "einheit", "calculated", "computed", "derived", "berechnet"],
         description="Long-table columns that describe a variable even if they are constant everywhere.",
     )
+    unit_tokens: list[str] = Field(
+        default_factory=lambda: ["unit", "einheit"],
+        description="A channel attribute (long tables) with one of these tokens holds the channel's unit.",
+    )
     calculated_tokens: list[str] = Field(
         default_factory=lambda: ["calculated", "computed", "derived", "berechnet"],
         description="A channel attribute with one of these tokens and a true value marks a calculated channel.",
@@ -114,6 +118,35 @@ class RunConfig(BaseModel):
     aborted_fraction: float = Field(
         0.1, ge=0.0, le=1.0,
         description="A run with fewer samples than this share of the median run is marked aborted. 0 = off.",
+    )
+
+
+DEFAULT_UNIT_PATTERNS = [
+    # Trailing (unit), [unit] or {unit}; a bracket with only digits is a channel number, not a unit
+    r"\((?P<unit>[^()]*[^\d\s()][^()]*)\)\s*$",
+    r"\[(?P<unit>[^\[\]]*[^\d\s\[\]][^\[\]]*)\]\s*$",
+    r"\{(?P<unit>[^{}]*[^\d\s{}][^{}]*)\}\s*$",
+]
+
+
+class UnitConfig(BaseModel):
+    """Units of numeric columns (Datenkatalog P20, P9).
+
+    Sources, strongest first: `units` (explicit), a unit attribute of long tables
+    (`Vocabulary.unit_tokens`), a unit written in the header (`header_patterns`). The resolved spec
+    lists every unit found, keyed by loaded name.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    from_headers: bool = Field(True, description="Take units from headers such as 'Massenstrom (g/s)'.")
+    header_patterns: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_UNIT_PATTERNS),
+        description="Regular expressions with a named group 'unit', searched in each raw header.",
+    )
+    units: dict[str, str] = Field(
+        default_factory=dict,
+        description="Explicit unit per numeric column (raw, loaded or variable name). '' = no unit.",
     )
 
 
@@ -205,6 +238,7 @@ class IngestionConfig(BaseModel):
     long_format: LongFormatConfig = Field(default_factory=LongFormatConfig)
     roles: RoleConfig = Field(default_factory=RoleConfig)
     runs: RunConfig = Field(default_factory=RunConfig)
+    units: UnitConfig = Field(default_factory=UnitConfig)
     quality: QualityConfig = Field(default_factory=QualityConfig)
     merge: MergeConfig = Field(default_factory=MergeConfig)
     vocabulary: Vocabulary = Field(default_factory=Vocabulary)

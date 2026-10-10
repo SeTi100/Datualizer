@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Sequence
 import numpy as np
 import polars as pl
 
+from datualizer_core import quality as _quality
 from datualizer_core import runs as _runs
 from datualizer_core.pipeline.operators import unpivot
 from datualizer_core.schema import ColumnKind
@@ -124,8 +125,11 @@ class DualModeDataset:
         run_columns: Sequence[str] = (),
         aborted_run_fraction: float = 0.1,
         sources: pl.DataFrame | None = None,
+        quality: _quality.QualitySettings | None = None,
     ) -> None:
         self._df = df
+        self._quality = quality
+        self._quality_flags: pl.DataFrame | None = None
         self._sources = sources if sources is not None else empty_sources()
         self._audit_log = audit_log if audit_log is not None else AuditLog()
         self._channel_attrs = channel_attrs or {}
@@ -287,7 +291,57 @@ class DualModeDataset:
             run_columns=self._run_columns,
             aborted_run_fraction=self._aborted_run_fraction,
             sources=self._sources,
+            quality=self._quality,
         )
+
+    @property
+    def quality_flags(self) -> pl.DataFrame:
+        """Return every quality flag as an event table `row, channel, flag` (P12–P17).
+
+        `row` indexes `df`, `channel` is null for row-level flags (`gap`). Flags are `gap`,
+        `missing`, `missing_calculated`, `stuck`, `jump`, `dropout` and `out_of_range`; see
+        `datualizer_core.quality`. The data itself is never changed. Empty if detection is off
+        or the dataset was built in memory without quality settings.
+        """
+        if self._quality_flags is None:
+            if self._quality is None:
+                self._quality_flags = _quality.empty_flags()
+            else:
+                self._quality_flags = _quality.detect_flags(
+                    self._df, self._time_col, self._run_columns, self.channels, self._quality
+                )
+        return self._quality_flags
+
+    @property
+    def quality_summary(self) -> pl.DataFrame:
+        """Return the number of flagged samples per channel and flag."""
+        return (
+            self.quality_flags.group_by("channel", "flag")
+            .agg(pl.len().cast(pl.Int64).alias("n"))
+            .sort("channel", "flag", nulls_last=False)
+        )
+
+    def flag_mask(self, flags: Sequence[str] | None = None, channel: str | None = None) -> pl.Series:
+        """Return a Boolean Series over `df` rows: True where one of `flags` (default: any) is set.
+
+        With `channel`, only that channel's flags count; row-level flags have no channel.
+        """
+        events = self.quality_flags
+        if flags is not None:
+            events = events.filter(pl.col("flag").is_in(list(flags)))
+        if channel is not None:
+            events = events.filter(pl.col("channel") == channel)
+        mask = pl.Series("flagged", [False] * len(self._df), dtype=pl.Boolean)
+        rows = events["row"].unique()
+        return mask.scatter(rows, True) if len(rows) else mask
+
+    def with_flag_columns(self, suffix: str = "_flags") -> pl.DataFrame:
+        """Return a new wide frame with one flag column per channel (comma-joined flags or null).
+
+        Row-level flags go into the column named after the time column. `df` is not changed.
+        """
+        columns = [(self._time_col, None), *[(ch, ch) for ch in self.channels]]
+        return _quality.flag_columns(self._df, self.quality_flags, columns, suffix)
 
     @property
     def sources(self) -> pl.DataFrame:

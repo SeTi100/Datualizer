@@ -24,7 +24,7 @@ from typing import Sequence, TextIO
 import polars as pl
 
 from datualizer_core.dataset import SOURCES_SCHEMA, AuditLog, DualModeDataset
-from datualizer_core.ingestion.config import IngestionConfig, MergeConflictMode
+from datualizer_core.ingestion.config import IngestionConfig, MergeConflictMode, QualityConfig
 from datualizer_core.ingestion.loader import CSVLoader, read_raw_table
 from datualizer_core.ingestion.pre_scanner import pre_scan
 from datualizer_core.ingestion.sources import read_source
@@ -50,7 +50,9 @@ def load_csvs(
     if not sources:
         raise MergeError("No sources given.")
     cfg = (config or IngestionConfig()).model_copy(deep=True)
-    loader = CSVLoader(cfg)
+    # Single files are only loaded to resolve their layout; quality settings may name channels
+    # that exist in the merged table only.
+    loader = CSVLoader(cfg.model_copy(update={"quality": QualityConfig(detect=False)}))
     audit_log = AuditLog()
 
     # 1. Fingerprint, skip byte-identical files

@@ -102,12 +102,13 @@ flowchart TD
 2. ✅ **`IngestionConfig`:** Vokabulare, Schwellen, Spalten-Overrides, Long-Format-Rollen; aufgelöste, replaybare `ingestion_spec`.
 3. ✅ **Wide/Long-Erkennung + Pivot:** Erkennung über Header und Datenform statt Dateiname; Kanal-Attribute (`unit` …) in `channel_attrs` (P1, P19).
 4. ✅ **Rollen Messwert vs. Parameter** (P7): `ColumnKind.PARAMETER` für numerische Spalten, die in jedem Run konstant sind; Runs und Erkennung über `RoleConfig`, Overrides über `column_kinds`.
-   ✅ **Leere Spalten markieren** (P9, P19): `fill_ratio` und `empty_columns`, markiert statt gelöscht; leere Kanäle werden nicht geplottet. ⏳ Parameter ohne Einheit (braucht P20).
+   ✅ **Leere Spalten markieren** (P9, P19): `fill_ratio` und `empty_columns`, markiert statt gelöscht; leere Kanäle werden nicht geplottet. ✅ Spalten ohne Einheit: `unitless_columns`.
 5. ✅ **Run-Segmentierung:** `ds.runs` (Samples, Dauer, Median-Δt, Parameter, `aborted`), `channel_availability`, `run_time()`, `select_run()`; Run-Tabelle und Run-Filter im Inspector (P10, P11, P18).
 6. ✅ **Multi-File-Merge mit Dedupe:** `load_csvs()`, SHA-256 pro Quelle (`ds.sources`), Duplikate übersprungen und auditiert, überlappende Snapshots über den Schlüssel dedupliziert (spätere Datei gewinnt, Konflikte ins Audit), `MergeConfig` (P2, P3). GUI: Mehrfachauswahl und „Add CSV (merge)“.
 7. ✅ **Qualitäts-Flags:** `ds.quality_flags` (Ereignistabelle), `flag_mask()`, `with_flag_columns()`; `gap`, `missing`/`missing_calculated`, `stuck`, `jump`, `dropout`, `out_of_range`; Schwellen in `QualityConfig`, vorgeschlagene Sprungschwellen in der Spec; Plot ohne Linien über Lücken, Flag-Tabelle im Inspector (P12–P17).
-8. ⏳ **Block-Segmentation** (Metadaten-Kopf, Multi-Row-Header, Footer-Statistiken) und **Ragged-CSV-Healer**, sobald Gerätedaten mit Kopfblöcken vorliegen.
-9. ⏳ **Encoding-Matrix** (UTF-16, CP1252) sowie Spektren- und Matrix-Exporte.
+8. ✅ **Einheiten aus Headern** (P20): `ds.units` aus Header-Mustern, Long-Attribut oder `UnitConfig`; Einheit aus dem Namen gelöst statt verworfen; Achsenbeschriftung mit Einheit.
+9. ⏳ **Block-Segmentation** (Metadaten-Kopf, Multi-Row-Header, Footer-Statistiken) und **Ragged-CSV-Healer**, sobald Gerätedaten mit Kopfblöcken vorliegen.
+10. ⏳ **Encoding-Matrix** (UTF-16, CP1252) sowie Spektren- und Matrix-Exporte.
 
 ---
 

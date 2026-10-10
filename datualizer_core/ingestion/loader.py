@@ -16,6 +16,7 @@ from datualizer_core.ingestion.pre_scanner import PreScanResult, pre_scan
 from datualizer_core.ingestion.quality_rules import resolve_quality, to_settings
 from datualizer_core.ingestion.roles import RoleConfigError, assign_parameter_roles, resolve_run_columns
 from datualizer_core.ingestion.sources import read_source
+from datualizer_core.ingestion.units import resolve_units, split_header_unit
 from datualizer_core.ingestion.type_inference import (
     ColumnKind,
     infer_column_kind,
@@ -89,7 +90,10 @@ class CSVLoader:
             if col == time_col:
                 clean_name = "time_seconds" if self.clean_column_names else col
             elif self.clean_column_names:
-                clean_name = clean_column_name(col, index=i)
+                # The unit is metadata (P20): drop the part a unit pattern matched from the name
+                units = self.config.units
+                base = split_header_unit(col, units.header_patterns)[0] if units.from_headers else col
+                clean_name = clean_column_name(base or col, index=i)
             else:
                 clean_name = col
 
@@ -231,9 +235,16 @@ class CSVLoader:
             self.config.quality, df, channels, run_columns, channel_attrs, names, self.config.vocabulary
         )
 
+        # 7. Units from headers or long-table attributes (P20)
+        numeric = [c for c, k in column_kinds.items() if k in (ColumnKind.NUMERIC, ColumnKind.PARAMETER)]
+        units = resolve_units(
+            self.config.units, numeric, raw_to_clean, names, channel_attrs, self.config.vocabulary
+        )
+
         # Freeze every decision into a replayable spec
         resolved = self.config.model_copy(deep=True)
         resolved.quality = quality
+        resolved.units.units = units
         resolved.time_column = detected_time_col
         resolved.column_kinds = {
             raw: column_kinds.get(raw_to_clean[raw], kind) for raw, kind in resolved_kinds.items()
@@ -264,6 +275,7 @@ class CSVLoader:
             aborted_run_fraction=self.config.runs.aborted_fraction,
             sources=sources,
             quality=to_settings(quality),
+            units=units,
         )
 
     def _long_config_with_clean_names(self, raw_to_clean: dict[str, str]) -> LongFormatConfig:

@@ -215,7 +215,9 @@ class MultiChannelPlotCanvas(QWidget):
             color = CHANNEL_COLORS[idx % len(CHANNEL_COLORS)]
 
             # Configure axes styling
-            p.setLabel("left", ch, color=color, **{"font-size": "10pt", "font-weight": "bold"})
+            unit = self._dataset.units.get(ch)
+            label = f"{ch} [{unit}]" if unit else ch
+            p.setLabel("left", label, color=color, **{"font-size": "10pt", "font-weight": "bold"})
             p.showGrid(x=True, y=True, alpha=0.22)
             p.getAxis("left").setWidth(65)
 

@@ -714,3 +714,24 @@ def test_inspector_quality_table(qapp: QApplication) -> None:
     assert ("(all rows)", "gap") in rows
     inspector.set_dataset(None)
     assert inspector.quality_group.isHidden()
+
+
+# ==============================================================================
+# Einheiten (Datenkatalog P20, P9)
+# ==============================================================================
+
+
+def test_plot_axis_shows_unit(qapp: QApplication) -> None:
+    canvas = MultiChannelPlotCanvas()
+    canvas.set_dataset(load_csv(ALL_MESSY), active_channels=["massenstrom_waage", "masse"])
+    left = canvas.plot_items["massenstrom_waage"].getAxis("left").labelText
+    assert left == "massenstrom_waage [g/s]"
+    assert canvas.plot_items["masse"].getAxis("left").labelText == "masse"
+
+
+def test_inspector_lists_unitless_columns(qapp: QApplication) -> None:
+    inspector = InspectorPanel()
+    inspector.set_dataset(load_csv(ALL_MESSY))
+    assert not inspector.lbl_unitless.isHidden()
+    assert "snad2" in inspector.lbl_unitless.text()
+    assert "massenstrom_waage" not in inspector.lbl_unitless.text()

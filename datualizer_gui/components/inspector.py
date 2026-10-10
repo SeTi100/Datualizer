@@ -102,6 +102,9 @@ class InspectorPanel(QWidget):
         self.lbl_delimiter = QLabel("Delimiter: -")
         self.lbl_decimal = QLabel("Decimal Separator: -")
         self.lbl_timespan = QLabel("Time Span: -")
+        self.lbl_unitless = QLabel("")
+        self.lbl_unitless.setWordWrap(True)
+        self.lbl_unitless.setHidden(True)
 
         for lbl in (
             self.lbl_rows,
@@ -109,6 +112,7 @@ class InspectorPanel(QWidget):
             self.lbl_delimiter,
             self.lbl_decimal,
             self.lbl_timespan,
+            self.lbl_unitless,
         ):
             lbl.setStyleSheet("font-size: 11px;")
             meta_layout.addWidget(lbl)
@@ -219,6 +223,7 @@ class InspectorPanel(QWidget):
             self.lbl_delimiter.setText("Delimiter: -")
             self.lbl_decimal.setText("Decimal Separator: -")
             self.lbl_timespan.setText("Time Span: -")
+            self.lbl_unitless.setHidden(True)
             self.channel_list_widget.clear()
             self._all_channels = []
             self._fill_run_table()
@@ -264,6 +269,11 @@ class InspectorPanel(QWidget):
         else:
             self.lbl_timespan.setText("Time Span: N/A")
 
+        # Columns without a unit are marked, not guessed (P9)
+        unitless = self._dataset.unitless_columns
+        self.lbl_unitless.setText(f"Without unit: {', '.join(unitless)}" if unitless else "")
+        self.lbl_unitless.setHidden(not unitless)
+
         # 2. Channels Checklist
         self.channel_list_widget.clear()
         self._all_channels = list(self._dataset.channels)
@@ -308,7 +318,9 @@ class InspectorPanel(QWidget):
             else:
                 item.setCheckState(Qt.CheckState.Checked)
                 item.setData(Qt.ItemDataRole.ForegroundRole, None)
-                item.setToolTip(f"Fill ratio: {ratio * 100:.0f} %")
+                unit = self._dataset.units.get(item.text()) if self._dataset is not None else None
+                unit_text = f"Unit: {unit}" if unit else "Unit: unknown"
+                item.setToolTip(f"Fill ratio: {ratio * 100:.0f} % | {unit_text}")
 
     def _fill_quality_table(self) -> None:
         summary = self._dataset.quality_summary if self._dataset is not None else None

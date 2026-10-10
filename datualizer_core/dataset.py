@@ -126,8 +126,10 @@ class DualModeDataset:
         aborted_run_fraction: float = 0.1,
         sources: pl.DataFrame | None = None,
         quality: _quality.QualitySettings | None = None,
+        units: dict[str, str] | None = None,
     ) -> None:
         self._df = df
+        self._units = {c: u for c, u in (units or {}).items() if u}
         self._quality = quality
         self._quality_flags: pl.DataFrame | None = None
         self._sources = sources if sources is not None else empty_sources()
@@ -292,7 +294,21 @@ class DualModeDataset:
             aborted_run_fraction=self._aborted_run_fraction,
             sources=self._sources,
             quality=self._quality,
+            units=self._units,
         )
+
+    @property
+    def units(self) -> dict[str, str]:
+        """Return the unit of every numeric column that has one (from header, long table or config)."""
+        return dict(self._units)
+
+    @property
+    def unitless_columns(self) -> list[str]:
+        """Return channels and parameters without a unit (P9: e.g. a setpoint `snad2 = 180`).
+
+        They are only marked; set a unit via `IngestionConfig(units=UnitConfig(units={...}))`.
+        """
+        return [c for c in (*self.channels, *self.parameters) if c not in self._units]
 
     @property
     def quality_flags(self) -> pl.DataFrame:

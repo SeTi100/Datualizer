@@ -229,3 +229,56 @@ def test_points_curve_draws_markers_on_screen(qapp: QApplication, window: Campai
         }
         hits += color in around
     assert hits > len(xs) // 2
+
+
+def test_steps_stay_in_place_while_dragging(qapp: QApplication, window: CampaignWindow) -> None:
+    """Regression: dragging a step curve showed it shifted along time or as ghost copies.
+
+    Qt moved a stale cached pixmap of the curve instead of redrawing it. Real mouse drags, then
+    the colour of the curve must appear at the value of the step it belongs to.
+    """
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    key = f"{JOURNAL.stem}/col_9"
+    panel = window.sources_panel
+    panel.set_checked(DB.stem, "massenstrom_waage", False)
+    panel.set_checked(JOURNAL.stem, "v_mfc", False)
+    panel.set_checked(JOURNAL.stem, "col_9")
+    window.resize(1100, 500)
+    qapp.processEvents()
+    curve = window.canvas.curves[key]
+    vb = window.canvas.plot_items[key].getViewBox()
+    xs, ys = curve.getOriginalDataset()
+    color = pg.mkPen(curve.opts["pen"]).color()
+    view = window.canvas.graphics_layout
+    window.canvas.set_view_range(xs[1] - 1800, xs[1] + 2 * 3600)
+    qapp.processEvents()
+    rng = np.random.default_rng(1)
+    wrong = []
+    for k in range(30):
+        c = view.mapFromScene(vb.sceneBoundingRect().center())
+        start = QPoint(int(c.x()), int(c.y()))
+        dx, dy = int(rng.integers(-150, 150)), int(rng.integers(-60, 60))
+        QTest.mousePress(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+        for f in np.linspace(0, 1, 8)[1:]:
+            QTest.mouseMove(view.viewport(), QPoint(start.x() + int(dx * f), start.y() + int(dy * f)))
+            qapp.processEvents()
+        QTest.mouseRelease(view.viewport(), Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                           QPoint(start.x() + dx, start.y() + dy))
+        qapp.processEvents()
+        image = view.grab().toImage()
+        (x0, x1), (y0, y1) = vb.viewRange()
+        for i in range(len(xs) - 1):
+            t = (xs[i] + xs[i + 1]) / 2
+            if not (x0 < t < x1 and y0 + 1 < ys[i] < y1 - 1) or xs[i + 1] - xs[i] > 1500:
+                continue
+            col = view.mapFromScene(vb.mapViewToScene(pg.QtCore.QPointF(t, 0))).x()
+            drawn = []
+            for row in range(image.height()):
+                px = pg.QtGui.QColor(image.pixel(col, row))
+                if abs(px.red() - color.red()) + abs(px.green() - color.green()) + abs(px.blue() - color.blue()) < 40:
+                    drawn.append(vb.mapSceneToView(view.mapToScene(col, row)).y())
+            if drawn and min(abs(d - ys[i]) for d in drawn) > 1.0:
+                wrong.append((k, i))
+    assert wrong == []

@@ -142,8 +142,8 @@ flowchart TD
      7. ⏳ Zeit: Zone der Kampagne, Achse als Uhrzeit, Datum + Uhrzeit oder t − t0; Mindesthöhe der Subplots.
      8. ⏳ Export als PNG, SVG, PDF mit hellem Theme für den Bericht.
      - Später mit Schritt 5/6: Qualitäts-Flags als Marker, Lücken-Schwelle, Standardauswahl der Kanäle.
-5. ⏳ **Intervalle** aus dem Labjournal, Bänder im Plot, Teilfenster-Regeln.
-6. ⏳ **Fenster-Statistik + Fenster-Inspektor** (Steigung mit Standardfehler, 2-Punkt, Drift, Integral) und zweiseitiges `spike`-Flag.
+5. ✅ **Messschritte (Intervalle):** `IntervalMapping` (Spaltenrollen als Konfiguration, Vorschlag aus dem Profil oder der Datenform, Zeiten auf der Uhr einer anderen Quelle möglich), manuelle Schritte per Rechtsklick „Marker ○ ○“, `WindowRule` (Teilfenster), Bänder über allen Plots (einschaltbar unter *Settings → Tools → Interval Bands*, ein Zeichenobjekt pro Plot), Steps-Dock mit Zuordnungsdialog und Problemliste; alles in `campaign.json`.
+6. ⏳ **Fenster-Statistik + Fenster-Inspektor** (Steigung mit Standardfehler, 2-Punkt, Drift, Integral); Recherche und Arbeitspakete A–D: [`RESEARCH_FENSTER_STATISTIK.md`](RESEARCH_FENSTER_STATISTIK.md). ✅ zweiseitiges `spike`-Flag (Hampel, P31, Paket C): `QualityConfig.spike_window_s`, `spike_k`, `spike_channels`, `spike_min_scale`, `ds.quality_notes`.
 7. ⏳ **Abgleich-Werkzeuge:** Kreuzkorrelation, Ankerereignisse, Dialog.
 8. ⏳ **Rechengrössen, Referenz-Fits, Szenarien:** sicherer Formel-Parser, Kalibrier- und XY-Ergebnisansicht, Fenstertabelle mit Export.
 9. ⏳ **Video-Spur:** Frame-Ansicht synchron zur Kampagnenuhr, Anker aus im Bild abgelesener Uhrzeit.

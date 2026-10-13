@@ -175,3 +175,86 @@ def test_readout_values_have_a_fixed_width(window: CampaignWindow) -> None:
 
     assert len(format_value(99.5)) == len(format_value(100.25)) == len(format_value(-1234.5))
     assert len(format_value(float("nan"))) == len(format_value(1.0))
+
+
+# ------------------------------------------------------------ coverage strip (step 4)
+def test_coverage_is_off_by_default_and_toggled_in_settings(qapp: QApplication, window: CampaignWindow) -> None:
+    assert not window.coverage_visible and window.canvas.coverage_plot is None
+    menus = {a.text(): a.menu() for a in window.menuBar().actions()}
+    tools = {a.text(): a.menu() for a in menus["S&ettings"].actions()}["&Tools"]
+    assert window.action_coverage in tools.actions()
+    window.action_coverage.trigger()
+    qapp.processEvents()
+    assert window.canvas.coverage_plot is not None
+    assert CampaignWindow().coverage_visible  # remembered for the next window
+    window.action_coverage.trigger()
+    assert window.canvas.coverage_plot is None and not CampaignWindow().coverage_visible
+
+
+@pytest.fixture()
+def coverage_window(qapp: QApplication, window: CampaignWindow) -> CampaignWindow:
+    window.set_coverage_visible(True)
+    qapp.processEvents()
+    return window
+
+
+def test_coverage_strip_has_one_lane_per_source(coverage_window: CampaignWindow) -> None:
+    window = coverage_window
+    canvas = window.canvas
+    assert canvas.coverage_plot is not None
+    assert [c.source_id for c in canvas.coverage] == [FID_DAT.stem, PICO.stem]
+    ticks = canvas.coverage_plot.getAxis("left")._tickLevels[0]
+    assert [label for _, label in ticks] == [FID_DAT.name, PICO.name]
+    # every subplot follows the strip, and all left axes have the same width
+    for p in canvas.plot_items.values():
+        assert p.getViewBox().linkedView(0) is canvas.coverage_plot.getViewBox()
+    widths = {p.getAxis("left").width() for p in [canvas.coverage_plot, *canvas.plot_items.values()]}
+    assert len(widths) == 1
+
+
+def test_coverage_shown_without_checked_channels(qapp: QApplication, coverage_window: CampaignWindow) -> None:
+    window = coverage_window
+    for sid, ch in window.sources_panel.checked_channels():
+        window.sources_panel.set_checked(sid, ch, False)
+    qapp.processEvents()
+    assert window.canvas.plot_items == {}
+    assert window.canvas.coverage_plot is not None
+    assert window.canvas.coverage_plot.getAxis("bottom").style["showValues"]
+    lo, hi = window.canvas.full_range()
+    assert (lo, hi) == (window.session.span(FID_DAT.stem)[0], window.session.span(PICO.stem)[1])
+
+
+def test_readout_names_the_gap(coverage_window: CampaignWindow) -> None:
+    window = coverage_window
+    gap = window.canvas.coverage[0].gaps[0]
+    text = window.canvas.update_crosshair((gap.start + gap.end) / 2)
+    assert text.endswith(f"{FID_DAT.name}: gap 11 s (time gap)")
+    assert "gap" not in window.canvas.update_crosshair(gap.start - 5)
+
+
+def test_hatched_gap_is_painted(qapp: QApplication, coverage_window: CampaignWindow) -> None:
+    window = coverage_window
+    """Zoomed onto the FID gap, the lane shows filled bars left and right and a hatch in between."""
+    window.resize(1200, 700)
+    window.show()
+    gap = window.canvas.coverage[0].gaps[0]
+    window.canvas.set_view_range(gap.start - 20, gap.end + 20)
+    qapp.processEvents()
+    plot = window.canvas.coverage_plot
+    image = window.canvas.graphics_layout.grab().toImage()
+    vb = plot.getViewBox()
+
+    def pixels(t0: float, t1: float) -> set[int]:
+        out = set()
+        for t in np.linspace(t0, t1, 15):
+            pt = vb.mapViewToScene(pg.QtCore.QPointF(t, 0.0))
+            view_pt = window.canvas.graphics_layout.mapFromScene(pt)
+            out.add(image.pixel(view_pt.x(), view_pt.y()))
+        return out
+
+    covered = pixels(gap.start - 15, gap.start - 3)
+    hatched = pixels(gap.start + 2, gap.end - 2)
+    background = pg.mkColor("#18181c").rgb()
+    assert len(covered) == 1 and covered != {background}  # solid fill in the source colour
+    assert background in hatched and len(hatched) > 1  # stripes alternate with the background
+    window.close()

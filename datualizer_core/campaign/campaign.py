@@ -12,11 +12,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 from datualizer_core.campaign.clock import ClockModel, epoch_seconds
+from datualizer_core.campaign.coverage import SourceCoverage, coverage_intervals, value_rows
 from datualizer_core.dataset import DualModeDataset
 from datualizer_core.ingestion.config import IngestionConfig
 from datualizer_core.ingestion.profiles import SourceProfile, detect_profile
@@ -96,6 +98,7 @@ class CampaignSession:
         # Derived per source, dropped when the source or its clock changes
         self._master_cache: dict[str, tuple[ClockModel, str, np.ndarray | None]] = {}
         self._track_cache: dict[tuple[str, str], Track] = {}
+        self._coverage_cache: dict[tuple[str, tuple[str, ...] | None], tuple[np.ndarray | None, SourceCoverage]] = {}
         for src in self.campaign.sources:
             self._load(src)
 
@@ -161,6 +164,8 @@ class CampaignSession:
         self._master_cache.pop(source_id, None)
         for key in [k for k in self._track_cache if k[0] == source_id]:
             del self._track_cache[key]
+        for key in [k for k in self._coverage_cache if k[0] == source_id]:
+            del self._coverage_cache[key]
 
     # ------------------------------------------------------------ master time
     def master_time(self, source_id: str) -> np.ndarray | None:
@@ -210,6 +215,29 @@ class CampaignSession:
         tr = Track(source_id, channel, f"{src.label or src.id}: {channel}", ds.units.get(channel, ""), x, y, gap)
         self._track_cache[(source_id, channel)] = tr
         return tr
+
+    def coverage(self, source_id: str, channels: Sequence[str] | None = None) -> SourceCoverage:
+        """When a source has values on master time and where it has gaps (see `campaign.coverage`).
+
+        `channels`: count only these channels (default: a row counts if any channel has a value).
+        A source without absolute time (or a missing file) has no span and no segments.
+        """
+        src = self.campaign.source(source_id)
+        label = src.label or src.id
+        ds = self.datasets.get(source_id)
+        t = self.master_time(source_id)
+        key = (source_id, None if channels is None else tuple(channels))
+        cached = self._coverage_cache.get(key)
+        if cached is not None and cached[0] is t and cached[1].label == label:
+            return cached[1]
+        if ds is None or t is None:
+            cov = SourceCoverage(source_id, label, None)
+        else:
+            gap = np.flatnonzero(ds.flag_mask(["gap"]).to_numpy())
+            segments, gaps = coverage_intervals(t, value_rows(ds, channels), gap)
+            cov = SourceCoverage(source_id, label, self.span(source_id), segments, gaps)
+        self._coverage_cache[key] = (t, cov)
+        return cov
 
     # ------------------------------------------------------------- persistence
     def save(self, path: str | Path) -> None:

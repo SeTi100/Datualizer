@@ -67,6 +67,7 @@ class DatualizerMainWindow(QMainWindow):
         self._dataset: DualModeDataset | None = None
         self._current_file: Path | None = None
         self._current_files: list[Path] = []
+        self._campaign_window = None
 
         self._create_components()
         self._setup_docking_layout()
@@ -172,6 +173,13 @@ class DatualizerMainWindow(QMainWindow):
         action_exit.triggered.connect(self.close)
         menu_file.addAction(action_exit)
 
+        # Campaign Menu (Etappe 2b): several sources on one master time axis
+        menu_campaign = menubar.addMenu("&Campaign")
+        action_campaign = QAction("Open &Campaign Window...", self)
+        action_campaign.setShortcut(QKeySequence("Ctrl+K"))
+        action_campaign.triggered.connect(self.open_campaign_window)
+        menu_campaign.addAction(action_campaign)
+
         # View Menu
         menu_view = menubar.addMenu("&View")
         menu_view.addAction(self.dock_inspector.toggleViewAction())
@@ -193,6 +201,17 @@ class DatualizerMainWindow(QMainWindow):
         self.status_bar = QStatusBar(self)
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready — Open a measurement CSV or quick-load to begin.")
+
+    def open_campaign_window(self) -> "CampaignWindow":
+        """Show the campaign window (created once, kept while the main window lives)."""
+        from datualizer_gui.campaign_window import CampaignWindow
+
+        if self._campaign_window is None:
+            self._campaign_window = CampaignWindow()
+            apply_modern_theme(self._campaign_window)
+        self._campaign_window.show()
+        self._campaign_window.raise_()
+        return self._campaign_window
 
     @property
     def dataset(self) -> DualModeDataset | None:

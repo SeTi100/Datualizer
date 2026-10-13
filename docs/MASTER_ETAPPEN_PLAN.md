@@ -39,7 +39,7 @@ flowchart TD
 
     subgraph E2b [Etappe 2b: Messkampagne - IN ARBEIT]
         E2b_Time[Absolute Zeit - FERTIG] --> E2b_Read[Reader Excel/SQLite/.dat + Profile - FERTIG]
-        E2b_Read --> E2b_Camp[Kampagne + Uhrenmodelle + Master-Zeit]
+        E2b_Read --> E2b_Camp[Kampagne + Uhrenmodelle + Master-Zeit - FERTIG]
         E2b_Camp --> E2b_Win[Intervalle + Fenster-Statistik]
         E2b_Win --> E2b_Calc[Rechengrössen, Referenz-Fits, Szenarien]
         E2b_Calc --> E2b_Video[Video-Spur]
@@ -130,7 +130,7 @@ flowchart TD
 
 1. ✅ **Absolute Zeit:** `TimeConfig` (Format, Zeitzone, Ursprung, Datumsformate), `time_origin`, `time_abs`, DST-sichere Sekunden, replaybar.
 2. ✅ **Reader + Profile:** `load_source`; Excel (`.xlsx`, `.xls` inkl. Metadaten-Blätter), SQLite (ganze `.db` oder Abfrage, fehlende IDs), `.dat`; sechs Profile als JSON; Realdaten-Ausschnitte in `tests/fixtures/sa_12_10/`, Probleme in [`DATENKATALOG_SA_KAMPAGNE.md`](DATENKATALOG_SA_KAMPAGNE.md). Offen: Zeitzone pro Spalte.
-3. ⏳ **Kampagne + Uhrenmodelle:** `Campaign` (`campaign.json`), `ClockModel` (Versatz, Drift, Anker), Master-Zeit; Plot mit eigenem x-Array pro Spur und Datumsachse.
+3. ✅ **Kampagne + Uhrenmodelle:** `Campaign` (`campaign.json`), `ClockModel` (Versatz, Drift, Anker), Master-Zeit; Kampagnenfenster mit eigenem x-Array pro Spur und Datumsachse, Quellen-Dock mit Uhren-Editor.
 4. ⏳ **Abdeckungsansicht** (eine Spur pro Quelle, Lücken schraffiert).
 5. ⏳ **Intervalle** aus dem Labjournal, Bänder im Plot, Teilfenster-Regeln.
 6. ⏳ **Fenster-Statistik + Fenster-Inspektor** (Steigung mit Standardfehler, 2-Punkt, Drift, Integral) und zweiseitiges `spike`-Flag.

@@ -9,3 +9,4 @@ Alle projektweiten Regeln, das Projektziel und der aktuelle Stand stehen in **AG
 - Shell-Befehle laufen unter Windows (Git Bash oder PowerShell). Für Python-Ausgaben mit Sonderzeichen `PYTHONIOENCODING=utf-8` voranstellen.
 - Lange mehrzeilige Python-Patches nicht als Bash-Heredoc mit verschachtelten Anführungszeichen schreiben. Besser ein Skript im Scratchpad anlegen oder das Edit-Tool nutzen.
 - Nach `gh pr create` den PR-Status über die PR-Tools der App lesen, nicht CI per Polling abfragen.
+- Nach jedem Push auf einen Feature-Branch **immer** gleich den PR nach `main` anlegen (bzw. den offenen PR aktualisieren), ohne nachzufragen. Wunsch des Nutzers.

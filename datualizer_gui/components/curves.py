@@ -214,10 +214,12 @@ class FastCurve(pg.PlotCurveItem):
     def viewRangeChanged(self) -> None:
         super().viewRangeChanged()
         self._update_lod()
+        drop_cached_pixmap(self)
 
     def viewTransformChanged(self) -> None:
         super().viewTransformChanged()
         self._update_lod()  # also called on resize, when the number of columns changes
+        drop_cached_pixmap(self)
 
     def _update_lod(self, force: bool = False) -> None:
         x, y, connect, x_sorted = self._full
@@ -243,10 +245,12 @@ class FastScatter(pg.ScatterPlotItem):
     def viewRangeChanged(self) -> None:
         super().viewRangeChanged()
         self._update_lod()
+        drop_cached_pixmap(self)
 
     def viewTransformChanged(self) -> None:
         super().viewTransformChanged()
         self._update_lod()
+        drop_cached_pixmap(self)
 
     def _update_lod(self, force: bool = False) -> None:
         x, y, connect, x_sorted = self._full
@@ -330,6 +334,21 @@ def add_edge_markers(plot: pg.PlotItem, x: np.ndarray, y: np.ndarray, color) -> 
     plot.addItem(markers, ignoreBounds=True)
     markers.update_markers()
     return markers
+
+
+def drop_cached_pixmap(item: QGraphicsItem) -> None:
+    """Throw away the item's cached pixmap after the view moved or zoomed.
+
+    Qt reuses a DeviceCoordinateCache pixmap when the view only translates and moves it along.
+    Inside a clipping ViewBox that pixmap can be stale: while dragging, a step curve showed up
+    shifted along the time axis or as ghost copies (`update()` alone does not prevent the
+    reuse). Switching the cache off and on again deletes the pixmap; crosshair moves, which do
+    not change the view, still only blit it.
+    """
+    mode = item.cacheMode()
+    if mode != QGraphicsItem.CacheMode.NoCache:
+        item.setCacheMode(QGraphicsItem.CacheMode.NoCache)
+        item.setCacheMode(mode)
 
 
 def cache_static_parts(plot: pg.PlotItem, curve: pg.GraphicsObject) -> None:

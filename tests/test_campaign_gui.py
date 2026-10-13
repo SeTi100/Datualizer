@@ -152,3 +152,26 @@ def test_user_zoom_survives_a_rebuild(qapp: QApplication, window: CampaignWindow
         x = curve.getOriginalDataset()[0]
         assert lo <= np.nanmin(x) and np.nanmax(x) <= hi
     window.close()
+
+
+def test_readout_never_resizes_the_window(qapp: QApplication, window: CampaignWindow) -> None:
+    """Hovering from left to right must not widen the window when values get longer (99 -> 100)."""
+    window.resize(900, 600)
+    window.show()
+    qapp.processEvents()
+    width = window.width()
+    label = window.canvas.crosshair_label
+    label.setText("x" * 2000)  # far longer than the window
+    qapp.processEvents()
+    assert window.width() == width
+    assert label.minimumSizeHint().width() == 0
+    window.close()
+    main = DatualizerMainWindow(auto_load=False)  # the main window's readout behaves the same
+    assert main.plot_canvas.crosshair_label.minimumSizeHint().width() == 0
+
+
+def test_readout_values_have_a_fixed_width(window: CampaignWindow) -> None:
+    from datualizer_gui.components.campaign_canvas import format_value
+
+    assert len(format_value(99.5)) == len(format_value(100.25)) == len(format_value(-1234.5))
+    assert len(format_value(float("nan"))) == len(format_value(1.0))

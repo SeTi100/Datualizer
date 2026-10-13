@@ -8,7 +8,7 @@ from typing import Sequence
 import numpy as np
 import polars as pl
 import pyqtgraph as pg
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from datualizer_core.campaign import Track
 from datualizer_gui.components import curves
@@ -21,6 +21,7 @@ from datualizer_gui.components.curves import (
     rate_limited_mouse,
 )
 from datualizer_gui.components.plot_canvas import CHANNEL_COLORS
+from datualizer_gui.components.readout import ReadoutLabel, format_value
 
 
 def utc_offset_s(epoch_s: float, zone: str) -> int:
@@ -55,11 +56,7 @@ class CampaignPlotCanvas(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
-        self.crosshair_label = QLabel("Add sources and select channels to plot them on one time axis.")
-        self.crosshair_label.setStyleSheet(
-            "QLabel { background-color: #1e1e24; color: #dcdcdc; font-family: 'Consolas', monospace;"
-            " font-size: 11px; padding: 5px 10px; border-radius: 4px; border: 1px solid #32323e; }"
-        )
+        self.crosshair_label = ReadoutLabel("Add sources and select channels to plot them on one time axis.")
         layout.addWidget(self.crosshair_label)
         self.graphics_layout = pg.GraphicsLayoutWidget()
         self.graphics_layout.setBackground("#18181c")
@@ -181,7 +178,7 @@ class CampaignPlotCanvas(QWidget):
             idx = int(np.clip(np.searchsorted(tr.x, x), 1, len(tr.x) - 1))
             j = idx - 1 if abs(tr.x[idx - 1] - x) <= abs(tr.x[idx] - x) else idx
             val = tr.y[j]
-            parts.append(f"{tr.label} = {'—' if not np.isfinite(val) else f'{val:.4g}'} {tr.unit}".strip())
+            parts.append(f"{tr.label} = {format_value(val)} {tr.unit}".rstrip())
         text = " | ".join(parts)
         self.crosshair_label.setText(text)
         return text

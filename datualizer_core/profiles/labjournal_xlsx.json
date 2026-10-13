@@ -1,0 +1,20 @@
+{
+  "name": "labjournal_xlsx",
+  "description": "Labjournal (Excel): ein Blatt pro Messtag, Messschritte mit Zeit_0/Zeit_1. Blatt und Datum (TimeConfig.clock_date) pro Tag angeben.",
+  "reader": "excel",
+  "file_patterns": [
+    "*.xlsx",
+    "*.xlsm"
+  ],
+  "header_hints": [
+    "Zeit_0",
+    "Zeit_1",
+    "Masse_0"
+  ],
+  "ingestion": {
+    "time_column": "Zeit_0",
+    "time": {
+      "timezone": "Europe/Zurich"
+    }
+  }
+}

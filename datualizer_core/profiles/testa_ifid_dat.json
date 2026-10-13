@@ -1,0 +1,19 @@
+{
+  "name": "testa_ifid_dat",
+  "description": "Testa iFID Mobile, Text-Export (.dat): Tab-getrennt, deutsches Datum, Geräteuhr.",
+  "reader": "delimited",
+  "file_patterns": [
+    "*.dat",
+    "*.txt"
+  ],
+  "header_hints": [
+    "Conc [mgC]",
+    "Signal"
+  ],
+  "ingestion": {
+    "time_column": "Time",
+    "time": {
+      "timezone": "Europe/Zurich"
+    }
+  }
+}

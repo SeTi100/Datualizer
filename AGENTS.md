@@ -57,14 +57,20 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 │   ├── units.py                  # Einheiten aus Header, Long-Attribut oder Config (P20)
 │   ├── loader.py                 # CSV → DualModeDataset (orchestriert alles, baut ingestion_spec)
 │   ├── sources.py                # Quelle lesen, SHA-256-Fingerabdruck
+│   ├── readers/                  # Text, Excel (.xlsx/.xls), SQLite → String-Rohtabelle + source_meta
+│   ├── profiles.py               # SourceProfile (JSON), detect_profile
+│   ├── source_loader.py          # load_source: Reader + Profil → load_frame
 │   └── merge.py                  # load_csvs: mehrere Dateien → ein Dataset (Duplikate, Snapshots)
-└── pipeline/operators.py         # clean_names, drop_footer, unpivot
+├── pipeline/operators.py         # clean_names, drop_footer, unpivot
+└── profiles/*.json               # Geräteprofile (Daten, kein Code)
 datualizer_gui/                   # PySide6-App, Einstieg: python -m datualizer_gui.app
 tests/fixtures/runs_export/       # 13 echte Pipeline-Exporte (unveränderlich!)
+tests/fixtures/sa_12_10/          # Ausschnitte einer echten Mehrgeräte-Messkampagne (unveränderlich!)
 ```
 
 Ablauf: `load_csv(path, config=…)` → PreScanner → Zeitspalte → Typ-Inferenz (Overrides zuerst) → Casting mit Audit → Long-Erkennung und Pivot → Rollen (Parameter) → Qualitäts-Einstellungen und Einheiten auflösen → `DualModeDataset` (mit `column_kinds`, `channels`, `parameters`, `empty_columns`, `runs`, `channel_attrs`, `source_format`, `ingestion_spec`, `sources`, `quality_flags`, `units`, `time_origin`, `time_zone`).
 Zeit: `time_seconds` zählt ab dem ersten gültigen Sample, `time_origin` ist dessen absoluter Zeitpunkt (`time_abs` wird daraus abgeleitet, nicht als Spalte gespeichert). Zeitzonen rechnet Polars; Python braucht unter Windows dafür das Paket `tzdata`, sonst stürzt die Ausgabe zonenbehafteter Werte ab.
+Andere Formate: `load_source(path, profile=…)` liest über einen Reader (Text, Excel, SQLite) eine String-Rohtabelle und gibt sie an denselben `CSVLoader.load_frame`; gerätespezifische Einstellungen kommen aus Profilen, nie aus dem Code.
 Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft gleiches Layout, dedupliziert über den Schlüssel (spätere Datei gewinnt) und lädt die gemischte Rohtabelle einmal durch denselben Loader.
 
 **Import-Regel:** `dataset.py` darf nichts aus `ingestion/` zur Laufzeit importieren, sonst entsteht ein Zyklus. Gemeinsame Typen gehören nach `schema.py`. Typ-Hinweise gehen über `TYPE_CHECKING`.
@@ -123,10 +129,11 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
 
 - Etappe 2b (Messkampagne) bisher:
   - Schritt 1, absolute Zeit: `TimeConfig` (Format, Zeitzone, Ursprung, Datumsformate), `time_origin`, `time_zone`, `time_abs`, `with_time_abs()`, DST-sichere Sekunden, `TimeConfigError`
+  - Schritt 2, Reader und Profile (P21–P28, siehe [Datenkatalog SA](docs/DATENKATALOG_SA_KAMPAGNE.md)): `load_source`, Excel- und SQLite-Reader, `source_meta`, `SourceProfile` mit sechs mitgelieferten Profilen, `TimeConfig.clock_date`, Tabellenfehler als Sentinels, GUI öffnet alle Formate
 
 **Nächste offene Punkte:**
 
-1. **Etappe 2b, Schritte 2–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md)): Reader für Excel, `.xls`, SQLite und `.dat` mit Profilen, Kampagnenmodell mit Uhrenmodellen und gemeinsamer Zeitachse, Abdeckungsansicht, Journal-Intervalle, Fenster-Statistik, Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
+1. **Etappe 2b, Schritte 3–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md)): Kampagnenmodell mit Uhrenmodellen und gemeinsamer Zeitachse, Abdeckungsansicht, Journal-Intervalle, Fenster-Statistik, Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
 2. **Wert und Einheit in einer Zelle (P6)** (`Konzentration = "20 °C"`) und widersprüchliche Metadaten anzeigen (P8).
 3. Danach: Block-Segmentation und Ragged-Healer (ursprünglicher Etappe-2-Plan), sobald Gerätedaten mit Kopfblöcken vorliegen.
 

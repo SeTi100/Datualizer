@@ -10,6 +10,8 @@ dependencies = [
     "pyside6>=6.6.0,<6.12",  # 6.12.0 aborts the GUI tests (refcount bug, "deallocating None")
     "pyqtgraph>=0.13.3",
     "pydantic>=2.0.0",
+    "openpyxl>=3.1",  # .xlsx sources (lab journal, device exports)
+    "xlrd>=2.0",  # legacy .xls sources (BIFF), e.g. analyzer exports
     "tzdata; sys_platform == 'win32'",  # zone database for time-zone-aware datetimes on Windows
 ]
 

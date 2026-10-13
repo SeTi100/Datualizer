@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -131,8 +132,10 @@ class DualModeDataset:
         units: dict[str, str] | None = None,
         time_origin: datetime | None = None,
         time_zone: str | None = None,
+        source_meta: dict[str, Any] | None = None,
     ) -> None:
         self._df = df
+        self._source_meta = source_meta or {}
         self._time_origin = time_origin
         self._time_zone = time_zone
         self._units = {c: u for c, u in (units or {}).items() if u}
@@ -307,6 +310,7 @@ class DualModeDataset:
             units=self._units,
             time_origin=origin,
             time_zone=self._time_zone,
+            source_meta=self._source_meta,
         )
 
     @property
@@ -316,6 +320,11 @@ class DualModeDataset:
         Naive for wall-clock sources, UTC-aware if the time zone is known (see `time_zone`).
         """
         return self._time_origin
+
+    @property
+    def source_meta(self) -> dict[str, Any]:
+        """What the reader learned about the source: profile, sheet, metadata sheets, missing ids …."""
+        return copy.deepcopy(self._source_meta)
 
     @property
     def time_zone(self) -> str | None:

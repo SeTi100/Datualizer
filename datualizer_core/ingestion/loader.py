@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
 from pathlib import Path
 import re
@@ -149,6 +149,7 @@ class CSVLoader:
         decimal_separator: str = ".",
         audit_log: AuditLog | None = None,
         sources: pl.DataFrame | None = None,
+        source_meta: dict | None = None,
     ) -> DualModeDataset:
         """Build a DualModeDataset from a raw all-String table (one column per header).
 
@@ -317,6 +318,7 @@ class CSVLoader:
             units=units,
             time_origin=time_axis.origin,
             time_zone=time_axis.zone,
+            source_meta=source_meta,
         )
 
     def _long_config_with_clean_names(self, raw_to_clean: dict[str, str]) -> LongFormatConfig:
@@ -397,6 +399,12 @@ class CSVLoader:
             raise TimeConfigError(
                 f"Time column '{raw_col_name}' does not match the forced format '{fmt.value}'."
             )
+        if tcfg.origin is not None and tcfg.clock_date is not None:
+            raise TimeConfigError("Give either TimeConfig.origin or TimeConfig.clock_date, not both.")
+        if tcfg.clock_date is not None and fmt is not TimeFormat.CLOCK:
+            raise TimeConfigError(
+                f"TimeConfig.clock_date needs clock times; column '{raw_col_name}' is {fmt.value}."
+            )
         if fmt is TimeFormat.DATETIME and tcfg.origin is not None:
             raise TimeConfigError(
                 f"Time column '{raw_col_name}' holds date-times; an origin is only allowed for "
@@ -437,8 +445,11 @@ class CSVLoader:
         rel = [None if s is None else s - base for s in seconds]
 
         origin = zone = None
-        if tcfg.origin is not None:
-            origin_us, zone = origin_epoch_us(tcfg.origin, tcfg.timezone)
+        start = tcfg.origin
+        if tcfg.clock_date is not None and base is not None:
+            start = datetime.combine(tcfg.clock_date, datetime.min.time()) + timedelta(seconds=base)
+        if start is not None:
+            origin_us, zone = origin_epoch_us(start, tcfg.timezone)
             origin = epoch_us_to_datetime(origin_us, zone)
         return _TimeAxis(pl.Series(col_name, rel, dtype=pl.Float64), origin, zone, fmt)
 

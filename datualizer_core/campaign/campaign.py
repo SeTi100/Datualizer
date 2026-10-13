@@ -8,7 +8,7 @@ the loaded datasets and computes master times. The JSON is the seed of the recip
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -18,7 +18,7 @@ from typing import Sequence
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
-from datualizer_core.campaign.clock import ClockModel, epoch_seconds
+from datualizer_core.campaign.clock import ClockModel, epoch_seconds, to_epoch_s
 from datualizer_core.campaign.coverage import SourceCoverage, coverage_intervals, value_rows
 from datualizer_core.campaign.display import ChannelDisplay, YScale
 from datualizer_core.campaign.intervals import (
@@ -75,6 +75,9 @@ class Campaign(BaseModel):
 
     name: str = "Campaign"
     timezone: str = Field("Europe/Zurich", description="Master zone; date-times without zone are read in it.")
+    time_reference: datetime | None = Field(
+        None, description="Reference t0 of the relative time axis (with UTC offset); None = start of the data shown."
+    )
     sources: list[CampaignSource] = Field(default_factory=list)
     interval_mappings: list[IntervalMapping] = Field(
         default_factory=list, description="Sources that list measurement steps, with their column roles."
@@ -201,6 +204,30 @@ class CampaignSession:
     def set_clock(self, source_id: str, clock: ClockModel) -> None:
         self.campaign.source(source_id).clock = clock
         self._forget(source_id)
+
+    def set_timezone(self, zone: str) -> None:
+        """Change the master zone (raises TimeConfigError for an unknown zone).
+
+        The axis labels follow it. Sources whose times carry no zone are read in it, so their
+        master times move; sources with their own zone (from profile or spec) keep their instants.
+        The data itself is not changed.
+        """
+        check_zone(zone)
+        self.campaign.timezone = zone
+
+    @property
+    def time_reference_s(self) -> float | None:
+        """t0 of the relative time axis in epoch seconds (None = not set)."""
+        ref = self.campaign.time_reference
+        if ref is None:
+            return None
+        return to_epoch_s(ref, self.campaign.timezone)
+
+    def set_time_reference(self, epoch_s: float | None) -> None:
+        """Set t0 of the relative time axis (None = start of the data shown); stored in UTC."""
+        self.campaign.time_reference = (
+            None if epoch_s is None else datetime.fromtimestamp(epoch_s, tz=timezone.utc)
+        )
 
     def set_display(self, source_id: str, channel: str, display: ChannelDisplay) -> None:
         """Change how one channel is drawn (display only; the dataset stays as loaded).

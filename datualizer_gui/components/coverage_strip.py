@@ -110,9 +110,14 @@ def build_coverage_plot(
     coverage: Sequence[SourceCoverage],
     colors: Sequence[str],
     utc_offset: int,
+    axis: pg.AxisItem | None = None,
 ) -> tuple[pg.PlotItem, CoverageItem]:
-    """Add the coverage strip as a plot (row 0) with a date axis and one labelled lane per source."""
-    axis = pg.DateAxisItem(orientation="bottom", utcOffset=-utc_offset)
+    """Add the coverage strip as a plot (row 0) with a time axis and one labelled lane per source.
+
+    `axis`: bottom axis to use (default: a date axis for `utc_offset`).
+    """
+    if axis is None:
+        axis = pg.DateAxisItem(orientation="bottom", utcOffset=-utc_offset)  # pyqtgraph: seconds west
     p = layout.addPlot(row=0, col=0, axisItems={"bottom": axis})
     p.setTitle("Coverage (hatched = gap)", size="9pt", color="#aaaaaa")
     p.setMouseEnabled(x=True, y=False)

@@ -136,10 +136,10 @@ flowchart TD
      1. ✅ Darstellung pro Kanal: Linie, Punkte, Treppe, Linie + Punkte (`ChannelDisplay.style`, Standard aus `SourceProfile.plot_style`, Labjournal = Treppe).
      2. ✅ Y-Skalierung pro Kanal: Auto, robust (Perzentile), fest; Werte ausserhalb am Rand markiert (`YScale`, `OutOfRangeMarkers`).
      3. ✅ Anzeigename pro Kanal (`ChannelDisplay.alias`) für Achse, Baum und Infozeile.
-     4. ⏳ Zoom: Mausrad nur auf der Zeitachse, Y passt sich dem sichtbaren Ausschnitt an.
+     4. ✅ Zoom: Mausrad nur auf der Zeitachse (über einer Y-Achse zoomt es diese), Y passt sich dem sichtbaren Ausschnitt an (`TimeViewBox`, beides abschaltbar).
      5. ⏳ Kanäle gruppieren (pro Kanal, nach Einheit, nach Quelle) mit Legende; Farbschema.
      6. ⏳ Infozeile als Leiste, Tooltip oder Tabelle; Nachkommastellen.
-     7. ⏳ Zeit: Zone der Kampagne, Achse als Uhrzeit, Datum + Uhrzeit oder t − t0; Mindesthöhe der Subplots.
+     7. ✅ Zeit: Zone der Kampagne wählbar (`session.set_timezone`), Achse automatisch, als Uhrzeit, Datum + Uhrzeit oder t − t0 (`Campaign.time_reference` in `campaign.json`); Mindesthöhe der Subplots, darunter scrollt die Ansicht und jeder Subplot zeigt seine Zeitachse.
      8. ⏳ Export als PNG, SVG, PDF mit hellem Theme für den Bericht.
      - Später mit Schritt 5/6: Qualitäts-Flags als Marker, Lücken-Schwelle, Standardauswahl der Kanäle.
 5. ✅ **Messschritte (Intervalle):** `IntervalMapping` (Spaltenrollen als Konfiguration, Vorschlag aus dem Profil oder der Datenform, Zeiten auf der Uhr einer anderen Quelle möglich), manuelle Schritte per Rechtsklick „Marker ○ ○“, `WindowRule` (Teilfenster), Bänder über allen Plots (einschaltbar unter *Settings → Tools → Interval Bands*, ein Zeichenobjekt pro Plot), Steps-Dock mit Zuordnungsdialog und Problemliste; alles in `campaign.json`.

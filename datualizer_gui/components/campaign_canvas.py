@@ -11,7 +11,7 @@ import polars as pl
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
 
 from datualizer_core.campaign import IntervalSet, ResolvedInterval, SourceCoverage, Track
 from datualizer_gui.components import curves
@@ -36,6 +36,7 @@ from datualizer_gui.components.coverage_strip import (
 from datualizer_gui.components.interval_bands import PENDING_PEN, StepBand, StepsItem, marker_icon, marker_text
 from datualizer_gui.components.plot_canvas import CHANNEL_COLORS
 from datualizer_gui.components.readout import ReadoutLabel, format_value
+from datualizer_gui.components.time_axis import TimeAxisMode, TimeViewBox, format_relative, make_time_axis
 
 
 def utc_offset_s(epoch_s: float, zone: str) -> int:
@@ -81,6 +82,13 @@ class CampaignPlotCanvas(QWidget):
         self._zone = "UTC"
         self._utc_offset = 0
         self._user_range: tuple[float, float] | None = None  # set when the user zooms or pans
+        self._axis_mode = TimeAxisMode.AUTO
+        self._t0_setting: float | None = None  # reference for relative time; None = first sample
+        self._t0: float | None = None
+        self._wheel_time_only = False
+        self._y_fit_visible = False
+        self._min_subplot_height = 0
+        self.crosshair_x: float | None = None  # master time of the last crosshair position
         self._intervals = IntervalSet()
         self._steps_items: list[tuple[pg.PlotItem, StepsItem]] = []  # one per subplot
         self._bands: list[StepBand] = []  # draggable regions of manual steps only
@@ -120,7 +128,12 @@ class CampaignPlotCanvas(QWidget):
         self.graphics_layout.setBackground("#18181c")
         ensure_pixmap_cache()
         self._mouse_proxy = rate_limited_mouse(self.graphics_layout.scene(), self._on_mouse_moved)
-        layout.addWidget(self.graphics_layout)
+        self.scroll_area = QScrollArea()  # scrolls once the subplots reach their minimum height
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll_area.setWidget(self.graphics_layout)
+        layout.addWidget(self.scroll_area)
 
     @property
     def tracks(self) -> list[Track]:
@@ -156,11 +169,14 @@ class CampaignPlotCanvas(QWidget):
         starts = [float(np.nanmin(t.x)) for t in self._tracks if np.isfinite(t.x).any()]
         starts += [c.span[0] for c in self._coverage if c.span is not None]
         offset = utc_offset_s(min(starts), zone) if starts else 0
+        t0 = self._t0_setting if self._t0_setting is not None else (min(starts) if starts else None)
+        if self._axis_mode is not TimeAxisMode.RELATIVE:
+            t0 = None  # only the relative axis depends on it: no redraw when the data start moves
         old_plots, old_curves, old_lines, old_tracks = self._plot_items, self._curves, self._crosshair_lines, self._track_of
         old_markers = self._edge_markers
-        if (offset, zone) != (self._utc_offset, self._zone):
-            old_tracks = {}  # date axis labels depend on the offset: build all subplots anew
-        self._zone, self._utc_offset = zone, offset
+        if (offset, zone, t0) != (self._utc_offset, self._zone, self._t0):
+            old_tracks = {}  # axis labels depend on offset and t0: build all subplots anew
+        self._zone, self._utc_offset, self._t0 = zone, offset, t0
         for p in old_plots.values():  # unlink first: the old coverage strip is deleted below
             p.setXLink(None)
         self.graphics_layout.clear()  # detaches the subplots, kept ones are added back below
@@ -171,7 +187,7 @@ class CampaignPlotCanvas(QWidget):
         first: pg.PlotItem | None = None
         if self._coverage:  # rebuilt every time: cheap, and the lanes follow the source list
             first, self.coverage_item = build_coverage_plot(
-                self.graphics_layout, self._coverage, CHANNEL_COLORS, self._utc_offset
+                self.graphics_layout, self._coverage, CHANNEL_COLORS, self._utc_offset, axis=self._make_axis()
             )
             first.getAxis("bottom").setStyle(showValues=not self._tracks)
             first.getViewBox().sigRangeChangedManually.connect(self._on_manual_range)
@@ -180,7 +196,6 @@ class CampaignPlotCanvas(QWidget):
             )
             first.addItem(self._coverage_line, ignoreBounds=True)
             self.coverage_plot = first
-        last = len(self._tracks) - 1
         for i, tr in enumerate(self._tracks):
             key = f"{tr.source_id}/{tr.channel}"
             pen = curve_pen(CHANNEL_COLORS[i % len(CHANNEL_COLORS)])
@@ -201,7 +216,6 @@ class CampaignPlotCanvas(QWidget):
                 if limits is not None:
                     self._edge_markers[key] = add_edge_markers(p, tr.x, tr.y, pen.color())
             p.setXLink(first)  # None for the first subplot
-            p.getAxis("bottom").setStyle(showValues=i == last)
             if first is None:
                 first = p
             self._plot_items[key], self._curves[key], self._crosshair_lines[key] = p, curve, line
@@ -211,6 +225,8 @@ class CampaignPlotCanvas(QWidget):
             width = left_axis_width(self.coverage_plot, [lane_label(c) for c in self._coverage])
         for p in self._all_plots():
             p.getAxis("left").setWidth(width)
+        self._apply_view_options()
+        self._apply_min_height()
         if first is not None:
             self._apply_range()
         self._apply_y_ranges()
@@ -220,6 +236,73 @@ class CampaignPlotCanvas(QWidget):
         self._draw_pending()
         if not self._tracks and not self._coverage:
             self.crosshair_label.setText("Add sources and select channels to plot them on one time axis.")
+
+    # ------------------------------------------------------------ view options
+    @property
+    def time_axis_mode(self) -> TimeAxisMode:
+        return self._axis_mode
+
+    @property
+    def t0(self) -> float | None:
+        """Reference of the relative time axis (the one set, else the first sample shown)."""
+        return self._t0
+
+    def set_time_axis(self, mode: TimeAxisMode, t0: float | None = None) -> None:
+        """Label the time axis as clock time, date + time or t - t0 (t0 None = first sample)."""
+        mode = TimeAxisMode(mode)
+        if (mode, t0) == (self._axis_mode, self._t0_setting):
+            return
+        self._axis_mode, self._t0_setting = mode, t0
+        self._rebuild()
+
+    def set_view_options(self, wheel_time_only: bool, y_fit_visible: bool) -> None:
+        """Mouse wheel on the time axis only; y of auto-scaled subplots fits the visible part."""
+        self._wheel_time_only, self._y_fit_visible = wheel_time_only, y_fit_visible
+        self._apply_view_options()
+
+    def set_min_subplot_height(self, px: int) -> None:
+        """Subplots never get lower than this (0 = fit all); the plot area scrolls instead."""
+        self._min_subplot_height = max(int(px), 0)
+        self._apply_min_height()
+
+    def _rebuild(self) -> None:
+        self._track_of = {}  # nothing to keep: the axes change
+        self.set_tracks(self._tracks, self._zone, self._coverage)
+
+    def _make_axis(self) -> pg.AxisItem:
+        return make_time_axis(self._axis_mode, self._utc_offset, self._t0)
+
+    def _apply_view_options(self) -> None:
+        for p in self._all_plots():
+            vb = p.getViewBox()
+            if isinstance(vb, TimeViewBox):
+                vb.wheel_time_only = self._wheel_time_only
+            if p is not self.coverage_plot:
+                p.setAutoVisible(y=self._y_fit_visible)
+
+    def _apply_min_height(self) -> None:
+        rows = len(self._plot_items)
+        height = rows * self._min_subplot_height
+        if self.coverage_plot is not None and rows:
+            height += int(self.coverage_plot.minimumHeight())
+        self.graphics_layout.setMinimumHeight(height if self._min_subplot_height else 0)
+        self._update_time_labels()
+
+    @property
+    def scrolls(self) -> bool:
+        """True if the subplots are taller than the visible area (then each shows its time labels)."""
+        return self.graphics_layout.minimumHeight() > self.scroll_area.viewport().height()
+
+    def _update_time_labels(self) -> None:
+        """Time labels under the last subplot only, or under every subplot while scrolling."""
+        plots = list(self._plot_items.values())
+        every = self.scrolls
+        for i, p in enumerate(plots):
+            p.getAxis("bottom").setStyle(showValues=every or i == len(plots) - 1)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_time_labels()
 
     # ------------------------------------------------------------------ steps
     @property
@@ -361,9 +444,9 @@ class CampaignPlotCanvas(QWidget):
         return ([self.coverage_plot] if self.coverage_plot is not None else []) + list(self._plot_items.values())
 
     def _new_plot(self, row: int, tr: Track, pen) -> tuple[pg.PlotItem, FastCurve, pg.InfiniteLine]:
-        # pyqtgraph's utcOffset is seconds west of UTC
-        axis = pg.DateAxisItem(orientation="bottom", utcOffset=-self._utc_offset)
-        p = self.graphics_layout.addPlot(row=row, col=0, axisItems={"bottom": axis})
+        p = self.graphics_layout.addPlot(
+            row=row, col=0, axisItems={"bottom": self._make_axis()}, viewBox=TimeViewBox(self._wheel_time_only)
+        )
         light_grid(p, alpha=0.25)
         p.setLabel("left", tr.name, units=tr.unit or None)
         p.setTitle(tr.label, size="9pt", color="#aaaaaa")
@@ -429,10 +512,14 @@ class CampaignPlotCanvas(QWidget):
 
     def format_time(self, epoch_s: float) -> str:
         t = datetime.fromtimestamp(epoch_s + self._utc_offset, tz=timezone.utc).replace(tzinfo=None)
-        return t.strftime("%d.%m.%Y %H:%M:%S")
+        text = t.strftime("%d.%m.%Y %H:%M:%S")
+        if self._axis_mode is TimeAxisMode.RELATIVE and self._t0 is not None:
+            text += f" (t \u2212 t0 = {format_relative(epoch_s - self._t0)})"
+        return text
 
     def update_crosshair(self, x: float) -> str:
         """Move the crosshair to master time `x` and return the readout text."""
+        self.crosshair_x = x
         for line in self._crosshair_lines.values():
             line.setPos(x)
         if self._coverage_line is not None:

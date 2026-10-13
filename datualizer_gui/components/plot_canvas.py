@@ -6,9 +6,10 @@ from typing import Sequence
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from datualizer_core.dataset import DualModeDataset
+from datualizer_gui.components.readout import ReadoutLabel
 from datualizer_gui.components.curves import (
     add_curve,
     connect_mask,
@@ -74,18 +75,7 @@ class MultiChannelPlotCanvas(QWidget):
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(4, 2, 4, 2)
 
-        self.crosshair_label = QLabel("Crosshair: Hover over plots to inspect channel values")
-        self.crosshair_label.setStyleSheet(
-            "QLabel {"
-            "  background-color: #1e1e24;"
-            "  color: #dcdcdc;"
-            "  font-family: 'Consolas', 'Courier New', monospace;"
-            "  font-size: 11px;"
-            "  padding: 5px 10px;"
-            "  border-radius: 4px;"
-            "  border: 1px solid #32323e;"
-            "}"
-        )
+        self.crosshair_label = ReadoutLabel("Crosshair: Hover over plots to inspect channel values")
         header_layout.addWidget(self.crosshair_label)
         layout.addLayout(header_layout)
 
@@ -277,7 +267,7 @@ class MultiChannelPlotCanvas(QWidget):
                 if np.isnan(val):
                     parts.append(f"{ch}: NaN (dropout)")
                 else:
-                    parts.append(f"{ch}: {val:6.3f}")
+                    parts.append(f"{ch}: {val:9.3f}")  # fixed width: the text does not shift
 
         self.crosshair_label.setText("   |   ".join(parts))
 

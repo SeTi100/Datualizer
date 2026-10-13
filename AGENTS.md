@@ -95,6 +95,7 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
 - CI (`.github/workflows/pytest.yml`, Ubuntu, Python 3.11) installiert per `pip install -e ".[dev]"` und testet damit auch die Paket-Metadaten.
 - **pyqtgraph ≥ 0.14** ist die getestete Version (`pyproject.toml`).
 - Kurven nie mit `p.plot(...)` bauen, sondern über `curves.add_curve` (`FastCurve`): eigenes Peak-Downsampling, das nie über eine Lücke hinweg verbindet (pyqtgraphs eigenes `setDownsampling` zog Linien über Logger-Aussetzer), Clip-to-View, 1-px-Stift, Pixmap-Cache. Gitter über `curves.light_grid`, Cache-Grösse über `curves.ensure_pixmap_cache` (Qt-Standard 10 MB reicht nur für wenige Subplots, danach wird jedes Bild komplett neu gezeichnet). `getData()` liefert die *angezeigten* Daten, alle Punkte gibt `getOriginalDataset()`.
+- Wechselnde Anzeigetexte (Fadenkreuz-Werte) über `components/readout.ReadoutLabel`: Ein normales `QLabel` meldet seine Textbreite als Mindestbreite und zieht beim Hovern das ganze Fenster mit.
 - **PySide6 6.12.0** bricht die GUI-Tests mit einem Speicherfehler ab („deallocating None“). `pyproject.toml` begrenzt deshalb auf `<6.12`. Vor dem Anheben die GUI-Tests mit der neuen Version mehrfach laufen lassen.
 - Änderungen an `.github/workflows/` brauchen beim Push den OAuth-Scope `workflow` (`gh auth refresh -s workflow`).
 

@@ -14,14 +14,41 @@ from pathlib import Path
 from typing import Sequence
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import QDockWidget, QFileDialog, QMainWindow, QMessageBox, QStatusBar, QWidget
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtWidgets import (
+    QDockWidget,
+    QFileDialog,
+    QInputDialog,
+    QMainWindow,
+    QMessageBox,
+    QStatusBar,
+    QWidget,
+)
 
 from datualizer_core.campaign import Campaign, CampaignSession
 from datualizer_gui.components.campaign_canvas import CampaignPlotCanvas
 from datualizer_gui.components.source_dialog import load_source_interactive
 from datualizer_gui.components.sources_panel import SourcesPanel
-from datualizer_gui.settings import COVERAGE_INFO, get_bool, set_bool
+from datualizer_gui.components.time_axis import TimeAxisMode
+from datualizer_gui.settings import (
+    COVERAGE_INFO,
+    MIN_SUBPLOT_HEIGHT,
+    TIME_AXIS,
+    WHEEL_TIME_ONLY,
+    Y_FIT_VISIBLE,
+    get_bool,
+    get_int,
+    get_str,
+    set_bool,
+    set_value,
+)
+
+TIME_AXIS_NAMES = {
+    TimeAxisMode.AUTO: "&Automatic",
+    TimeAxisMode.CLOCK: "&Clock Time",
+    TimeAxisMode.DATETIME: "&Date + Time",
+    TimeAxisMode.RELATIVE: "&Relative (t \u2212 t0)",
+}
 
 SOURCE_FILTER = (
     "Measurement Files (*.csv *.tsv *.txt *.dat *.xls *.xlsx *.xlsm *.db *.sqlite *.sqlite3);;All Files (*)"
@@ -68,6 +95,37 @@ class CampaignWindow(QMainWindow):
         self.action_channel_display.setToolTip("Display name, plot style and y scale of the selected channel")
         self.action_channel_display.triggered.connect(self._on_channel_display)
         settings_menu.addAction(self.action_channel_display)
+        settings_menu.addSeparator()
+
+        time_menu = settings_menu.addMenu("&Time Axis")
+        group = QActionGroup(time_menu)
+        self.time_axis_actions: dict[TimeAxisMode, QAction] = {}
+        for mode, text in TIME_AXIS_NAMES.items():
+            action = QAction(text, time_menu)
+            action.setCheckable(True)
+            action.setData(mode.value)  # Qt returns str enums as plain str
+            group.addAction(action)
+            time_menu.addAction(action)
+            self.time_axis_actions[mode] = action
+        group.triggered.connect(lambda a: self.set_time_axis_mode(TimeAxisMode(a.data())))
+        time_menu.addSeparator()
+        self.action_t0_here = time_menu.addAction("Set t0 at &Crosshair", self._on_t0_at_crosshair)
+        self.action_t0_here.setToolTip("Reference of the relative axis; saved with the campaign")
+        time_menu.addAction("&Reset t0 (Start of Data)", lambda: self.set_time_reference(None))
+        settings_menu.addAction("Campaign Time &Zone...", self._on_time_zone)
+        settings_menu.addSeparator()
+
+        self.action_wheel_time = QAction("Mouse &Wheel Zooms Time Only", self)
+        self.action_wheel_time.setToolTip("Over a y axis the wheel still zooms that axis")
+        self.action_y_fit = QAction("&Fit Y to Visible Time Span", self)
+        self.action_y_fit.setToolTip("Auto-scaled subplots fit the values in view (not fixed or robust ranges)")
+        for action, key in ((self.action_wheel_time, WHEEL_TIME_ONLY), (self.action_y_fit, Y_FIT_VISIBLE)):
+            action.setCheckable(True)
+            action.setChecked(get_bool(key))
+            action.toggled.connect(lambda on, key=key: self._on_view_option(key, on))
+            settings_menu.addAction(action)
+        settings_menu.addAction("Minimum Subplot &Height...", self._on_min_height)
+        settings_menu.addSeparator()
         tools_menu = settings_menu.addMenu("&Tools")
         self.action_coverage = QAction("&Coverage Info", self)
         self.action_coverage.setCheckable(True)
@@ -77,6 +135,7 @@ class CampaignWindow(QMainWindow):
         tools_menu.addAction(self.action_coverage)
         self.status_bar = QStatusBar(self)
         self.setStatusBar(self.status_bar)
+        self._apply_view_settings()
         self._refresh_all()
 
     @property
@@ -107,6 +166,7 @@ class CampaignWindow(QMainWindow):
     def open_campaign(self, path: str | Path) -> None:
         self._session = CampaignSession.open(path)
         self._path = Path(path)
+        self.canvas.set_time_axis(self.canvas.time_axis_mode, self._session.time_reference_s)
         self._refresh_all()
         self.status_bar.showMessage(f"Opened {self._path.name}")
 
@@ -126,6 +186,82 @@ class CampaignWindow(QMainWindow):
             return
         set_bool(COVERAGE_INFO, on)
         self.refresh_plot()
+
+    # ----------------------------------------------------------- time and view
+    def set_time_axis_mode(self, mode: TimeAxisMode) -> None:
+        """Clock time, date + time or relative to t0; remembered as a personal preference."""
+        mode = TimeAxisMode(mode)
+        set_value(TIME_AXIS, mode.value)
+        self.time_axis_actions[mode].setChecked(True)
+        self.canvas.set_time_axis(mode, self._session.time_reference_s)
+
+    def set_time_reference(self, epoch_s: float | None) -> None:
+        """t0 of the relative axis (None = start of the data shown); saved with the campaign."""
+        self._session.set_time_reference(epoch_s)
+        if self.canvas.time_axis_mode is not TimeAxisMode.RELATIVE:
+            self.set_time_axis_mode(TimeAxisMode.RELATIVE)
+        else:
+            self.canvas.set_time_axis(TimeAxisMode.RELATIVE, self._session.time_reference_s)
+        self.status_bar.showMessage(
+            "t0 = start of the data shown" if epoch_s is None else f"t0 = {self.canvas.format_time(epoch_s)}"
+        )
+
+    def set_timezone(self, zone: str) -> None:
+        """Master zone of the campaign (raises TimeConfigError for an unknown zone)."""
+        self._session.set_timezone(zone)
+        self._refresh_all()
+        self.status_bar.showMessage(f"Campaign time zone: {zone}")
+
+    def _apply_view_settings(self) -> None:
+        self.canvas.set_view_options(get_bool(WHEEL_TIME_ONLY), get_bool(Y_FIT_VISIBLE))
+        self.canvas.set_min_subplot_height(get_int(MIN_SUBPLOT_HEIGHT))
+        try:
+            mode = TimeAxisMode(get_str(TIME_AXIS))
+        except ValueError:  # edited by hand
+            mode = TimeAxisMode.AUTO
+        self.time_axis_actions[mode].setChecked(True)
+        self.canvas.set_time_axis(mode, self._session.time_reference_s)
+
+    def _on_view_option(self, key: str, on: bool) -> None:
+        set_bool(key, on)
+        self.canvas.set_view_options(self.action_wheel_time.isChecked(), self.action_y_fit.isChecked())
+
+    def _on_t0_at_crosshair(self) -> None:
+        x = self.canvas.crosshair_x
+        if x is None:
+            QMessageBox.information(self, "Set t0", "Move the mouse over the plot first.")
+            return
+        self.set_time_reference(x)
+
+    def _on_time_zone(self) -> None:
+        from zoneinfo import available_timezones
+
+        try:
+            zones = sorted(available_timezones())
+        except Exception:  # no zone database
+            zones = []
+        current = self._session.campaign.timezone
+        if current not in zones:
+            zones.insert(0, current)
+        zone, ok = QInputDialog.getItem(
+            self, "Campaign Time Zone",
+            "Master zone of the axis and readout.\nSources without their own zone are read in it.",
+            zones, zones.index(current), True,
+        )
+        if ok and zone and zone != current:
+            try:
+                self.set_timezone(zone)
+            except Exception as exc:
+                QMessageBox.critical(self, "Campaign Time Zone", str(exc))
+
+    def _on_min_height(self) -> None:
+        px, ok = QInputDialog.getInt(
+            self, "Minimum Subplot Height", "Height in pixels (0 = fit all subplots, no scrolling):",
+            get_int(MIN_SUBPLOT_HEIGHT), 0, 2000, 10,
+        )
+        if ok:
+            set_value(MIN_SUBPLOT_HEIGHT, px)
+            self.canvas.set_min_subplot_height(px)
 
     def refresh_plot(self) -> None:
         tracks = []

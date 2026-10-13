@@ -67,6 +67,7 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 datualizer_gui/                   # PySide6-App, Einstieg: python -m datualizer_gui.app
                                   # campaign_window.py: Kampagnenansicht (Quellen-Dock, Uhren-Editor, Plot auf Master-Zeit)
                                   # components/coverage_strip.py: Abdeckungsspur (Lücken schraffiert, in Pixeln gezeichnet)
+                                  # components/time_axis.py: Zeitachsen (Uhrzeit, Datum + Uhrzeit, t − t0), Mausrad nur auf der Zeit
                                   # components/curves.py: schnelle Kurven (Peak-Downsampling, Clip-to-View, Cache) für alle Plots
 tests/fixtures/runs_export/       # 13 echte Pipeline-Exporte (unveränderlich!)
 tests/fixtures/sa_12_10/          # Ausschnitte einer echten Mehrgeräte-Messkampagne (unveränderlich!)
@@ -145,10 +146,11 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
   - Nachtrag: Blatt-/Tabellenwahl und Datum für Uhrzeiten beim Öffnen (`ReaderError.choice`/`options`, `with_choices`, `needs_clock_date`, `date_in_text`, Dialog `datualizer_gui/components/source_dialog.py`)
   - Schritt 4, Abdeckung: `session.coverage()` (`SourceCoverage`, `CoverageGap` mit `time_gap`/`no_values`), Abdeckungsspur im Kampagnenfenster (Menü *Settings → Tools → Coverage Info*, gespeichert über `datualizer_gui/settings.py`)
   - Einstellungen des Kampagnenfensters, Teil 1: Darstellung pro Kanal (`ChannelDisplay`: Alias, `PlotStyle`, `YScale` auto/robust/fest) in `campaign.json`, Standardstil aus `SourceProfile.plot_style`, Dialog `components/channel_display_dialog.py`, Randmarker für Werte ausserhalb des Bereichs
+  - Einstellungen des Kampagnenfensters, Teil 2: Zoom nur auf der Zeitachse und Y passend zum sichtbaren Ausschnitt (`components/time_axis.TimeViewBox`), Zeitachse als Uhrzeit, Datum + Uhrzeit oder t − t0 (`Campaign.time_reference`), Zone der Kampagne (`session.set_timezone`), Mindesthöhe der Subplots mit Scrollen
 
 **Nächste offene Punkte:**
 
-1. **Einstellungen des Kampagnenfensters, Punkte 4–8** (Zoom, Gruppierung und Farben, Infozeile, Zeitachse, Export; siehe Masterplan unter Schritt 4).
+1. **Einstellungen des Kampagnenfensters, Punkte 5, 6 und 8** (Gruppierung und Farben, Infozeile, Export; siehe Masterplan unter Schritt 4).
 2. **Etappe 2b, Schritte 5–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md)): Journal-Intervalle, Fenster-Statistik, Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
 3. **Wert und Einheit in einer Zelle (P6)** (`Konzentration = "20 °C"`) und widersprüchliche Metadaten anzeigen (P8).
 4. Danach: Block-Segmentation und Ragged-Healer (ursprünglicher Etappe-2-Plan), sobald Gerätedaten mit Kopfblöcken vorliegen.

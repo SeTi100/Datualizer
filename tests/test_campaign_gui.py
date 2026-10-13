@@ -264,3 +264,21 @@ def test_hatched_gap_is_painted(qapp: QApplication, coverage_window: CampaignWin
     assert len(covered) == 1 and covered != {background}  # solid fill in the source colour
     assert background in hatched and len(hatched) > 1  # stripes alternate with the background
     window.close()
+
+
+def test_hidden_coverage_strip_is_freed(qapp: QApplication, coverage_window: CampaignWindow) -> None:
+    """Regression (segfault on Linux CI): nothing may keep the deleted strip's ViewBox alive.
+
+    Kept subplots were still x-linked to it; a reference cycle through the right-click menu
+    kept its Python wrapper alive after Qt deleted it, so the next resize called into a
+    deleted ViewBox. Checked without gc.collect(): the strip must go away with its last reference.
+    """
+    import weakref
+
+    vb = weakref.ref(coverage_window.canvas.coverage_plot.getViewBox())
+    coverage_window.set_coverage_visible(False)
+    qapp.processEvents()
+    assert vb() is None
+    first, *others = coverage_window.canvas.plot_items.values()
+    assert first.getViewBox().linkedView(0) is None  # the first subplot is the x master again
+    assert all(p.getViewBox().linkedView(0) is first.getViewBox() for p in others)

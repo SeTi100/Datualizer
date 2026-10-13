@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Callable
+import weakref
 
 import pyqtgraph as pg
 from PySide6.QtCore import QPointF, QRectF, Qt
@@ -76,12 +77,24 @@ class StepBand:
             plot.addItem(text, ignoreBounds=True)
             self.items.append(text)
             vb = plot.getViewBox()
+            text_ref, vb_ref = weakref.ref(text), weakref.ref(vb)  # no cycle through the signal
 
             def place(*_args) -> None:  # keep the label at the top edge while y changes
-                text.setPos(text.pos().x(), vb.viewRange()[1][1])
+                t, v = text_ref(), vb_ref()
+                if t is not None and v is not None:
+                    t.setPos(t.pos().x(), v.viewRange()[1][1])
 
             vb.sigYRangeChanged.connect(place)
-            self._unpin = lambda: vb.sigYRangeChanged.disconnect(place)
+
+            def unpin() -> None:
+                v = vb_ref()
+                if v is not None:
+                    try:
+                        v.sigYRangeChanged.disconnect(place)
+                    except (RuntimeError, TypeError):  # view already deleted or disconnected
+                        pass
+
+            self._unpin = unpin
             place()
 
     _unpin: Callable[[], None] | None = None

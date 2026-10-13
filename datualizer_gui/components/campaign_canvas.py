@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Sequence
+import weakref
 
 import numpy as np
 import polars as pl
@@ -150,6 +151,8 @@ class CampaignPlotCanvas(QWidget):
         if (offset, zone) != (self._utc_offset, self._zone):
             old_tracks = {}  # date axis labels depend on the offset: build all subplots anew
         self._zone, self._utc_offset = zone, offset
+        for p in old_plots.values():  # unlink first: the old coverage strip is deleted below
+            p.setXLink(None)
         self.graphics_layout.clear()  # detaches the subplots, kept ones are added back below
         self._plot_items, self._curves, self._crosshair_lines, self._track_of = {}, {}, {}, {}
         self.coverage_plot = self.coverage_item = self._coverage_line = None
@@ -280,11 +283,17 @@ class CampaignPlotCanvas(QWidget):
             menu.insertAction(before, action)
         if before is not None:
             menu.insertSeparator(before)
-        original = vb.raiseContextMenu
+        # Weak references only: a closure holding the view box would keep its Python wrapper alive
+        # after Qt deleted the subplot, and linked views would then call into a deleted ViewBox
+        # (RuntimeError on Windows, segfault on Linux CI).
+        canvas_ref, vb_ref = weakref.ref(self), weakref.ref(vb)
 
         def raise_menu(ev) -> None:
-            self._prepare_step_menu(vb.mapSceneToView(ev.scenePos()).x())
-            original(ev)
+            canvas, view = canvas_ref(), vb_ref()
+            if canvas is None or view is None:
+                return
+            canvas._prepare_step_menu(view.mapSceneToView(ev.scenePos()).x())
+            type(view).raiseContextMenu(view, ev)
 
         vb.raiseContextMenu = raise_menu
 

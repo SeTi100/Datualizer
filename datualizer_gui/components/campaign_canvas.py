@@ -17,7 +17,9 @@ from datualizer_core.campaign import IntervalSet, ResolvedInterval, SourceCovera
 from datualizer_gui.components import curves
 from datualizer_gui.components.curves import (
     FastCurve,
+    OutOfRangeMarkers,
     add_curve,
+    add_edge_markers,
     curve_pen,
     ensure_pixmap_cache,
     light_grid,
@@ -69,6 +71,8 @@ class CampaignPlotCanvas(QWidget):
         self._plot_items: dict[str, pg.PlotItem] = {}
         self._curves: dict[str, FastCurve] = {}
         self._crosshair_lines: dict[str, pg.InfiniteLine] = {}
+        self._edge_markers: dict[str, OutOfRangeMarkers] = {}  # tracks with a fixed or robust y range
+        self._y_limits: dict[str, tuple[float, float]] = {}
         self._track_of: dict[str, Track] = {}  # track each kept subplot was drawn from
         self._coverage: list[SourceCoverage] = []
         self.coverage_plot: pg.PlotItem | None = None
@@ -131,6 +135,10 @@ class CampaignPlotCanvas(QWidget):
         return self._curves
 
     @property
+    def edge_markers(self) -> dict[str, OutOfRangeMarkers]:
+        return self._edge_markers
+
+    @property
     def coverage(self) -> list[SourceCoverage]:
         return list(self._coverage)
 
@@ -149,6 +157,7 @@ class CampaignPlotCanvas(QWidget):
         starts += [c.span[0] for c in self._coverage if c.span is not None]
         offset = utc_offset_s(min(starts), zone) if starts else 0
         old_plots, old_curves, old_lines, old_tracks = self._plot_items, self._curves, self._crosshair_lines, self._track_of
+        old_markers = self._edge_markers
         if (offset, zone) != (self._utc_offset, self._zone):
             old_tracks = {}  # date axis labels depend on the offset: build all subplots anew
         self._zone, self._utc_offset = zone, offset
@@ -156,6 +165,7 @@ class CampaignPlotCanvas(QWidget):
             p.setXLink(None)
         self.graphics_layout.clear()  # detaches the subplots, kept ones are added back below
         self._plot_items, self._curves, self._crosshair_lines, self._track_of = {}, {}, {}, {}
+        self._edge_markers, self._y_limits = {}, {}
         self.coverage_plot = self.coverage_item = self._coverage_line = None
 
         first: pg.PlotItem | None = None
@@ -175,12 +185,21 @@ class CampaignPlotCanvas(QWidget):
             key = f"{tr.source_id}/{tr.channel}"
             pen = curve_pen(CHANNEL_COLORS[i % len(CHANNEL_COLORS)])
             row = i + 1  # row 0 belongs to the coverage strip
+            limits = tr.y_scale.limits(tr.y)
+            if limits is not None:
+                self._y_limits[key] = limits
             if old_tracks.get(key) is tr:
                 p, curve, line = old_plots[key], old_curves[key], old_lines[key]
                 self.graphics_layout.addItem(p, row=row, col=0)
-                curve.setPen(pen)
+                curve.set_pen(pen)
+                if key in old_markers:
+                    old_markers[key].setPen(pen.color())
+                    old_markers[key].setBrush(pen.color())
+                    self._edge_markers[key] = old_markers[key]
             else:
                 p, curve, line = self._new_plot(row, tr, pen)
+                if limits is not None:
+                    self._edge_markers[key] = add_edge_markers(p, tr.x, tr.y, pen.color())
             p.setXLink(first)  # None for the first subplot
             p.getAxis("bottom").setStyle(showValues=i == last)
             if first is None:
@@ -194,6 +213,7 @@ class CampaignPlotCanvas(QWidget):
             p.getAxis("left").setWidth(width)
         if first is not None:
             self._apply_range()
+        self._apply_y_ranges()
         for p in self._all_plots():
             self._install_step_menu(p)
         self._draw_bands()
@@ -345,9 +365,9 @@ class CampaignPlotCanvas(QWidget):
         axis = pg.DateAxisItem(orientation="bottom", utcOffset=-self._utc_offset)
         p = self.graphics_layout.addPlot(row=row, col=0, axisItems={"bottom": axis})
         light_grid(p, alpha=0.25)
-        p.setLabel("left", tr.channel, units=tr.unit or None)
+        p.setLabel("left", tr.name, units=tr.unit or None)
         p.setTitle(tr.label, size="9pt", color="#aaaaaa")
-        curve = add_curve(p, tr.x, tr.y, tr.gap_rows, pen)
+        curve = add_curve(p, tr.x, tr.y, tr.gap_rows, pen, tr.style)
         line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#888888", style=pg.QtCore.Qt.DashLine))
         p.addItem(line, ignoreBounds=True)
         p.getViewBox().sigRangeChangedManually.connect(self._on_manual_range)
@@ -369,8 +389,25 @@ class CampaignPlotCanvas(QWidget):
     def reset_zoom(self) -> None:
         self._user_range = None
         self._apply_range()
-        for p in self._plot_items.values():
-            p.enableAutoRange(axis="y")
+        self._apply_y_ranges(force=True)
+
+    def y_limits(self, key: str) -> tuple[float, float] | None:
+        """Fixed or robust y range of a subplot (None = auto)."""
+        return self._y_limits.get(key)
+
+    def _apply_y_ranges(self, force: bool = False) -> None:
+        """Set fixed or robust y ranges (values outside are marked at the edge); auto for the rest.
+
+        A y range the user zoomed to is kept across rebuilds unless `force`.
+        """
+        for key, p in self._plot_items.items():
+            limits = self._y_limits.get(key)
+            if limits is None:
+                if force:
+                    p.enableAutoRange(axis="y")
+            elif force or p.getViewBox().autoRangeEnabled()[1]:
+                p.enableAutoRange(axis="y", enable=False)
+                p.setYRange(*limits, padding=0.02)
 
     def _apply_range(self) -> None:
         first = self._master_plot()

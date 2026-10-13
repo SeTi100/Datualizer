@@ -32,5 +32,6 @@
       "Temperatur",
       "V_MFC"
     ]
-  }
+  },
+  "plot_style": "step"
 }

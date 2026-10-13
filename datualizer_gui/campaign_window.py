@@ -4,6 +4,10 @@ Optional (Settings → Tools → Coverage Info): a coverage strip on top shows w
 values; gaps are hatched (step 4). Measurement steps (step 5) come from a step table (lab journal)
 or a right click → Marker ○ ○, are listed in the Steps dock and drawn as bands
 (Settings → Tools → Interval Bands, off by default).
+
+Settings come in two levels: how a channel is drawn (style, y scale, alias) belongs to the
+campaign and is saved in campaign.json; personal preferences are kept in QSettings
+(`datualizer_gui.settings`). Both are display only.
 """
 
 from __future__ import annotations
@@ -60,6 +64,7 @@ class CampaignWindow(QMainWindow):
 
         self.sources_panel.selection_changed.connect(self.refresh_plot)
         self.sources_panel.clock_changed.connect(self._on_clock_changed)
+        self.sources_panel.display_changed.connect(self._on_display_changed)
         self.sources_panel.add_requested.connect(self._on_add)
         self.sources_panel.remove_requested.connect(self.remove_source)
         self.intervals_panel.changed.connect(self.refresh_steps)
@@ -81,6 +86,11 @@ class CampaignWindow(QMainWindow):
             action.triggered.connect(slot)
             menu.addAction(action)
         settings_menu = self.menuBar().addMenu("S&ettings")
+        self.action_channel_display = QAction("Channel &Display...", self)
+        self.action_channel_display.setShortcut(QKeySequence("Ctrl+D"))
+        self.action_channel_display.setToolTip("Display name, plot style and y scale of the selected channel")
+        self.action_channel_display.triggered.connect(self._on_channel_display)
+        settings_menu.addAction(self.action_channel_display)
         tools_menu = settings_menu.addMenu("&Tools")
         self.action_coverage = QAction("&Coverage Info", self)
         self.action_coverage.setCheckable(True)
@@ -226,6 +236,17 @@ class CampaignWindow(QMainWindow):
         self.sources_panel.select_source(source_id)
         self.refresh_plot()
 
+    def _on_display_changed(self, source_id: str, channel: str) -> None:
+        self.sources_panel.set_session(self._session)  # aliases in the tree
+        self.refresh_plot()
+        self.status_bar.showMessage(f"Display of {channel} changed (saved with the campaign)")
+
+    def _on_channel_display(self) -> None:
+        current = self.sources_panel.current_channel()
+        if current is None:
+            QMessageBox.information(self, "Channel Display", "Select a channel in the source list first.")
+            return
+        self.sources_panel.edit_display(*current)
     def _on_rename_step(self, interval_id: str) -> None:
         current = next((iv.label for iv in self._session.campaign.intervals if iv.id == interval_id), "")
         label, ok = QInputDialog.getText(self, "Rename Step", "Name:", text=current)

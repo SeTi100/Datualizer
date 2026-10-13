@@ -13,3 +13,12 @@ class ColumnKind(str, Enum):
     PARAMETER = "parameter"      # Float64 setpoint/setting, constant per run, not plotted
     IDENTIFIER = "identifier"    # Int64 key such as run_id, not plotted
     CATEGORICAL = "categorical"  # String metadata such as phase_status, not plotted
+
+
+class PlotStyle(str, Enum):
+    """How a channel is drawn (display only). Shared by source profiles and campaign display settings."""
+
+    LINE = "line"                # samples joined by straight lines
+    POINTS = "points"            # samples only, no line
+    STEP = "step"                # a value holds until the next sample (measurement steps)
+    LINE_POINTS = "line_points"  # line with a marker on every sample

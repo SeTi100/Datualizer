@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from datualizer_core.ingestion.config import IngestionConfig
 from datualizer_core.ingestion.readers.excel import ExcelOptions, _detect_header, _rows_xls, _rows_xlsx
 from datualizer_core.ingestion.readers.sqlite import SqliteOptions
+from datualizer_core.schema import PlotStyle
 from datualizer_core.ingestion.steps import StepColumns
 
 PROFILE_DIR = Path(__file__).resolve().parents[1] / "profiles"
@@ -61,6 +62,10 @@ class SourceProfile(BaseModel):
     )
     intervals: StepColumns | None = Field(
         None, description="Suggested column roles if the source lists measurement steps (lab journal)."
+    )
+    plot_style: PlotStyle = Field(
+        PlotStyle.LINE,
+        description="Default plot style of its channels in a campaign (display only), e.g. 'step' for measurement steps.",
     )
 
 

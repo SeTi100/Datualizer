@@ -178,7 +178,28 @@ def test_readout_values_have_a_fixed_width(window: CampaignWindow) -> None:
 
 
 # ------------------------------------------------------------ coverage strip (step 4)
-def test_coverage_strip_has_one_lane_per_source(window: CampaignWindow) -> None:
+def test_coverage_is_off_by_default_and_toggled_in_settings(qapp: QApplication, window: CampaignWindow) -> None:
+    assert not window.coverage_visible and window.canvas.coverage_plot is None
+    menus = {a.text(): a.menu() for a in window.menuBar().actions()}
+    tools = {a.text(): a.menu() for a in menus["S&ettings"].actions()}["&Tools"]
+    assert window.action_coverage in tools.actions()
+    window.action_coverage.trigger()
+    qapp.processEvents()
+    assert window.canvas.coverage_plot is not None
+    assert CampaignWindow().coverage_visible  # remembered for the next window
+    window.action_coverage.trigger()
+    assert window.canvas.coverage_plot is None and not CampaignWindow().coverage_visible
+
+
+@pytest.fixture()
+def coverage_window(qapp: QApplication, window: CampaignWindow) -> CampaignWindow:
+    window.set_coverage_visible(True)
+    qapp.processEvents()
+    return window
+
+
+def test_coverage_strip_has_one_lane_per_source(coverage_window: CampaignWindow) -> None:
+    window = coverage_window
     canvas = window.canvas
     assert canvas.coverage_plot is not None
     assert [c.source_id for c in canvas.coverage] == [FID_DAT.stem, PICO.stem]
@@ -191,7 +212,8 @@ def test_coverage_strip_has_one_lane_per_source(window: CampaignWindow) -> None:
     assert len(widths) == 1
 
 
-def test_coverage_shown_without_checked_channels(qapp: QApplication, window: CampaignWindow) -> None:
+def test_coverage_shown_without_checked_channels(qapp: QApplication, coverage_window: CampaignWindow) -> None:
+    window = coverage_window
     for sid, ch in window.sources_panel.checked_channels():
         window.sources_panel.set_checked(sid, ch, False)
     qapp.processEvents()
@@ -202,14 +224,16 @@ def test_coverage_shown_without_checked_channels(qapp: QApplication, window: Cam
     assert (lo, hi) == (window.session.span(FID_DAT.stem)[0], window.session.span(PICO.stem)[1])
 
 
-def test_readout_names_the_gap(window: CampaignWindow) -> None:
+def test_readout_names_the_gap(coverage_window: CampaignWindow) -> None:
+    window = coverage_window
     gap = window.canvas.coverage[0].gaps[0]
     text = window.canvas.update_crosshair((gap.start + gap.end) / 2)
     assert text.endswith(f"{FID_DAT.name}: gap 11 s (time gap)")
     assert "gap" not in window.canvas.update_crosshair(gap.start - 5)
 
 
-def test_hatched_gap_is_painted(qapp: QApplication, window: CampaignWindow) -> None:
+def test_hatched_gap_is_painted(qapp: QApplication, coverage_window: CampaignWindow) -> None:
+    window = coverage_window
     """Zoomed onto the FID gap, the lane shows filled bars left and right and a hatch in between."""
     window.resize(1200, 700)
     window.show()

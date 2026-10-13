@@ -1,6 +1,7 @@
 """Campaign window: all sources of a measurement campaign on one master time axis (Etappe 2b).
 
-A coverage strip on top shows when each source has values; gaps are hatched (step 4).
+Optional (Settings → Tools → Coverage Info): a coverage strip on top shows when each source has
+values; gaps are hatched (step 4).
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from datualizer_core.campaign import Campaign, CampaignSession
 from datualizer_gui.components.campaign_canvas import CampaignPlotCanvas
 from datualizer_gui.components.source_dialog import load_source_interactive
 from datualizer_gui.components.sources_panel import SourcesPanel
+from datualizer_gui.settings import COVERAGE_INFO, get_bool, set_bool
 
 SOURCE_FILTER = (
     "Measurement Files (*.csv *.tsv *.txt *.dat *.xls *.xlsx *.xlsm *.db *.sqlite *.sqlite3);;All Files (*)"
@@ -55,6 +57,14 @@ class CampaignWindow(QMainWindow):
             action.setShortcut(QKeySequence(key))
             action.triggered.connect(slot)
             menu.addAction(action)
+        settings_menu = self.menuBar().addMenu("S&ettings")
+        tools_menu = settings_menu.addMenu("&Tools")
+        self.action_coverage = QAction("&Coverage Info", self)
+        self.action_coverage.setCheckable(True)
+        self.action_coverage.setChecked(get_bool(COVERAGE_INFO))
+        self.action_coverage.setToolTip("Strip above the plots: one lane per source, gaps hatched")
+        self.action_coverage.toggled.connect(self.set_coverage_visible)
+        tools_menu.addAction(self.action_coverage)
         self.status_bar = QStatusBar(self)
         self.setStatusBar(self.status_bar)
         self._refresh_all()
@@ -95,12 +105,27 @@ class CampaignWindow(QMainWindow):
         self._path = Path(path)
         self.status_bar.showMessage(f"Saved {self._path.name}")
 
+    @property
+    def coverage_visible(self) -> bool:
+        return self.action_coverage.isChecked()
+
+    def set_coverage_visible(self, on: bool) -> None:
+        """Show or hide the coverage strip; the choice is remembered (Settings → Tools)."""
+        if self.action_coverage.isChecked() != on:
+            self.action_coverage.setChecked(on)  # emits toggled, which calls this again
+            return
+        set_bool(COVERAGE_INFO, on)
+        self.refresh_plot()
+
     def refresh_plot(self) -> None:
         tracks = []
         for sid, ch in self.sources_panel.checked_channels():
             if self._session.master_time(sid) is not None:
                 tracks.append(self._session.track(sid, ch))
-        coverage = [self._session.coverage(src.id) for src in self._session.campaign.sources]
+        coverage = (
+            [self._session.coverage(src.id) for src in self._session.campaign.sources]
+            if self.coverage_visible else []
+        )
         self.canvas.set_tracks(tracks, self._session.campaign.timezone, coverage)
 
     # ----------------------------------------------------------------- internals

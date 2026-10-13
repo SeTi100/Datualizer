@@ -131,7 +131,7 @@ flowchart TD
 1. ✅ **Absolute Zeit:** `TimeConfig` (Format, Zeitzone, Ursprung, Datumsformate), `time_origin`, `time_abs`, DST-sichere Sekunden, replaybar.
 2. ✅ **Reader + Profile:** `load_source`; Excel (`.xlsx`, `.xls` inkl. Metadaten-Blätter), SQLite (ganze `.db` oder Abfrage, fehlende IDs), `.dat`; sechs Profile als JSON; Realdaten-Ausschnitte in `tests/fixtures/sa_12_10/`, Probleme in [`DATENKATALOG_SA_KAMPAGNE.md`](DATENKATALOG_SA_KAMPAGNE.md). Offen: Zeitzone pro Spalte.
 3. ✅ **Kampagne + Uhrenmodelle:** `Campaign` (`campaign.json`), `ClockModel` (Versatz, Drift, Anker), Master-Zeit; Kampagnenfenster mit eigenem x-Array pro Spur und Datumsachse, Quellen-Dock mit Uhren-Editor. Nachtrag: Mehrblatt-Excel und SQLite mit mehreren Tabellen fragen beim Öffnen nach Blatt bzw. Tabelle und dem Datum für Uhrzeiten (`ReaderError.choice/options`, `with_choices`); die Wahl replayt über `campaign.json`.
-4. ✅ **Abdeckungsansicht:** `session.coverage()` (Spanne, Abschnitte mit Werten, Lücken als `time_gap` oder `no_values`), Abdeckungsspur über den Subplots im Kampagnenfenster (eine Zeile pro Quelle, Lücken schraffiert, x-verlinkt, Lücke in der Infozeile).
+4. ✅ **Abdeckungsansicht:** `session.coverage()` (Spanne, Abschnitte mit Werten, Lücken als `time_gap` oder `no_values`), Abdeckungsspur über den Subplots im Kampagnenfenster, einschaltbar unter *Settings → Tools → Coverage Info* (eine Zeile pro Quelle, Lücken schraffiert, x-verlinkt, Lücke in der Infozeile).
 5. ⏳ **Intervalle** aus dem Labjournal, Bänder im Plot, Teilfenster-Regeln.
 6. ⏳ **Fenster-Statistik + Fenster-Inspektor** (Steigung mit Standardfehler, 2-Punkt, Drift, Integral) und zweiseitiges `spike`-Flag.
 7. ⏳ **Abgleich-Werkzeuge:** Kreuzkorrelation, Ankerereignisse, Dialog.

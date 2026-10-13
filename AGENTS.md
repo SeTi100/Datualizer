@@ -98,6 +98,7 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
 - Kurven nie mit `p.plot(...)` bauen, sondern über `curves.add_curve` (`FastCurve`): eigenes Peak-Downsampling, das nie über eine Lücke hinweg verbindet (pyqtgraphs eigenes `setDownsampling` zog Linien über Logger-Aussetzer), Clip-to-View, 1-px-Stift, Pixmap-Cache. Gitter über `curves.light_grid`, Cache-Grösse über `curves.ensure_pixmap_cache` (Qt-Standard 10 MB reicht nur für wenige Subplots, danach wird jedes Bild komplett neu gezeichnet). `getData()` liefert die *angezeigten* Daten, alle Punkte gibt `getOriginalDataset()`.
 - Mit `setXLink` verlinkte Plots gleicht pyqtgraph in Bildschirm-Pixeln ab. Unterschiedlich breite linke Achsen ergeben deshalb unterschiedliche x-Bereiche. Im Kampagnenfenster bekommen alle linken Achsen dieselbe feste Breite (`coverage_strip.left_axis_width`).
 - Wechselnde Anzeigetexte (Fadenkreuz-Werte) über `components/readout.ReadoutLabel`: Ein normales `QLabel` meldet seine Textbreite als Mindestbreite und zieht beim Hovern das ganze Fenster mit.
+- Nutzer-Einstellungen der GUI (Menü *Settings*) liegen in `datualizer_gui/settings.py` (`QSettings`, INI pro Nutzer). Tests leiten die Datei über `tests/conftest.py` in ein temporäres Verzeichnis um, damit sie nie die echten Einstellungen lesen oder ändern.
 - **PySide6 6.12.0** bricht die GUI-Tests mit einem Speicherfehler ab („deallocating None“). `pyproject.toml` begrenzt deshalb auf `<6.12`. Vor dem Anheben die GUI-Tests mit der neuen Version mehrfach laufen lassen.
 - Änderungen an `.github/workflows/` brauchen beim Push den OAuth-Scope `workflow` (`gh auth refresh -s workflow`).
 
@@ -140,7 +141,7 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
   - Schritt 2, Reader und Profile (P21–P28, siehe [Datenkatalog SA](docs/DATENKATALOG_SA_KAMPAGNE.md)): `load_source`, Excel- und SQLite-Reader, `source_meta`, `SourceProfile` mit sechs mitgelieferten Profilen, `TimeConfig.clock_date`, Tabellenfehler als Sentinels, GUI öffnet alle Formate
   - Schritt 3, Kampagne und Uhren: `Campaign`/`CampaignSession` (campaign.json mit relativen Pfaden, Spec, Hash), `ClockModel` (Versatz, Drift, Anker), Kampagnenfenster mit eigenem x-Array pro Spur und Datumsachse
   - Nachtrag: Blatt-/Tabellenwahl und Datum für Uhrzeiten beim Öffnen (`ReaderError.choice`/`options`, `with_choices`, `needs_clock_date`, `date_in_text`, Dialog `datualizer_gui/components/source_dialog.py`)
-  - Schritt 4, Abdeckung: `session.coverage()` (`SourceCoverage`, `CoverageGap` mit `time_gap`/`no_values`), Abdeckungsspur im Kampagnenfenster
+  - Schritt 4, Abdeckung: `session.coverage()` (`SourceCoverage`, `CoverageGap` mit `time_gap`/`no_values`), Abdeckungsspur im Kampagnenfenster (Menü *Settings → Tools → Coverage Info*, gespeichert über `datualizer_gui/settings.py`)
 
 **Nächste offene Punkte:**
 

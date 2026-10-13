@@ -99,6 +99,7 @@ class Track:
     name: str = ""  # display name: alias, else the channel name
     style: PlotStyle = PlotStyle.LINE
     y_scale: YScale = field(default_factory=YScale)
+    color: str | None = None  # manual colour '#rrggbb'
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -282,7 +283,7 @@ class CampaignSession:
         name = display.alias or channel
         tr = Track(
             source_id, channel, f"{src.label or src.id}: {name}", ds.units.get(channel, ""), x, y, gap,
-            name=name, style=src.plot_style(channel), y_scale=display.y_scale,
+            name=name, style=src.plot_style(channel), y_scale=display.y_scale, color=display.color,
         )
         self._track_cache[(source_id, channel)] = tr
         return tr

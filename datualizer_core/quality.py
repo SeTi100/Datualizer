@@ -1,4 +1,4 @@
-"""Quality flags (Datenkatalog P12–P17): mark suspicious samples, never change or drop them.
+"""Quality flags (Datenkatalog P12–P17, P31): mark suspicious samples, never change or drop them.
 
 The detectors only read an already loaded table and return flag events; the data stays as it
 is. Which thresholds apply is decided at ingestion (`QualityConfig`, resolved into the
@@ -16,17 +16,33 @@ Flags (one event per row, channel and flag; `channel` is null for row-level flag
   (e.g. a refill).
 - `dropout` (P13): a jump away and back to the previous level within `dropout_max_duration_s`;
   every sample in between is flagged (e.g. a balance reporting 0.0 for some seconds).
+- `spike` (P31): a Hampel outlier, i.e. more than `spike_k` x 1.4826 x MAD away from the median
+  of a centred window `spike_window_s` seconds wide (e.g. OCR misreads 9628 g instead of
+  9672.8 g). Unlike `dropout`, it needs no jump threshold and no return to an earlier level: it
+  catches short excursions in both directions, also several close together or a single wrong
+  sample at the start or end. `dropout` stays the flag for longer outages that the median of the
+  window would follow. The scale has a floor, `spike_min_scale` (by default the apparent
+  resolution of the channel), so quantised values (a balance with 0.01 g steps) do not count
+  a single digit as a spike. With the floor at 0, windows with MAD = 0 are not judged; samples
+  skipped that way are reported in the notes.
 - `out_of_range` (P17): outside the user-given plausible range of the channel.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Mapping, Sequence
 
 import polars as pl
 
 FLAGS_SCHEMA = {"row": pl.Int64, "channel": pl.String, "flag": pl.String}
+NOTES_SCHEMA = {"channel": pl.String, "note": pl.String, "n": pl.Int64}
+
+# Hampel: 1.4826 x MAD estimates the standard deviation of normally distributed values
+_MAD_TO_SIGMA = 1.4826
+# Default spike window: 2h + 1 typical sample steps with h = 10, i.e. ten samples on each side
+SPIKE_WINDOW_STEPS = 21
 
 _SEG = "__q_segment"
 _ROW = "__q_row"
@@ -43,10 +59,57 @@ class QualitySettings:
     dropout_max_duration_s: float = 60.0
     ranges: Mapping[str, tuple[float | None, float | None]] = field(default_factory=dict)
     calculated_channels: Sequence[str] = ()
+    spike_window_s: float = 0.0
+    spike_k: float = 3.0
+    spike_channels: Sequence[str] = ()
+    spike_min_scale: Mapping[str, float] = field(default_factory=dict)
 
 
 def empty_flags() -> pl.DataFrame:
     return pl.DataFrame(schema=FLAGS_SCHEMA)
+
+
+def empty_notes() -> pl.DataFrame:
+    return pl.DataFrame(schema=NOTES_SCHEMA)
+
+
+def suggest_spike_window(df: pl.DataFrame, time_col: str, run_columns: Sequence[str]) -> float:
+    """Return `SPIKE_WINDOW_STEPS` x the median positive time step inside runs (0.0 = off).
+
+    The window is given in seconds because the sample rate differs from source to source; this
+    keeps ten samples on each side of the checked one, also with a slightly jittering clock.
+    """
+    if df.is_empty() or time_col not in df.columns:
+        return 0.0
+    t = pl.col(time_col)
+    step = t - t.shift(1)
+    if run_columns:
+        step = step.over(list(run_columns))
+    steps = df.select(step.alias("d"))["d"]
+    steps = steps.filter(steps > 0)
+    if steps.is_empty():
+        return 0.0
+    return float(SPIKE_WINDOW_STEPS * steps.median())
+
+
+def suggest_resolution(df: pl.DataFrame, channel: str) -> float:
+    """Return the smallest step between distinct values of the channel (its apparent resolution).
+
+    Used as the lower bound of the spike scale: a balance showing 0.01 g steps has windows whose
+    MAD is 0 or half a digit, and a normal value would otherwise count as a spike. Returns 0.0 if
+    the channel has fewer than two distinct values.
+    """
+    values = df[channel].drop_nulls()
+    if values.dtype.is_float():
+        values = values.filter(values.is_finite())
+    steps = values.unique().sort().diff().drop_nulls()
+    steps = steps.filter(steps > 0)
+    if steps.is_empty():
+        return 0.0
+    # Round away the float error of the subtraction, which grows with the values themselves:
+    # 9674.08 - 9674.07 is 0.0099999999984 in binary floats
+    digits = 12 - math.floor(math.log10(float(values.abs().max())))
+    return round(float(steps.min()), digits)
 
 
 def suggest_jump_threshold(
@@ -74,8 +137,14 @@ def detect_flags(
     run_columns: Sequence[str],
     channels: Sequence[str],
     settings: QualitySettings,
+    notes: list[dict] | None = None,
 ) -> pl.DataFrame:
-    """Return all flag events of the table, sorted by row, channel and flag."""
+    """Return all flag events of the table, sorted by row, channel and flag.
+
+    `notes`, if given, receives one dict `channel, note, n` per finding that is not a flag (see
+    `NOTES_SCHEMA`), e.g. `spike_mad_zero`: n samples deviated from their window median, but the
+    window had MAD = 0 and the channel's `spike_min_scale` is 0, so they were not judged.
+    """
     if df.is_empty() or time_col not in df.columns:
         return empty_flags()
     keys = list(run_columns)
@@ -97,6 +166,11 @@ def detect_flags(
             parts.append(_events(dropouts, ch, "dropout"))
         if ch in settings.ranges:
             parts.append(_events(_range_rows(frame, ch, *settings.ranges[ch]), ch, "out_of_range"))
+        if settings.spike_window_s > 0 and ch in settings.spike_channels:
+            spikes, unjudged = _spike_rows(frame, ch, time_col, keys, settings)
+            parts.append(_events(spikes, ch, "spike"))
+            if unjudged and notes is not None:
+                notes.append({"channel": ch, "note": "spike_mad_zero", "n": unjudged})
     return pl.concat(parts).sort("row", "channel", "flag", nulls_last=False)
 
 
@@ -200,6 +274,39 @@ def _jump_rows(
             dropouts.extend(valid_rows[position[rows[i]]:position[rows[back]]])
             i = back + 1
     return jumps, dropouts
+
+
+def _spike_rows(
+    frame: pl.DataFrame, ch: str, time_col: str, keys: list[str], s: QualitySettings
+) -> tuple[pl.Series, int]:
+    """P31: Hampel outliers in a centred time window; returns the rows and the unjudged count.
+
+    The window stays inside a run and a gap segment, so a new run or a logger outage does not
+    pull its median. Nulls are skipped.
+    """
+    part = [*keys, _SEG]
+    # Integer microseconds: rolling windows need an integer or temporal index
+    half = int(round(s.spike_window_s / 2 * 1e6))
+    if half <= 0:
+        return pl.Series(_ROW, [], dtype=pl.UInt32), 0
+    valid = (
+        frame.filter(pl.col(ch).is_not_null() & pl.col(time_col).is_not_null())
+        .select(*part, _ROW, ch, (pl.col(time_col) * 1e6).round().cast(pl.Int64).alias("__q_t"))
+        .sort(*part, "__q_t")
+    )
+    v = pl.col(ch)
+    stats = valid.rolling(
+        index_column="__q_t", period=f"{2 * half}i", offset=f"{-half}i", closed="both", group_by=part
+    ).agg(v.median().alias("med"), (v - v.median()).abs().median().alias("mad"))
+    floor = s.spike_min_scale.get(ch, 0.0)
+    checked = valid.select(
+        _ROW,
+        (v - stats["med"]).abs().alias("dev"),
+        pl.max_horizontal(stats["mad"] * _MAD_TO_SIGMA, pl.lit(floor)).alias("scale"),
+    )
+    spikes = checked.filter((pl.col("scale") > 0) & (pl.col("dev") > s.spike_k * pl.col("scale")))
+    unjudged = checked.filter((pl.col("scale") == 0) & (pl.col("dev") > 0)).height
+    return spikes[_ROW].sort(), unjudged
 
 
 def _range_rows(frame: pl.DataFrame, ch: str, low: float | None, high: float | None) -> pl.Series:

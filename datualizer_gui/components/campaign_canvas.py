@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Sequence
+import weakref
 
 import numpy as np
 import polars as pl
 import pyqtgraph as pg
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
 
-from datualizer_core.campaign import SourceCoverage, Track
+from datualizer_core.campaign import IntervalSet, ResolvedInterval, SourceCoverage, Track
 from datualizer_gui.components import curves
 from datualizer_gui.components.curves import (
     FastCurve,
@@ -31,6 +33,7 @@ from datualizer_gui.components.coverage_strip import (
     lane_label,
     left_axis_width,
 )
+from datualizer_gui.components.interval_bands import PENDING_PEN, StepBand, StepsItem, marker_icon, marker_text
 from datualizer_gui.components.plot_canvas import CHANNEL_COLORS
 from datualizer_gui.components.plot_groups import ColorBy, GroupBy, PlotGroup, group_tracks, track_colors, track_key
 from datualizer_gui.components.readout import ReadoutLabel, format_value
@@ -63,7 +66,15 @@ class CampaignPlotCanvas(QWidget):
 
     Unlike the dataset canvas, every track keeps its own x array, so sources with different
     sampling and clocks share one time axis without resampling.
+
+    Measurement steps are drawn as bands over all subplots. Right click → "Marker ○ ○" sets a
+    step by hand: the first click its start (first circle green), the second its end.
     """
+
+    interval_marked = Signal(float, float)  # master start, end of a step set with the marker
+    interval_moved = Signal(str, float, float)  # manual step dragged to a new start, end
+    interval_rename_requested = Signal(str)
+    interval_delete_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -94,6 +105,36 @@ class CampaignPlotCanvas(QWidget):
         self._y_fit_visible = False
         self._min_subplot_height = 0
         self.crosshair_x: float | None = None  # master time of the last crosshair position
+        self._intervals = IntervalSet()
+        self._steps_items: list[tuple[pg.PlotItem, StepsItem]] = []  # one per subplot
+        self._bands: list[StepBand] = []  # draggable regions of manual steps only
+        self._marker_start: float | None = None  # master time of a started, unfinished marker
+        self._pending_lines: list[tuple[pg.PlotItem, pg.InfiniteLine]] = []
+        self._menu_x: float | None = None  # master time of the last right click
+        self._menu_step: ResolvedInterval | None = None  # step under the last right click
+
+        self.action_marker = QAction(marker_icon(0), marker_text(0), self)
+        self.action_marker.setToolTip("First click: start of a step, second click: its end")
+        self.action_marker.triggered.connect(self._on_marker)
+        self.action_marker_cancel = QAction("Discard marker", self)
+        self.action_marker_cancel.triggered.connect(self.cancel_marker)
+        self.action_zoom_step = QAction("Zoom to step", self)
+        self.action_zoom_step.triggered.connect(lambda: self._menu_step and self.zoom_to_step(self._menu_step))
+        self.action_rename_step = QAction("Rename step...", self)
+        self.action_rename_step.triggered.connect(
+            lambda: self._menu_step and self.interval_rename_requested.emit(self._menu_step.id)
+        )
+        self.action_delete_step = QAction("Delete step", self)
+        self.action_delete_step.triggered.connect(
+            lambda: self._menu_step and self.interval_delete_requested.emit(self._menu_step.id)
+        )
+        self._step_actions = [
+            self.action_marker, self.action_marker_cancel, self.action_zoom_step,
+            self.action_rename_step, self.action_delete_step,
+        ]
+        esc = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        esc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        esc.activated.connect(self.cancel_marker)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
@@ -180,6 +221,8 @@ class CampaignPlotCanvas(QWidget):
         if (offset, zone, t0) != (self._utc_offset, self._zone, self._t0):
             old_groups = {}  # axis labels depend on offset and t0: build all subplots anew
         self._zone, self._utc_offset, self._t0 = zone, offset, t0
+        for p in old_plots.values():  # unlink first: the old coverage strip is deleted below
+            p.setXLink(None)
         self.graphics_layout.clear()  # detaches the subplots, kept ones are added back below
         self._plot_items, self._curves, self._crosshair_lines, self._group_tracks = {}, {}, {}, {}
         self._edge_markers, self._y_limits = {}, {}
@@ -235,6 +278,10 @@ class CampaignPlotCanvas(QWidget):
         if first is not None:
             self._apply_range()
         self._apply_y_ranges()
+        for p in self._all_plots():
+            self._install_step_menu(p)
+        self._draw_bands()
+        self._draw_pending()
         if not self._tracks and not self._coverage:
             self.crosshair_label.setText("Add sources and select channels to plot them on one time axis.")
 
@@ -304,6 +351,136 @@ class CampaignPlotCanvas(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._update_time_labels()
+
+    # ------------------------------------------------------------------ steps
+    @property
+    def intervals(self) -> IntervalSet:
+        return self._intervals
+
+    @property
+    def bands(self) -> list[StepBand]:
+        """Draggable regions of the steps set by hand (one per step and subplot)."""
+        return list(self._bands)
+
+    @property
+    def steps_items(self) -> list[StepsItem]:
+        """The items painting all steps, one per subplot."""
+        return [item for _, item in self._steps_items]
+
+    @property
+    def marker_state(self) -> int:
+        """0: no marker started, 1: start set and waiting for the end."""
+        return 0 if self._marker_start is None else 1
+
+    def set_intervals(self, intervals: IntervalSet) -> None:
+        """Draw these steps as bands over all subplots."""
+        self._intervals = intervals
+        self._draw_bands()
+
+    def place_marker(self, x: float) -> None:
+        """The "Marker ○ ○" action at master time `x` (what a right click does)."""
+        self._menu_x = x
+        self._on_marker()
+
+    def cancel_marker(self) -> None:
+        self._marker_start = None
+        self._update_marker_action()
+        self._draw_pending()
+
+    def zoom_to_step(self, iv: ResolvedInterval) -> None:
+        margin = 0.05 * (iv.end - iv.start)
+        self.set_view_range(iv.start - margin, iv.end + margin)
+
+    def step_at(self, x: float) -> ResolvedInterval | None:
+        """The step under master time `x`: a manual one before a derived one, then the shortest."""
+        hits = [iv for iv in self._intervals.intervals if iv.start <= x <= iv.end]
+        hits.sort(key=lambda iv: (not iv.manual, iv.end - iv.start))
+        return hits[0] if hits else None
+
+    def _on_marker(self) -> None:
+        x = self._menu_x
+        if x is None:
+            return
+        if self._marker_start is None:
+            self._marker_start = x
+        else:
+            start, end = sorted((self._marker_start, x))
+            self._marker_start = None
+            if end > start:
+                self.interval_marked.emit(start, end)
+        self._update_marker_action()
+        self._draw_pending()
+
+    def _update_marker_action(self) -> None:
+        state = self.marker_state
+        self.action_marker.setIcon(marker_icon(state))
+        self.action_marker.setText(marker_text(state))
+
+    def _prepare_step_menu(self, x: float) -> None:
+        """Set up the step entries for a right click at master time `x`."""
+        self._menu_x = x
+        self._menu_step = self.step_at(x)
+        self.action_marker_cancel.setVisible(self._marker_start is not None)
+        on_step = self._menu_step is not None
+        self.action_zoom_step.setVisible(on_step)
+        manual = on_step and self._menu_step.manual
+        self.action_rename_step.setVisible(manual)
+        self.action_delete_step.setVisible(manual)
+        if on_step:
+            self.action_zoom_step.setText(f"Zoom to step '{self._menu_step.label}'")
+
+    def _install_step_menu(self, plot: pg.PlotItem) -> None:
+        vb = plot.getViewBox()
+        if getattr(vb, "_has_step_menu", False):
+            return
+        vb._has_step_menu = True
+        vb.setMenuEnabled(True)
+        menu = vb.menu
+        before = menu.actions()[0] if menu.actions() else None
+        for action in self._step_actions:
+            menu.insertAction(before, action)
+        if before is not None:
+            menu.insertSeparator(before)
+        # Weak references only: a closure holding the view box would keep its Python wrapper alive
+        # after Qt deleted the subplot, and linked views would then call into a deleted ViewBox
+        # (RuntimeError on Windows, segfault on Linux CI).
+        canvas_ref, vb_ref = weakref.ref(self), weakref.ref(vb)
+
+        def raise_menu(ev) -> None:
+            canvas, view = canvas_ref(), vb_ref()
+            if canvas is None or view is None:
+                return
+            canvas._prepare_step_menu(view.mapSceneToView(ev.scenePos()).x())
+            type(view).raiseContextMenu(view, ev)
+
+        vb.raiseContextMenu = raise_menu
+
+    def _draw_bands(self) -> None:
+        for band in self._bands:
+            band.remove()
+        for p, item in self._steps_items:
+            p.removeItem(item)
+        self._bands, self._steps_items = [], []
+        if not self._intervals.intervals:
+            return
+        master = self._master_plot()
+        manual = [iv for iv in self._intervals.intervals if iv.manual]
+        for p in self._all_plots():
+            item = StepsItem(self._intervals.intervals, with_labels=p is master)
+            p.addItem(item, ignoreBounds=True)
+            self._steps_items.append((p, item))
+            self._bands += [StepBand(p, iv, self.interval_moved.emit) for iv in manual]
+
+    def _draw_pending(self) -> None:
+        for p, line in self._pending_lines:
+            p.removeItem(line)
+        self._pending_lines = []
+        if self._marker_start is None:
+            return
+        for p in self._all_plots():
+            line = pg.InfiniteLine(pos=self._marker_start, angle=90, movable=False, pen=PENDING_PEN)
+            p.addItem(line, ignoreBounds=True)
+            self._pending_lines.append((p, line))
 
     def _master_plot(self) -> pg.PlotItem | None:
         """The subplot all others are x-linked to (the coverage strip if shown)."""
@@ -427,6 +604,9 @@ class CampaignPlotCanvas(QWidget):
             val = tr.y[j]
             parts.append(f"{tr.label} = {format_value(val)} {tr.unit}".rstrip())
         parts += [g for g in (describe_gap(c, x) for c in self._coverage) if g]
+        step = self.step_at(x)
+        if step is not None:
+            parts.append(f"step: {step.label}")
         text = " | ".join(parts)
         self.crosshair_label.setText(text)
         return text

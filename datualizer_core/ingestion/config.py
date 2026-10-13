@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import Enum
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -153,11 +154,12 @@ class UnitConfig(BaseModel):
 
 
 class QualityConfig(BaseModel):
-    """Quality flags (Datenkatalog P12–P17). Samples are marked in `DualModeDataset.quality_flags`,
+    """Quality flags (Datenkatalog P12–P17, P31). Samples are marked in `DualModeDataset.quality_flags`,
     never changed or dropped.
 
     Channel names may be raw headers, loaded names or (long tables) variable names. The resolved
-    spec holds loaded names and a jump threshold for every channel.
+    spec holds loaded names, a jump threshold for every channel, the spike window in seconds, the
+    checked spike channels and their scale floor.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -188,6 +190,27 @@ class QualityConfig(BaseModel):
     calculated_channels: list[str] | None = Field(
         None,
         description="Channels computed from others (nulls flagged separately). None = from channel attributes.",
+    )
+    spike_window_s: float | None = Field(
+        None, ge=0.0,
+        description=(
+            "Full width of the centred time window of the spike (Hampel) detector, in seconds. "
+            "None = 21 typical sample steps of the table (10 on each side). 0 = off."
+        ),
+    )
+    spike_k: float = Field(
+        3.0, gt=0.0, description="A sample is a spike if it is more than k x 1.4826 x MAD from the window median."
+    )
+    spike_channels: list[str] | None = Field(
+        None, description="Channels checked for spikes. None = all measurement channels."
+    )
+    spike_min_scale: dict[str, Annotated[float, Field(ge=0.0)]] = Field(
+        default_factory=dict,
+        description=(
+            "Lower bound for the robust scale 1.4826 x MAD per channel, e.g. the device resolution. "
+            "Channels not listed get the smallest step between their distinct values. 0 = no "
+            "bound: windows with MAD = 0 are then not judged, only reported."
+        ),
     )
 
 

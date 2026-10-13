@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from datualizer_core import DualModeDataset, load_csv, load_csvs, pre_scan
+from datualizer_core import DualModeDataset, load_csvs, load_source, pre_scan
 from datualizer_gui.components.data_grid import DataGridWidget
 from datualizer_gui.components.inspector import InspectorPanel
 from datualizer_gui.components.plot_canvas import MultiChannelPlotCanvas
@@ -208,7 +208,7 @@ class DatualizerMainWindow(QMainWindow):
         self.load_files([*self._current_files, *file_paths])
 
     def load_files(self, file_paths: Sequence[str | Path]) -> None:
-        """Load one file, or merge several (duplicates skipped, overlaps deduplicated)."""
+        """Load one file (text, Excel or SQLite, profile detected), or merge several delimited files."""
         paths: list[Path] = []
         for file_path in file_paths:
             p = Path(file_path)
@@ -227,14 +227,16 @@ class DatualizerMainWindow(QMainWindow):
             return
 
         try:
-            # 1. Pre-scan for metadata inspection
-            res = pre_scan(paths[0])
-
-            # 2. Ingest into DualModeDataset
+            # 1. Ingest into DualModeDataset (one file: any supported format with its profile)
             if len(paths) == 1:
-                dataset = load_csv(paths[0], pre_scan_result=res)
+                dataset = load_source(paths[0])
+                meta = dataset.source_meta
+                delimiter = meta.get("delimiter", meta.get("reader", "-"))
+                decimal_sep = meta.get("decimal_separator", ".")
             else:
+                res = pre_scan(paths[0])
                 dataset = load_csvs(paths)
+                delimiter, decimal_sep = res.delimiter, res.decimal_separator
             self._dataset = dataset
             self._current_file = paths[-1]
             self._current_files = paths
@@ -243,8 +245,8 @@ class DatualizerMainWindow(QMainWindow):
             self.inspector.set_dataset(
                 dataset,
                 file_path=paths[0] if len(paths) == 1 else "",
-                delimiter=res.delimiter,
-                decimal_sep=res.decimal_separator,
+                delimiter=delimiter,
+                decimal_sep=decimal_sep,
             )
 
             channels = self.inspector.get_selected_channels()
@@ -254,6 +256,9 @@ class DatualizerMainWindow(QMainWindow):
 
             # 4. Status Bar message
             name = paths[0].name if len(paths) == 1 else f"{len(paths)} files (merged)"
+            profile = dataset.source_meta.get("profile")
+            if profile:
+                name += f" [profile: {profile}]"
             msg = (
                 f"Loaded {name}: {len(dataset):,} rows, "
                 f"{len(channels)} active channels | Audit Errors: {len(dataset.audit_log)}"
@@ -308,9 +313,10 @@ class DatualizerMainWindow(QMainWindow):
     def _on_menu_open_file(self) -> None:
         file_paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Open Measurement CSV (select several to merge)",
+            "Open Measurement File (select several CSV files to merge)",
             "",
-            "CSV / Delimited Files (*.csv *.tsv *.txt);;All Files (*)",
+            "Measurement Files (*.csv *.tsv *.txt *.dat *.xls *.xlsx *.xlsm *.db *.sqlite *.sqlite3);;"
+            "CSV / Delimited Files (*.csv *.tsv *.txt *.dat);;All Files (*)",
         )
         if file_paths:
             self.load_files(file_paths)
@@ -320,7 +326,7 @@ class DatualizerMainWindow(QMainWindow):
             self,
             "Add Measurement CSV (merge into current data)",
             "",
-            "CSV / Delimited Files (*.csv *.tsv *.txt);;All Files (*)",
+            "CSV / Delimited Files (*.csv *.tsv *.txt *.dat);;All Files (*)",
         )
         if file_paths:
             self.add_files(file_paths)

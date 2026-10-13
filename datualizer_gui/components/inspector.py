@@ -458,9 +458,10 @@ class InspectorPanel(QWidget):
     def _on_open_file_clicked(self) -> None:
         file_paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Open Measurement CSV (select several to merge)",
+            "Open Measurement File (select several CSV files to merge)",
             "",
-            "CSV / Delimited Files (*.csv *.tsv *.txt);;All Files (*)",
+            "Measurement Files (*.csv *.tsv *.txt *.dat *.xls *.xlsx *.xlsm *.db *.sqlite *.sqlite3);;"
+            "CSV / Delimited Files (*.csv *.tsv *.txt *.dat);;All Files (*)",
         )
         if len(file_paths) == 1:
             self.file_selected.emit(file_paths[0])
@@ -472,7 +473,7 @@ class InspectorPanel(QWidget):
             self,
             "Add Measurement CSV (merge into current data)",
             "",
-            "CSV / Delimited Files (*.csv *.tsv *.txt);;All Files (*)",
+            "CSV / Delimited Files (*.csv *.tsv *.txt *.dat);;All Files (*)",
         )
         if file_paths:
             self.files_added.emit(file_paths)

@@ -17,6 +17,17 @@ from datualizer_core.ingestion.config import (
 )
 from datualizer_core.ingestion.loader import CSVLoader, load_csv
 from datualizer_core.ingestion.merge import MergeError, load_csvs
+from datualizer_core.ingestion.profiles import (
+    OriginRule,
+    ReaderKind,
+    SourceProfile,
+    builtin_profiles,
+    detect_profile,
+    get_profile,
+    load_profile,
+)
+from datualizer_core.ingestion.readers import ExcelOptions, RawTable, ReaderError, SqliteOptions
+from datualizer_core.ingestion.source_loader import load_source
 from datualizer_core.ingestion.quality_rules import QualityConfigError
 from datualizer_core.ingestion.units import UnitConfigError
 from datualizer_core.ingestion.pre_scanner import PreScanResult, PreScanner, pre_scan
@@ -48,6 +59,18 @@ __all__ = [
     "Vocabulary",
     "load_csv",
     "load_csvs",
+    "load_source",
+    "load_profile",
+    "get_profile",
+    "builtin_profiles",
+    "detect_profile",
+    "SourceProfile",
+    "ReaderKind",
+    "OriginRule",
+    "ExcelOptions",
+    "SqliteOptions",
+    "RawTable",
+    "ReaderError",
     "PreScanResult",
     "PreScanner",
     "pre_scan",

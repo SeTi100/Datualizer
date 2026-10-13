@@ -1,0 +1,29 @@
+{
+  "name": "testa_ifid_xls",
+  "description": "Testa iFID Mobile, Excel-Export (.xls): Messwerte im Blatt Data01, Einstellungen und Kalibrierung als Metadaten.",
+  "reader": "excel",
+  "file_patterns": [
+    "*.xls",
+    "*.xlsx"
+  ],
+  "header_hints": [
+    "Data01",
+    "Konzentration [mgC]",
+    "Signal [pA]"
+  ],
+  "excel": {
+    "sheet": "Data01",
+    "header_row": 1,
+    "meta_sheets": [
+      "Einstellungen",
+      "Kalibrierung",
+      "Ereignisse"
+    ]
+  },
+  "ingestion": {
+    "time_column": "Zeitstempel",
+    "time": {
+      "timezone": "Europe/Zurich"
+    }
+  }
+}

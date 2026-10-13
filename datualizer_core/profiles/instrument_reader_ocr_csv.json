@@ -1,0 +1,23 @@
+{
+  "name": "instrument_reader_ocr_csv",
+  "description": "OCR-Auswertung einer Video-Aufnahme (instrument-reader offline): Masse je Frame mit Rohtext und Gültigkeit.",
+  "reader": "delimited",
+  "file_patterns": [
+    "*.csv"
+  ],
+  "header_hints": [
+    "mass_g",
+    "raw_text",
+    "is_valid"
+  ],
+  "ingestion": {
+    "time_column": "timestamp",
+    "time": {
+      "timezone": "Europe/Zurich"
+    },
+    "column_kinds": {
+      "frame": "identifier",
+      "raw_text": "categorical"
+    }
+  }
+}

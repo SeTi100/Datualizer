@@ -7,7 +7,7 @@ After loading, `DualModeDataset.ingestion_spec` holds a fully resolved copy of t
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,6 +17,7 @@ from datualizer_core.schema import ColumnKind
 DEFAULT_SENTINELS = [
     "", "NA", "N/A", "null", "NULL", "NaN", "None", "-999", "ERR", "#N/A", "#VALUE!",
     "nan", "NAN", "error", "ERROR", "undef", "UNDEF", "overflow", "OVERFLOW",
+    "#DIV/0!", "#REF!", "#NAME?", "#NUM!", "#NULL!",  # spreadsheet error values
 ]
 
 
@@ -262,6 +263,13 @@ class TimeConfig(BaseModel):
         description=(
             "Absolute time of the first valid sample for CLOCK and NUMERIC sources (e.g. a logger "
             "that only exports elapsed time). Not allowed for DATETIME sources."
+        ),
+    )
+    clock_date: date | None = Field(
+        None,
+        description=(
+            "Date of CLOCK values that are times of day (e.g. a lab journal). The origin is this "
+            "date plus the first time. Not combinable with `origin`."
         ),
     )
 

@@ -735,3 +735,25 @@ def test_inspector_lists_unitless_columns(qapp: QApplication) -> None:
     assert not inspector.lbl_unitless.isHidden()
     assert "snad2" in inspector.lbl_unitless.text()
     assert "massenstrom_waage" not in inspector.lbl_unitless.text()
+
+
+SA_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "sa_12_10"
+
+
+@pytest.mark.parametrize("name, profile, channel", [
+    ("fid_ifid_05_10.xls", "testa_ifid_xls", "konzentration"),
+    ("instrument_reader_12_10_extract.db", "instrument_reader_db", "masse"),
+    ("fid_ifid_12_10_extract.dat", "testa_ifid_dat", "conc"),
+])
+def test_main_window_opens_excel_sqlite_and_dat(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch, name: str, profile: str, channel: str
+) -> None:
+    """Etappe 2b: a single file of any supported format loads with its detected profile."""
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: pytest.fail(f"loading failed: {a[2:]}"))
+    win = DatualizerMainWindow(auto_load=False)
+    win.load_files([SA_FIXTURES / name])
+    qapp.processEvents()
+    assert win.dataset is not None
+    assert win.dataset.source_meta["profile"] == profile
+    assert f"[profile: {profile}]" in win.status_bar.currentMessage()
+    assert channel in win.plot_canvas.plot_items

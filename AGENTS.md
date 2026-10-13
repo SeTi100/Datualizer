@@ -46,8 +46,9 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 ├── dataset.py                    # DualModeDataset, AuditLog
 ├── runs.py                       # Run-Übersicht, Kanalverfügbarkeit, Zeit pro Run
 ├── quality.py                    # Qualitäts-Flags als Ereignistabelle (markieren, nie ändern)
+├── timebase.py                   # Absolute Zeit: Datumsformate, Zeitzonen, Sommerzeit (über Polars, importzyklusfrei)
 ├── ingestion/
-│   ├── config.py                 # IngestionConfig, Vocabulary, LongFormatConfig, RoleConfig, RunConfig, UnitConfig, QualityConfig, MergeConfig  ← alle Stellschrauben
+│   ├── config.py                 # IngestionConfig, TimeConfig, Vocabulary, LongFormatConfig, RoleConfig, RunConfig, UnitConfig, QualityConfig, MergeConfig  ← alle Stellschrauben
 │   ├── pre_scanner.py            # Delimiter, Dezimal, BOM, Header, Footer
 │   ├── type_inference.py         # Spaltentyp pro Spalte
 │   ├── long_format.py            # Long erkennen + nach wide pivotieren
@@ -62,7 +63,8 @@ datualizer_gui/                   # PySide6-App, Einstieg: python -m datualizer_
 tests/fixtures/runs_export/       # 13 echte Pipeline-Exporte (unveränderlich!)
 ```
 
-Ablauf: `load_csv(path, config=…)` → PreScanner → Zeitspalte → Typ-Inferenz (Overrides zuerst) → Casting mit Audit → Long-Erkennung und Pivot → Rollen (Parameter) → Qualitäts-Einstellungen und Einheiten auflösen → `DualModeDataset` (mit `column_kinds`, `channels`, `parameters`, `empty_columns`, `runs`, `channel_attrs`, `source_format`, `ingestion_spec`, `sources`, `quality_flags`, `units`).
+Ablauf: `load_csv(path, config=…)` → PreScanner → Zeitspalte → Typ-Inferenz (Overrides zuerst) → Casting mit Audit → Long-Erkennung und Pivot → Rollen (Parameter) → Qualitäts-Einstellungen und Einheiten auflösen → `DualModeDataset` (mit `column_kinds`, `channels`, `parameters`, `empty_columns`, `runs`, `channel_attrs`, `source_format`, `ingestion_spec`, `sources`, `quality_flags`, `units`, `time_origin`, `time_zone`).
+Zeit: `time_seconds` zählt ab dem ersten gültigen Sample, `time_origin` ist dessen absoluter Zeitpunkt (`time_abs` wird daraus abgeleitet, nicht als Spalte gespeichert). Zeitzonen rechnet Polars; Python braucht unter Windows dafür das Paket `tzdata`, sonst stürzt die Ausgabe zonenbehafteter Werte ab.
 Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft gleiches Layout, dedupliziert über den Schlüssel (spätere Datei gewinnt) und lädt die gemischte Rohtabelle einmal durch denselben Loader.
 
 **Import-Regel:** `dataset.py` darf nichts aus `ingestion/` zur Laufzeit importieren, sonst entsteht ein Zyklus. Gemeinsame Typen gehören nach `schema.py`. Typ-Hinweise gehen über `TYPE_CHECKING`.
@@ -79,7 +81,7 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
 | Ausgabe mit `°`, `³`, Umlauten | `PYTHONIOENCODING=utf-8` setzen, sonst `UnicodeEncodeError` auf der Konsole |
 
 **Fallstricke:**
-- Das lokale `.venv` wurde mit uv erstellt und hat **kein pip**. `uv` ist nicht im PATH. Keine Pakete ungefragt installieren.
+- Das lokale `.venv` wurde mit uv erstellt; `uv` ist nicht im PATH. pip wurde mit Zustimmung des Nutzers per `python -m ensurepip` nachgerüstet. Keine Pakete ungefragt installieren.
 - `python -m datualizer_gui.main_window` startet **nichts**. Der Einstieg ist `datualizer_gui.app`.
 - CI (`.github/workflows/pytest.yml`, Ubuntu, Python 3.11) installiert per `pip install -e ".[dev]"` und testet damit auch die Paket-Metadaten.
 - **PySide6 6.12.0** bricht die GUI-Tests mit einem Speicherfehler ab („deallocating None“). `pyproject.toml` begrenzt deshalb auf `<6.12`. Vor dem Anheben die GUI-Tests mit der neuen Version mehrfach laufen lassen.
@@ -119,9 +121,13 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
   - Qualitäts-Flags (P12–P17): `quality_flags`, `flag_mask`, `with_flag_columns`, `QualityConfig`, Plot ohne Linien über Lücken
   - Einheiten (P20, Rest von P9): `units`, `unitless_columns`, `UnitConfig`, Einheit an der Plot-Achse
 
-**Nächste offene Punkte** (Reihenfolge nach [Datenkatalog §6](docs/DATENKATALOG_RUNS_EXPORT.md)):
+- Etappe 2b (Messkampagne) bisher:
+  - Schritt 1, absolute Zeit: `TimeConfig` (Format, Zeitzone, Ursprung, Datumsformate), `time_origin`, `time_zone`, `time_abs`, `with_time_abs()`, DST-sichere Sekunden, `TimeConfigError`
 
-1. **Wert und Einheit in einer Zelle (P6)** (`Konzentration = "20 °C"`) und widersprüchliche Metadaten anzeigen (P8).
-2. Danach: Block-Segmentation und Ragged-Healer (ursprünglicher Etappe-2-Plan), sobald Gerätedaten mit Kopfblöcken vorliegen.
+**Nächste offene Punkte:**
+
+1. **Etappe 2b, Schritte 2–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md)): Reader für Excel, `.xls`, SQLite und `.dat` mit Profilen, Kampagnenmodell mit Uhrenmodellen und gemeinsamer Zeitachse, Abdeckungsansicht, Journal-Intervalle, Fenster-Statistik, Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
+2. **Wert und Einheit in einer Zelle (P6)** (`Konzentration = "20 °C"`) und widersprüchliche Metadaten anzeigen (P8).
+3. Danach: Block-Segmentation und Ragged-Healer (ursprünglicher Etappe-2-Plan), sobald Gerätedaten mit Kopfblöcken vorliegen.
 
 Langfristig ist `IngestionConfig` die Keimzelle des **Recipe-AST** (Etappe 3) und des **Ingestion-Wizards** (Etappe 6). Neue Einstellungen deshalb sauber typisiert und serialisierbar halten.

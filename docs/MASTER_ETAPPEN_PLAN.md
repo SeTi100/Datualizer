@@ -37,6 +37,14 @@ flowchart TD
         E2_Flags --> E2_Block[Block-Segmentation + Ragged-Healer]
     end
 
+    subgraph E2b [Etappe 2b: Messkampagne - IN ARBEIT]
+        E2b_Time[Absolute Zeit - FERTIG] --> E2b_Read[Reader Excel/SQLite/.dat + Profile]
+        E2b_Read --> E2b_Camp[Kampagne + Uhrenmodelle + Master-Zeit]
+        E2b_Camp --> E2b_Win[Intervalle + Fenster-Statistik]
+        E2b_Win --> E2b_Calc[Rechengrössen, Referenz-Fits, Szenarien]
+        E2b_Calc --> E2b_Video[Video-Spur]
+    end
+
     subgraph E3 [Etappe 3: Tidy & Reshaping DSL]
         E3_AST[Pydantic Recipe AST] --> E3_Ops[10 Kern-Operatoren]
         E3_Ops --> E3_Time[Time-Series join_asof & Resampling]
@@ -63,11 +71,12 @@ flowchart TD
     end
 
     E1_Done --> E2
-    E2 --> E3
-    E3 --> E4
-    E4 --> E5
+    E2 --> E2b
+    E2b --> E3
+    E3 --> E5
     E5 --> E6
-    E6 --> E7
+    E6 --> E4
+    E4 --> E7
 ```
 
 ---
@@ -112,6 +121,26 @@ flowchart TD
 
 ---
 
+### 🧭 Etappe 2b: Messkampagne – mehrere Quellen, eine Zeitachse (IN ARBEIT)
+*Ziel: Alle Geräte einer Messkampagne (Datenlogger, Analysegeräte, OCR-Pipeline, Labjournal, Videos) auf einer gemeinsamen absoluten Zeitachse darstellen und die statistischen Annahmen der Auswertung sichtbar und umschaltbar machen.*
+
+> **Eingeschoben (2026-10-13)** nach der Auswertung einer echten Messkampagne (SA, Ethanol-Oxidation, 12.10.2026): Jede Quelle hatte eine eigene Uhr (Versatz 16 min, nur relative Zeit, UTC/Lokalzeit gemischt, Videos ohne Frame-Zeitstempel), eigene Lücken und eigene Formate (`.dat`, `.xls`, `.xlsx`, SQLite). Die Kennwerte hingen an Annahmen (Uhrenversatz, Gerät-Skalierung, Response-Faktor, Blindwert, Fensterwahl).
+> Sie zieht `join_asof` aus Etappe 3 sowie Mehrachsen-Plot und ROI aus Etappe 5 vor. Etappe 4 rückt hinter Etappe 6.
+> Fachlogik bleibt generisch: Datualizer liefert Bausteine, die konkrete Auswertung ist eine JSON-Kampagnendatei (Prinzip 1).
+
+1. ✅ **Absolute Zeit:** `TimeConfig` (Format, Zeitzone, Ursprung, Datumsformate), `time_origin`, `time_abs`, DST-sichere Sekunden, replaybar.
+2. ⏳ **Reader + Profile:** Excel (`.xlsx`, `.xls` inkl. Metadaten-Blätter), SQLite (ganze `.db` oder Abfrage, Zeitzone pro Spalte), `.dat`; Profile als JSON; Realdaten-Ausschnitte als Fixtures.
+3. ⏳ **Kampagne + Uhrenmodelle:** `Campaign` (`campaign.json`), `ClockModel` (Versatz, Drift, Anker), Master-Zeit; Plot mit eigenem x-Array pro Spur und Datumsachse.
+4. ⏳ **Abdeckungsansicht** (eine Spur pro Quelle, Lücken schraffiert).
+5. ⏳ **Intervalle** aus dem Labjournal, Bänder im Plot, Teilfenster-Regeln.
+6. ⏳ **Fenster-Statistik + Fenster-Inspektor** (Steigung mit Standardfehler, 2-Punkt, Drift, Integral) und zweiseitiges `spike`-Flag.
+7. ⏳ **Abgleich-Werkzeuge:** Kreuzkorrelation, Ankerereignisse, Dialog.
+8. ⏳ **Rechengrössen, Referenz-Fits, Szenarien:** sicherer Formel-Parser, Kalibrier- und XY-Ergebnisansicht, Fenstertabelle mit Export.
+9. ⏳ **Video-Spur:** Frame-Ansicht synchron zur Kampagnenuhr, Anker aus im Bild abgelesener Uhrzeit.
+10. ⏳ **Beispielkampagne + Doku:** End-to-End-Abgleich mit der bestehenden Skript-Auswertung.
+
+---
+
 ### 🔄 Etappe 3: Die vollständige Tidy- & Reshaping-DSL-Engine (JSON-AST)
 *Ziel: Ein lückenloser, mathematisch sauberer 10-Operatoren-Katalog.*
 1. **Pydantic Recipe AST:**
@@ -133,7 +162,7 @@ flowchart TD
 
 ---
 
-### 🛡️ Etappe 4: Tidy-Axiom-Validation & AI Self-Healing Loop
+### 🛡️ Etappe 4: Tidy-Axiom-Validation & AI Self-Healing Loop (nach Etappe 6 verschoben)
 *Ziel: Automatische Fehlererkennung und KI-gestützte Reparatur fehlerhafter Daten.*
 1. **Micro-Slice & Axiom-Checker:**
    - Validierung jedes Transformationsschritts zuerst auf einer 50-Zeilen-Mikrokopie, anschließend auf der Gesamttabelle.

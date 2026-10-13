@@ -69,7 +69,7 @@ def test_sources_and_default_channels(window: CampaignWindow) -> None:
 
 
 def test_curves_use_master_time(window: CampaignWindow) -> None:
-    x = window.canvas.curves[f"{FID_DAT.stem}/conc"].xData
+    x = window.canvas.curves[f"{FID_DAT.stem}/conc"].getOriginalDataset()[0]
     assert x[0] == to_epoch_s(datetime(2026, 10, 12, 14, 27, 2), ZONE)
     text = window.canvas.update_crosshair(x[0])
     assert text.startswith("12.10.2026 14:27:02")
@@ -77,7 +77,7 @@ def test_curves_use_master_time(window: CampaignWindow) -> None:
 
 def test_clock_editor_shifts_only_that_source(qapp: QApplication, window: CampaignWindow) -> None:
     pico_key = f"{PICO.stem}/kanal_1_kat_oben"
-    pico_before = window.canvas.curves[pico_key].xData
+    pico_before = window.canvas.curves[pico_key].getOriginalDataset()[0]
     panel = window.sources_panel
     panel.select_source(FID_DAT.stem)
     panel.offset_spin.setValue(970.0)
@@ -85,9 +85,9 @@ def test_clock_editor_shifts_only_that_source(qapp: QApplication, window: Campai
     qapp.processEvents()
     clock = window.session.campaign.source(FID_DAT.stem).clock
     assert (clock.offset_s, clock.method) == (970.0, "manual")
-    x = window.canvas.curves[f"{FID_DAT.stem}/conc"].xData
+    x = window.canvas.curves[f"{FID_DAT.stem}/conc"].getOriginalDataset()[0]
     assert x[0] == to_epoch_s(datetime(2026, 10, 12, 14, 43, 12), ZONE)
-    np.testing.assert_array_equal(window.canvas.curves[pico_key].xData, pico_before)
+    np.testing.assert_array_equal(window.canvas.curves[pico_key].getOriginalDataset()[0], pico_before)
     assert panel.tree.topLevelItem(0).text(3) == "+970.0 s"
 
 
@@ -130,7 +130,7 @@ def test_rebuilt_plot_shows_all_data(qapp: QApplication, window: CampaignWindow)
     window.refresh_plot()
     qapp.processEvents()
     for key, curve in window.canvas.curves.items():
-        x = curve.xData
+        x = curve.getOriginalDataset()[0]
         lo, hi = window.canvas.plot_items[key].getViewBox().viewRange()[0]
         assert lo <= np.nanmin(x) and np.nanmax(x) <= hi, key
     window.close()
@@ -149,6 +149,6 @@ def test_user_zoom_survives_a_rebuild(qapp: QApplication, window: CampaignWindow
     qapp.processEvents()
     lo, hi = next(iter(window.canvas.plot_items.values())).getViewBox().viewRange()[0]
     for curve in window.canvas.curves.values():  # back to all tracks of all sources
-        x = curve.xData
+        x = curve.getOriginalDataset()[0]
         assert lo <= np.nanmin(x) and np.nanmax(x) <= hi
     window.close()

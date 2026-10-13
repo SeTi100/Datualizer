@@ -20,7 +20,15 @@ from PySide6.QtWidgets import QApplication, QGraphicsItem
 
 from datualizer_core.campaign import ClockModel
 from datualizer_gui.campaign_window import CampaignWindow
-from datualizer_gui.components.curves import FAST_CURVES, _version, add_curve, connect_mask, plot_arrays
+from datualizer_gui.components.curves import (
+    FastCurve,
+    add_curve,
+    connect_mask,
+    curve_pen,
+    ensure_pixmap_cache,
+    peak_lod,
+    plot_arrays,
+)
 from datualizer_gui.components.plot_canvas import MultiChannelPlotCanvas
 from tests.test_campaign_gui import FID_DAT, PICO
 
@@ -65,10 +73,60 @@ class TestPlotArrays:
         assert not plot_arrays(np.array([0.0, 2.0, 1.0]), np.ones(3), np.array([], dtype=np.int64))[3]
 
 
+def bridged_breaks(x_out: np.ndarray, c_out: np.ndarray, break_lo: float, break_hi: float) -> int:
+    """Number of drawn segments that start before a break and end after it."""
+    a, b = x_out[:-1][c_out[:-1]], x_out[1:][c_out[:-1]]
+    return int(((a <= break_lo) & (b >= break_hi)).sum())
+
+
+class TestPeakLod:
+    def test_never_merges_across_a_dropout(self) -> None:
+        # 1 Hz logger with a 78-min dropout (values empty, time runs on), as in the PicoLog export
+        n = 36_000
+        x = np.arange(n, dtype=float)
+        y = np.sin(x / 500.0)
+        y[18_000:18_000 + 78 * 60] = np.nan
+        xs, ys, cs, x_sorted = plot_arrays(x, y, np.array([], dtype=np.int64))
+        for columns in (300, 1000, 1600, 4000):
+            xo, _, co = peak_lod(xs, ys, cs, None, columns, x_sorted)
+            assert len(xo) < len(xs)
+            assert bridged_breaks(xo, co, 17_999, 18_000 + 78 * 60) == 0, columns
+        xo, _, co = peak_lod(xs, ys, cs, (10_000.0, 30_000.0), 800, x_sorted)
+        assert bridged_breaks(xo, co, 17_999, 18_000 + 78 * 60) == 0
+
+    def test_never_merges_across_a_time_gap(self) -> None:
+        x = np.arange(10_000, dtype=float)
+        xs, ys, cs, _ = plot_arrays(x, np.cos(x), np.array([5_000]))
+        xo, _, co = peak_lod(xs, ys, cs, None, 200)
+        assert bridged_breaks(xo, co, 4_999, 5_000) == 0
+
+    def test_keeps_min_and_max_per_column_and_clips(self) -> None:
+        x = np.arange(100_000, dtype=float)
+        y = np.zeros_like(x)
+        y[54_321], y[54_322] = 7.0, -3.0
+        c = np.ones(len(x), dtype=bool)
+        xo, yo, _ = peak_lod(x, y, c, None, 500)
+        assert yo.max() == 7.0 and yo.min() == -3.0 and len(xo) <= 2 * 500 + 2
+        xo, _, _ = peak_lod(x, y, c, (1_000.0, 2_000.0), 500)
+        assert xo.min() >= 999 and xo.max() <= 2_001
+
+    def test_few_points_are_drawn_as_they_are(self) -> None:
+        x = np.arange(50, dtype=float)
+        c = np.ones(50, dtype=bool)
+        xo, yo, co = peak_lod(x, x * 2, c, None, 100)
+        assert xo.tolist() == x.tolist() and not co[-1]
+
+    def test_unsorted_time_is_not_reduced(self) -> None:
+        x = np.array([0.0, 2.0, 1.0])
+        xo, _, _ = peak_lod(x, x, np.ones(3, dtype=bool), (0.0, 1.0), 1, x_sorted=False)
+        assert xo.tolist() == x.tolist()
+
+
 class TestFastCurve:
-    def test_pyqtgraph_version_supports_fast_curves(self) -> None:
-        assert _version("0.13.7") < (0, 14) <= _version("0.14.0") <= _version("0.15.0.dev0")
-        assert FAST_CURVES  # pyproject requires pyqtgraph >= 0.14
+    def test_thin_pen_and_large_pixmap_cache(self, qapp: QApplication) -> None:
+        pen = curve_pen("#ff0000")
+        assert pen.widthF() == 1 and pen.isCosmetic()
+        assert ensure_pixmap_cache() >= 64 * 1024
 
     def test_large_curve_draws_one_min_max_pair_per_pixel(self, qapp: QApplication) -> None:
         w = pg.GraphicsLayoutWidget()
@@ -86,10 +144,8 @@ class TestFastCurve:
         assert len(xd) < n / 100  # drawn: about two points per screen column
         assert np.nanmax(yd) == 50.0
         assert np.isfinite(yd).sum() > len(yd) * 0.9
-        assert len(curve.xData) == n - n // 10  # all finite samples stay on the item
-        assert curve.opts["autoDownsample"] and curve.opts["downsampleMethod"] == "peak"
-        assert curve.opts["clipToView"]
-        assert curve.curve.cacheMode() == CACHED
+        assert len(curve.getOriginalDataset()[0]) == n - n // 10  # all finite samples stay on the item
+        assert curve.cacheMode() == CACHED
         assert p.getAxis("left").cacheMode() == CACHED
 
         p.setXRange(100_000, 101_000, padding=0)
@@ -104,8 +160,31 @@ class TestFastCurve:
         canvas = MultiChannelPlotCanvas()
         canvas.set_dataset(load_source(FID_DAT))
         curves = [item for p in canvas.plot_items.values() for item in p.listDataItems()]
-        assert curves and all(c.opts["autoDownsample"] for c in curves)
-        assert all(c.curve.cacheMode() == CACHED for c in curves)
+        assert curves and all(isinstance(c, FastCurve) for c in curves)
+        assert all(c.cacheMode() == CACHED for c in curves)
+        grid = next(iter(canvas.plot_items.values())).getAxis("left")
+        assert grid.grid and grid.style["maxTickLevel"] == 0  # grid at labelled ticks only
+
+    def test_main_canvas_does_not_bridge_the_logger_dropout(self, qapp: QApplication, tmp_path: Path) -> None:
+        """PicoLog export: time runs on through a dropout, the values are empty (Datenkatalog P24)."""
+        from datualizer_core import load_source
+
+        rows = ['"","Kanal 1 Kat_oben Letzte (C)"']
+        for i in range(20_000):
+            value = "" if 9_000 <= i < 9_000 + 78 * 60 else f"{150 + np.sin(i / 300):.3f}".replace(".", ",")
+            rows.append(f'"{i // 3600:02d}:{i % 3600 // 60:02d}:{i % 60:02d}","{value}"')
+        f = tmp_path / "picolog_dropout.csv"
+        f.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        canvas = MultiChannelPlotCanvas()
+        canvas.resize(900, 400)
+        canvas.set_dataset(load_source(f))
+        canvas.show()
+        qapp.processEvents()
+        curve = next(iter(canvas.plot_items.values())).listDataItems()[0]
+        xd, _ = curve.getData()
+        assert len(xd) < 20_000 - 78 * 60  # reduced to the screen
+        assert bridged_breaks(xd, curve.opts["connect"], 8_999, 9_000 + 78 * 60) == 0
+        canvas.close()
 
 
 class TestCampaignRefresh:
@@ -131,7 +210,7 @@ class TestCampaignRefresh:
         window.refresh_plot()
         assert canvas.curves[fid_key] is not fid_curve
         assert canvas.curves[pico_key] is pico_curve
-        assert canvas.curves[fid_key].xData[0] == fid_curve.xData[0] + 60.0
+        assert canvas.curves[fid_key].getOriginalDataset()[0][0] == fid_curve.getOriginalDataset()[0][0] + 60.0
 
     def test_session_caches_and_notices_direct_clock_edits(self, window: CampaignWindow) -> None:
         s = window.session

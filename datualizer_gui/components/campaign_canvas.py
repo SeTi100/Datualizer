@@ -12,7 +12,14 @@ from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from datualizer_core.campaign import Track
 from datualizer_gui.components import curves
-from datualizer_gui.components.curves import add_curve, rate_limited_mouse
+from datualizer_gui.components.curves import (
+    FastCurve,
+    add_curve,
+    curve_pen,
+    ensure_pixmap_cache,
+    light_grid,
+    rate_limited_mouse,
+)
 from datualizer_gui.components.plot_canvas import CHANNEL_COLORS
 
 
@@ -39,7 +46,7 @@ class CampaignPlotCanvas(QWidget):
         super().__init__(parent)
         self._tracks: list[Track] = []
         self._plot_items: dict[str, pg.PlotItem] = {}
-        self._curves: dict[str, pg.PlotDataItem] = {}
+        self._curves: dict[str, FastCurve] = {}
         self._crosshair_lines: dict[str, pg.InfiniteLine] = {}
         self._track_of: dict[str, Track] = {}  # track each kept subplot was drawn from
         self._zone = "UTC"
@@ -56,6 +63,7 @@ class CampaignPlotCanvas(QWidget):
         layout.addWidget(self.crosshair_label)
         self.graphics_layout = pg.GraphicsLayoutWidget()
         self.graphics_layout.setBackground("#18181c")
+        ensure_pixmap_cache()
         self._mouse_proxy = rate_limited_mouse(self.graphics_layout.scene(), self._on_mouse_moved)
         layout.addWidget(self.graphics_layout)
 
@@ -68,7 +76,7 @@ class CampaignPlotCanvas(QWidget):
         return self._plot_items
 
     @property
-    def curves(self) -> dict[str, pg.PlotDataItem]:
+    def curves(self) -> dict[str, FastCurve]:
         return self._curves
 
     def set_tracks(self, tracks: Sequence[Track], zone: str = "UTC") -> None:
@@ -91,7 +99,7 @@ class CampaignPlotCanvas(QWidget):
         last = len(self._tracks) - 1
         for i, tr in enumerate(self._tracks):
             key = f"{tr.source_id}/{tr.channel}"
-            pen = pg.mkPen(CHANNEL_COLORS[i % len(CHANNEL_COLORS)], width=1.3)
+            pen = curve_pen(CHANNEL_COLORS[i % len(CHANNEL_COLORS)])
             if old_tracks.get(key) is tr:
                 p, curve, line = old_plots[key], old_curves[key], old_lines[key]
                 self.graphics_layout.addItem(p, row=i, col=0)
@@ -109,11 +117,11 @@ class CampaignPlotCanvas(QWidget):
         if not self._tracks:
             self.crosshair_label.setText("Add sources and select channels to plot them on one time axis.")
 
-    def _new_plot(self, row: int, tr: Track, pen) -> tuple[pg.PlotItem, pg.PlotDataItem, pg.InfiniteLine]:
+    def _new_plot(self, row: int, tr: Track, pen) -> tuple[pg.PlotItem, FastCurve, pg.InfiniteLine]:
         # pyqtgraph's utcOffset is seconds west of UTC
         axis = pg.DateAxisItem(orientation="bottom", utcOffset=-self._utc_offset)
         p = self.graphics_layout.addPlot(row=row, col=0, axisItems={"bottom": axis})
-        p.showGrid(x=True, y=True, alpha=0.25)
+        light_grid(p, alpha=0.25)
         p.setLabel("left", tr.channel, units=tr.unit or None)
         p.setTitle(tr.label, size="9pt", color="#aaaaaa")
         curve = add_curve(p, tr.x, tr.y, tr.gap_rows, pen)

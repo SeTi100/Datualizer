@@ -183,6 +183,7 @@ flowchart TD
 1. **LTTB (Largest-Triangle-Three-Buckets) Downsampling:**
    - Intelligente Reduktion von $10^6$ Datenpunkten auf $2.000$ Pixelpunkte unter exakter Bewahrung aller Minima, Maxima und Peaks.
    - Vorgezogen (2026-10-13) als Zwischenstufe: Peak-Downsampling (ein Min/Max-Paar pro Bildschirmspalte) und Clip-to-View von pyqtgraph in beiden Plot-Ansichten (`datualizer_gui/components/curves.py`), Kurven und Achsen als Pixmap-Cache, Mausbewegungen auf 60 Hz begrenzt, in der Kampagne bleiben unveränderte Subplots beim Ankreuzen erhalten. Gemessen offscreen mit Software-Rendering, 1 Mio. Zeilen × 4 Kanäle: Fadenkreuz 5 ms statt mehrerer Sekunden pro Bild, Verschieben ≈ 160 ms. LTTB und Messung auf echter Hardware bleiben offen.
+   - Nachgebessert (2026-10-13) mit dem PicoLog-Export (36 000 Zeilen × 8 Kanäle) als Massstab: eigenes Peak-Downsampling (`FastCurve`), das nie über Lücken verbindet (pyqtgraphs Downsampling überbrückte den 78-min-Aussetzer mit einer Linie), 1-px-Stifte statt 1,5 px, Gitter nur an beschrifteten Ticks, Pixmap-Cache passend zur Bildschirmgrösse. Gemessen offscreen bei 8 Kanälen: Verschieben 461 → 47 ms, Hover 390 → 10 ms pro Bild.
 2. **Multi-Y-Achsen & Einheiten-Gruppierung:**
    - Automatische Gruppierung von Kanälen nach physikalischer Einheit (z. B. Subplot A: Alle Temperaturen in °C; Subplot B: Alle Drücke in bar).
    - Unterstützung für primäre und sekundäre Y-Achsen (Left/Right Y-Axis).

@@ -93,8 +93,8 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
 - Das lokale `.venv` wurde mit uv erstellt; `uv` ist nicht im PATH. pip wurde mit Zustimmung des Nutzers per `python -m ensurepip` nachgerüstet. Keine Pakete ungefragt installieren.
 - `python -m datualizer_gui.main_window` startet **nichts**. Der Einstieg ist `datualizer_gui.app`.
 - CI (`.github/workflows/pytest.yml`, Ubuntu, Python 3.11) installiert per `pip install -e ".[dev]"` und testet damit auch die Paket-Metadaten.
-- **pyqtgraph ≥ 0.14** ist nötig: Erst ab 0.14 wird das `connect`-Array beim Clip-to-View und Downsampling mitgeschnitten. Ältere Versionen zeichnen jeden Punkt (richtig, aber langsam; `curves.FAST_CURVES`). Ein bestehendes `.venv` mit `pip install -U "pyqtgraph>=0.14"` nachziehen.
-- Plots nie mit `p.plot(...)` direkt bauen, sondern über `curves.add_curve`, sonst fehlen Downsampling, Clip-to-View und Cache. `PlotDataItem.getData()` liefert die *angezeigten* (reduzierten) Daten, die vollen stehen in `xData`/`yData`.
+- **pyqtgraph ≥ 0.14** ist die getestete Version (`pyproject.toml`).
+- Kurven nie mit `p.plot(...)` bauen, sondern über `curves.add_curve` (`FastCurve`): eigenes Peak-Downsampling, das nie über eine Lücke hinweg verbindet (pyqtgraphs eigenes `setDownsampling` zog Linien über Logger-Aussetzer), Clip-to-View, 1-px-Stift, Pixmap-Cache. Gitter über `curves.light_grid`, Cache-Grösse über `curves.ensure_pixmap_cache` (Qt-Standard 10 MB reicht nur für wenige Subplots, danach wird jedes Bild komplett neu gezeichnet). `getData()` liefert die *angezeigten* Daten, alle Punkte gibt `getOriginalDataset()`.
 - **PySide6 6.12.0** bricht die GUI-Tests mit einem Speicherfehler ab („deallocating None“). `pyproject.toml` begrenzt deshalb auf `<6.12`. Vor dem Anheben die GUI-Tests mit der neuen Version mehrfach laufen lassen.
 - Änderungen an `.github/workflows/` brauchen beim Push den OAuth-Scope `workflow` (`gh auth refresh -s workflow`).
 

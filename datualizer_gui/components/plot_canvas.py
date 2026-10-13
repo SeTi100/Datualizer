@@ -9,7 +9,14 @@ from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from datualizer_core.dataset import DualModeDataset
-from datualizer_gui.components.curves import add_curve, connect_mask, rate_limited_mouse
+from datualizer_gui.components.curves import (
+    add_curve,
+    connect_mask,
+    curve_pen,
+    ensure_pixmap_cache,
+    light_grid,
+    rate_limited_mouse,
+)
 
 # High-contrast color palette for clear channel identification
 CHANNEL_COLORS = [
@@ -84,6 +91,7 @@ class MultiChannelPlotCanvas(QWidget):
 
         # PyQtGraph GraphicsLayoutWidget
         pg.setConfigOptions(antialias=True, useOpenGL=False)
+        ensure_pixmap_cache()
         self.graphics_layout = pg.GraphicsLayoutWidget()
         self.graphics_layout.setBackground("#18181c")
         self._mouse_proxy = rate_limited_mouse(self.graphics_layout.scene(), self._on_mouse_moved)
@@ -213,7 +221,7 @@ class MultiChannelPlotCanvas(QWidget):
             unit = self._dataset.units.get(ch)
             label = f"{ch} [{unit}]" if unit else ch
             p.setLabel("left", label, color=color, **{"font-size": "10pt", "font-weight": "bold"})
-            p.showGrid(x=True, y=True, alpha=0.22)
+            light_grid(p, alpha=0.22)
             p.getAxis("left").setWidth(65)
 
             if idx < total - 1:
@@ -226,13 +234,13 @@ class MultiChannelPlotCanvas(QWidget):
 
             # Plot series data
             # Plot series data (only the visible part, peak-downsampled to the screen width)
-            add_curve(p, self._time_data, ch_data, self._gap_rows, pg.mkPen(color=color, width=1.5))
+            add_curve(p, self._time_data, ch_data, self._gap_rows, curve_pen(color))
 
             # Add crosshair vertical line
             v_line = pg.InfiniteLine(
                 angle=90,
                 movable=False,
-                pen=pg.mkPen("#ffdd57", width=1.2, style=Qt.PenStyle.DashLine),
+                pen=pg.mkPen("#ffdd57", width=1, style=Qt.PenStyle.DashLine),
             )
             p.addItem(v_line, ignoreBounds=True)
             self._crosshair_lines.append(v_line)

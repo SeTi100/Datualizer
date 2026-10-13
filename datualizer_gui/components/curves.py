@@ -309,8 +309,14 @@ class OutOfRangeMarkers(pg.ScatterPlotItem):
 def add_curve(
     plot: pg.PlotItem, x: np.ndarray, y: np.ndarray, gap_rows: np.ndarray, pen, style: PlotStyle = PlotStyle.LINE
 ) -> FastCurve:
-    """Add a curve in the given style that stays fast for millions of points."""
+    """Add a curve in the given style that stays fast for millions of points.
+
+    Also hides pyqtgraph's "Plot Options" menu (alpha, FFT, downsampling, log mode): it calls
+    methods that only `PlotDataItem` has and raised an AttributeError on every change for a
+    `FastCurve`. The view box menu (View All, axes, export) stays.
+    """
     curve = FastCurve(x, y, gap_rows, pen, style)
+    plot.setMenuEnabled(False, enableViewBoxMenu=True)
     plot.addItem(curve)
     if curve.markers is not None:
         plot.addItem(curve.markers, ignoreBounds=True)  # same samples as the curve, bounds come from it

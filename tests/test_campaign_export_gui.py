@@ -183,3 +183,13 @@ def test_legend_uses_the_print_font(qapp: QApplication, window: CampaignWindow) 
     labels = [label for _, label in copy.plot_items["unit:C"].legend.items]
     assert len(labels) == 3 and all(label.opts["size"] == "16px" for label in labels)  # 12 pt at 96 px/in
     copy.deleteLater()
+
+
+def test_step_bands_are_exported_when_shown(qapp: QApplication, window: CampaignWindow) -> None:
+    x = window.canvas.curves[FID_KEY].getOriginalDataset()[0]
+    window.add_step(float(x[10]), float(x[60]))
+    assert window.canvas.export_copy().steps_items == []  # bands switched off: not in the file
+    window.set_bands_visible(True)
+    copy = window.canvas.export_copy()
+    assert len(copy.steps_items) == len(copy.all_plots())
+    copy.deleteLater()

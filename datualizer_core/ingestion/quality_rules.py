@@ -1,7 +1,8 @@
-"""Resolve `QualityConfig` against a loaded table (Datenkatalog P12–P17).
+"""Resolve `QualityConfig` against a loaded table (Datenkatalog P12–P17, P31).
 
 User-given channel names are translated to loaded names, unknown names fail loudly, and every
-automatic decision (jump thresholds, calculated channels) is written out for the spec.
+automatic decision (jump thresholds, calculated channels, spike window and scale floor) is
+written out for the spec.
 """
 
 from __future__ import annotations
@@ -11,7 +12,12 @@ from typing import Any, Mapping, Sequence
 import polars as pl
 
 from datualizer_core.ingestion.config import QualityConfig, Vocabulary
-from datualizer_core.quality import QualitySettings, suggest_jump_threshold
+from datualizer_core.quality import (
+    QualitySettings,
+    suggest_jump_threshold,
+    suggest_resolution,
+    suggest_spike_window,
+)
 
 
 class QualityConfigError(ValueError):
@@ -21,6 +27,7 @@ class QualityConfigError(ValueError):
 def resolve_quality(
     cfg: QualityConfig,
     df: pl.DataFrame,
+    time_col: str,
     channels: Sequence[str],
     run_columns: Sequence[str],
     channel_attrs: Mapping[str, Mapping[str, Any]],
@@ -57,6 +64,16 @@ def resolve_quality(
                 for key, value in channel_attrs.get(ch, {}).items()
             )
         ]
+    if cfg.spike_window_s is None:
+        resolved.spike_window_s = suggest_spike_window(df, time_col, run_columns)
+    if cfg.spike_channels is None:
+        resolved.spike_channels = list(channels)
+    else:
+        resolved.spike_channels = [channel(n, "spike_channels") for n in cfg.spike_channels]
+    min_scale = {channel(n, "spike_min_scale"): v for n, v in cfg.spike_min_scale.items()}
+    resolved.spike_min_scale = {
+        ch: min_scale[ch] if ch in min_scale else suggest_resolution(df, ch) for ch in resolved.spike_channels
+    }
     return resolved
 
 
@@ -72,6 +89,10 @@ def to_settings(cfg: QualityConfig) -> QualitySettings | None:
         dropout_max_duration_s=cfg.dropout_max_duration_s,
         ranges=dict(cfg.ranges),
         calculated_channels=tuple(cfg.calculated_channels or ()),
+        spike_window_s=cfg.spike_window_s or 0.0,
+        spike_k=cfg.spike_k,
+        spike_channels=tuple(cfg.spike_channels or ()),
+        spike_min_scale=dict(cfg.spike_min_scale),
     )
 
 

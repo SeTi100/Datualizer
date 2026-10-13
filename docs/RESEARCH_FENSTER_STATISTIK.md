@@ -117,7 +117,7 @@ def window_stats(x: np.ndarray, y: np.ndarray, gap_rows: np.ndarray, window: Win
 
 | Paket | Inhalt | Abnahme |
 |---|---|---|
-| **A. Kern-Statistik** | `stats/window.py`: Lage/Streuung, OLS, 2-Punkt, Integral mit Lücken, Abdeckung, `WindowResult`, `window_table` | Tests mit synthetischen Daten bekannter Lösung, Waagen-Fixture (`instrument_reader_12_10_extract.db`) im Schritt „T Einstellung 155“ |
+| **A. Kern-Statistik** ✅ erledigt | `stats/window.py`: Lage/Streuung, OLS, 2-Punkt, Integral mit Lücken, Abdeckung, `WindowResult`, `window_table` | Tests mit synthetischen Daten bekannter Lösung, Waagen-Fixture (`instrument_reader_12_10_extract.db`) im Schritt „T Einstellung 155“ |
 | **B. Unsicherheit + Autokorrelation** | n_eff, SEM_eff, Newey-West, AR(1)-Korrektur, Durbin-Watson, Theil-Sen + CI, Stationaritäts-Ampel | Simulierte AR(1)-Reihen: Abdeckung der Intervalle nahe Sollwert (Monte-Carlo-Test mit festem Seed) |
 | **C. `spike`-Flag** ✅ erledigt (PR #19) | Hampel in `quality.py`, Einstellungen in `QualityConfig` und Spec, Abgrenzung zu `dropout` | OCR-Fixture (`ocr_recording_105012_extract.csv`, Fehllesungen bis 9620 g), Replay-Test grün |
 | **D. Fenster-Inspektor** | Dock, Plot-Ausschnitt mit Fits, Kennwerttabelle, Ampel, Override pro Schritt | GUI-Tests offscreen, Screenshot im PR |

@@ -16,6 +16,7 @@ from datualizer_gui import campaign_window
 from datualizer_gui.campaign_window import CampaignWindow
 from datualizer_gui.components.interval_bands import MARKER_END, MARKER_START, marker_icon
 from datualizer_gui.components.intervals_panel import MappingDialog
+from datualizer_gui.settings import INTERVAL_BANDS, get_bool
 
 SA = Path(__file__).parent / "fixtures" / "sa_12_10"
 JOURNAL = SA / "labjournal_12_10_extract.xlsx"
@@ -177,6 +178,6 @@ def test_bands_toggle_in_settings(window: CampaignWindow) -> None:
     assert window.bands_visible and window.canvas.bands
     window.action_bands.trigger()
     assert window.canvas.bands == [] and window.intervals_panel.table.rowCount() == 38
-    assert not CampaignWindow().bands_visible  # remembered
+    assert not get_bool(INTERVAL_BANDS)  # remembered (no throwaway window: see test_campaign_gui)
     window.action_bands.trigger()
     assert window.canvas.bands

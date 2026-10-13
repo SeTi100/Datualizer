@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "openpyxl>=3.1",  # .xlsx sources (lab journal, device exports)
     "xlrd>=2.0",  # legacy .xls sources (BIFF), e.g. analyzer exports
+    "scipy>=1.11",  # t quantiles and Kendall distribution for the window statistics (package B)
     "tzdata; sys_platform == 'win32'",  # zone database for time-zone-aware datetimes on Windows
 ]
 

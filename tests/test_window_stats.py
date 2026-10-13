@@ -1,4 +1,4 @@
-"""Window statistics of a measurement step (Etappe 2b, step 6, package A).
+"""Window statistics of a measurement step (Etappe 2b, step 6, package A; package B in test_window_uncertainty.py).
 
 Synthetic series with a known answer, then the scale (OCR, SQLite) in the journal step
 "T Einstellung 155": the mass falls while ethanol is dosed.
@@ -60,13 +60,15 @@ class TestLine:
         assert r.integral_gap_s == pytest.approx(0.0)
         assert r.window_s == pytest.approx(80.0)
 
-    def test_package_b_fields_are_not_computed_yet(self) -> None:
+    def test_robust_slope_and_light(self) -> None:
+        """Package B on the line: Theil-Sen exact, interval collapsed, a clean slope is drift."""
         x, y = line()
         r = window_stats(x, y, NO_GAPS, WindowSpec(x[0], x[-1]), None, StatsConfig())
-        for name in ("sem_eff", "rho1", "n_eff", "slope_se_hac", "durbin_watson",
-                     "slope_theil_sen", "slope_ts_ci", "stationary", "integral_u"):
-            assert getattr(r, name) is None, name
-        assert any("autocorrelation" in a for a in r.assumptions)
+        assert r.slope_theil_sen == pytest.approx(0.5)
+        assert r.slope_ts_ci == (pytest.approx(0.5), pytest.approx(0.5))
+        assert r.slope_se_hac == pytest.approx(0.0, abs=1e-9)
+        assert r.stationary is False and any("not stationary: slope" in c for c in r.checks)
+        assert not any("Theil-Sen" in c for c in r.checks)
 
 
 def test_classic_slope_se_matches_the_textbook_formula() -> None:

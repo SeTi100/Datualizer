@@ -103,7 +103,7 @@ def window_stats(x: np.ndarray, y: np.ndarray, gap_rows: np.ndarray, window: Win
 
 `CampaignSession.window_table(channels, config) -> pl.DataFrame`: eine Zeile pro Schritt × Kanal, Spalten aus `WindowResult` plus Schritt-Label und Parametern. Grundlage für die Fenstertabelle mit Export (Schritt 8).
 
-**Abhängigkeiten:** scipy ist keine Abhängigkeit. Student-t-Quantile (für Konfidenzintervalle bei kleinem n_eff) und die Kendall-Verteilung brauchen entweder scipy oder eine eigene, getestete Umsetzung. **Offene Entscheidung des Nutzers**, nicht ungefragt installieren (AGENTS.md). Bis dahin: SE ausweisen, Intervalle mit Normalnäherung und Hinweis „n_eff klein“.
+**Abhängigkeiten:** Entschieden (Paket B): scipy ist Abhängigkeit, vom Nutzer freigegeben, und wird nur für t- und Normal-Quantile genutzt.
 
 ## 4. Fenster-Inspektor (GUI)
 
@@ -118,7 +118,7 @@ def window_stats(x: np.ndarray, y: np.ndarray, gap_rows: np.ndarray, window: Win
 | Paket | Inhalt | Abnahme |
 |---|---|---|
 | **A. Kern-Statistik** ✅ erledigt | `stats/window.py`: Lage/Streuung, OLS, 2-Punkt, Integral mit Lücken, Abdeckung, `WindowResult`, `window_table` | Tests mit synthetischen Daten bekannter Lösung, Waagen-Fixture (`instrument_reader_12_10_extract.db`) im Schritt „T Einstellung 155“ |
-| **B. Unsicherheit + Autokorrelation** | n_eff, SEM_eff, Newey-West, AR(1)-Korrektur, Durbin-Watson, Theil-Sen + CI, Stationaritäts-Ampel | Simulierte AR(1)-Reihen: Abdeckung der Intervalle nahe Sollwert (Monte-Carlo-Test mit festem Seed) |
+| **B. Unsicherheit + Autokorrelation** ✅ erledigt (Abschnitt 7) | n_eff, SEM_eff, Newey-West, AR(1)-Korrektur, Durbin-Watson, Theil-Sen + CI, Stationaritäts-Ampel | Simulierte AR(1)-Reihen: Abdeckung der Intervalle nahe Sollwert (Monte-Carlo-Test mit festem Seed) |
 | **C. `spike`-Flag** ✅ erledigt (PR #19) | Hampel in `quality.py`, Einstellungen in `QualityConfig` und Spec, Abgrenzung zu `dropout` | OCR-Fixture (`ocr_recording_105012_extract.csv`, Fehllesungen bis 9620 g), Replay-Test grün |
 | **D. Fenster-Inspektor** | Dock, Plot-Ausschnitt mit Fits, Kennwerttabelle, Ampel, Override pro Schritt | GUI-Tests offscreen, Screenshot im PR |
 
@@ -136,3 +136,23 @@ Reihenfolge: A → B → D; C unabhängig.
 - FID (EN 12619): [EN 12619:2013 Übersicht](https://standards.iteh.ai/catalog/standards/cen/99ba2781-f335-490d-ae16-f9cd39748f5b/en-12619-2013). Mittelungszeit und Driftgrenzen stehen nur im Normtext und waren nicht frei zugänglich; vor Übernahme konkreter Grenzwerte die Norm selbst prüfen.
 
 **Hinweis zur Belastbarkeit:** Die Formeln oben sind Standardverfahren. Die AR(1)-Korrektur ist ausdrücklich eine Näherung. Die Faustregeln (k = 3 beim Hampel-Filter, Lag-Regel bei Newey-West) sind Startwerte und müssen an den Fixtures geprüft werden.
+
+## 7. Umsetzung Paket B: Entscheidungen und Messwerte
+
+Stand nach der Umsetzung (`datualizer_core/stats/window.py`, Tests in `tests/test_window_uncertainty.py`).
+
+- **Neue Felder** in `WindowResult` zusätzlich zum Vorschlag in Abschnitt 3: `slope_se_ar1` (AR(1)-korrigierter SE, Abschnitt 2.2 Punkt 2) und `halves_diff` (Hälftenvergleich). `integral_u` = `sem_eff` · abgedeckte Zeit, als Näherung in `assumptions`.
+- **n_eff:** ρ₁ aus aufeinanderfolgenden nutzbaren Punkten (gleiche Abstände angenommen), n_eff nie unter 1. Ab n_eff < 10 steht eine Warnung in `checks`.
+- **Newey-West:** Bartlett-Gewichte, Lag nach Faustregel oder `StatsConfig.hac_lag`, Kleinstichproben-Faktor n/(n−2).
+- **Theil-Sen-Intervall:** Kendall-Normalnäherung mit Bindungskorrektur in t und y (wie `scipy.stats.theilslopes`, im Test gegen scipy geprüft). Bei positiv autokorrelierten Residuen wird Var(S) mit (1+ρ)/(1−ρ) verbreitert (Näherung, steht in `assumptions`). Ohne diese Verbreiterung wäre das Intervall bei Sensordaten viel zu schmal.
+- **Laufzeit Theil-Sen** (alle Paare, numpy, ein Kern, gemessen): n = 1000 ≈ 23 ms und 4 MB, n = 2000 ≈ 0,2 s und 16 MB, n = 5000 ≈ 1 s und 100 MB. Grenze `THEIL_SEN_MAX_POINTS = 1000`: Darüber wird eine Stichprobe von 499 500 Paaren mit festem Seed gezogen (reproduzierbar, in `assumptions`). Ein ganzes `window_stats` mit n = 5000 braucht damit ≈ 50 ms. Repeated Median wurde nicht gewählt: Er ist naiv ebenfalls O(n²) und hat kein einfaches Kendall-Intervall.
+- **Warnung OLS ↔ Theil-Sen:** Abweichung > 2 · SE der Theil-Sen-Steigung (aus ihrem Intervall). Der OLS-SE taugt dafür nicht, weil genau die Ausreisser ihn aufblähen (OCR-Fixture: OLS −1680 g/h, HAC-SE ≈ 8500 g/h; Theil-Sen −17,6 g/h).
+- **Stationaritäts-Ampel:** Steigungstest mit dem grösseren von HAC- und AR(1)-SE (die Lag-Regel ist bei starker Autokorrelation zu kurz) und Hälftenvergleich mit sem_eff je Hälfte, je auf 97,5 % (Bonferroni, zusammen ≈ 95 %), **Normal-Quantile**. t-Quantile mit n_eff-Freiheitsgraden bestrafen die Autokorrelation doppelt: Auf der OCR-Waage (Residuen eine glatte Kurve, Durbin-Watson 0,02) galt eine Drift von 6 SE sonst als stationär. Die R-Statistik ist nicht umgesetzt (optional).
+- **Monte-Carlo** (300 AR(1)-Reihen à 200 Punkte, Seed 1, Soll 95 %):
+
+| φ | Mittelwert (t, n_eff) | Steigung AR(1)-SE | Theil-Sen | Newey-West | klassisch | Ampel-Fehlalarm |
+|---|---|---|---|---|---|---|
+| 0,5 | 0,94 | 0,93 | 0,95 | 0,89 | 0,79 | 0,07 |
+| 0,8 | 0,91 | 0,92 | 0,93 | 0,75 | 0,53 | 0,12 |
+
+  Bei φ = 0,95 (separat gemessen, 400 Reihen) fallen Mittelwert, AR(1)-SE und Theil-Sen auf 0,80–0,87, Newey-West auf 0,45, und der Fehlalarm steigt auf ≈ 0,18; dort ist n_eff < 10 und die Warnung in `checks` steht. Newey-West mit der Faustregel deckt bei starker Autokorrelation deutlich zu wenig ab. Wer sich auf `slope_se_hac` stützt, sollte bei Durbin-Watson ≪ 2 `hac_lag` grösser setzen oder `slope_se_ar1` nehmen.

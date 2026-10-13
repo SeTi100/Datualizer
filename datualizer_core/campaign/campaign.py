@@ -116,11 +116,16 @@ class CampaignSession:
         profile: SourceProfile | None = None,
         source_id: str | None = None,
         label: str = "",
+        dataset: DualModeDataset | None = None,
     ) -> CampaignSource:
-        """Load a file and add it to the campaign (profile detected if not given)."""
+        """Load a file and add it to the campaign (profile detected if not given).
+
+        `dataset`: the result of `load_source(path, profile)` if the caller already loaded it
+        (e.g. while asking for a sheet), so the file is not read twice.
+        """
         path = Path(path)
         profile = profile if profile is not None else detect_profile(path)
-        ds = load_source(path, profile)
+        ds = dataset if dataset is not None else load_source(path, profile)
         ids = {s.id for s in self.campaign.sources}
         base = source_id or path.stem
         sid, n = base, 2

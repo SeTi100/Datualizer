@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QDockWidget, QFileDialog, QMainWindow, QMessageBox
 
 from datualizer_core.campaign import Campaign, CampaignSession
 from datualizer_gui.components.campaign_canvas import CampaignPlotCanvas
+from datualizer_gui.components.source_dialog import load_source_interactive
 from datualizer_gui.components.sources_panel import SourcesPanel
 
 SOURCE_FILTER = (
@@ -63,7 +64,11 @@ class CampaignWindow(QMainWindow):
     def add_sources(self, paths: Sequence[str | Path]) -> None:
         for p in paths:
             try:
-                src = self._session.add_source(p)
+                loaded = load_source_interactive(self, p, ask_clock_date=True)
+                if loaded is None:  # user cancelled the sheet/table choice
+                    continue
+                ds, profile = loaded
+                src = self._session.add_source(p, profile, dataset=ds)
             except Exception as exc:  # show, do not crash the window
                 QMessageBox.critical(self, "Cannot add source", f"{Path(p).name}:\n\n{exc}")
                 continue

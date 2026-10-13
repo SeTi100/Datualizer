@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 from pathlib import Path
 
@@ -30,6 +30,43 @@ def read_raw(path: Path, profile: SourceProfile | None) -> tuple[RawTable, Reade
     if kind is ReaderKind.SQLITE:
         return read_sqlite(path, profile.sqlite if profile else None), kind
     return read_delimited(path), kind
+
+
+def with_choices(
+    path: str | Path,
+    profile: SourceProfile | None,
+    *,
+    sheet: str | None = None,
+    table: str | None = None,
+    clock_date: date | None = None,
+) -> SourceProfile:
+    """Copy of `profile` with the user's choices: Excel sheet, SQLite table, date of clock times.
+
+    Without a profile, a minimal one for the file's reader is created, so the choice is stored in
+    the same place (`excel.sheet`, `sqlite.table`, `ingestion.time.clock_date`) and replays.
+    The given profile is never changed.
+    """
+    path = Path(path)
+    out = (
+        profile.model_copy(deep=True)
+        if profile is not None
+        else SourceProfile(name="manual", description="Choices made when opening the file.", reader=reader_for(path))
+    )
+    if sheet is not None:
+        out.excel.sheet = sheet
+    if table is not None:
+        out.sqlite.table = table
+        out.sqlite.query = None
+    if clock_date is not None:
+        out.ingestion.time.clock_date = clock_date
+        out.ingestion.time.origin = None
+    return out
+
+
+def needs_clock_date(ds: DualModeDataset) -> bool:
+    """True if the time column holds bare times of day and no date or origin places them."""
+    spec = ds.ingestion_spec
+    return ds.time_origin is None and spec.time.format is TimeFormat.CLOCK
 
 
 def load_source(

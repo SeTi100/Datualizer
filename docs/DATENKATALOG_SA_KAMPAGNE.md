@@ -23,7 +23,7 @@ Katalytische Oxidation von Ethanol in einer Versuchsanlage. Pro Solltemperatur w
 | P22 | Gemischte Zeitbasen in einer Datenbank (`started_at` UTC, `timestamp` lokal) | Zeitzone pro Zeitspalte; Zeitzonen DST-sicher | ✅ Zeitzonen über `TimeConfig.timezone`; ⏳ pro Spalte |
 | P23 | Logger exportiert nur verstrichene Zeit | Start aus Speicherzeit der Datei oder Vorgabe, als Annahme markiert | ✅ `TimeConfig.origin`, Profilregel `file_mtime_end` mit Hinweis in `source_meta` |
 | P24 | Logger-Aussetzer: Zeit läuft weiter, Werte leer (78 min) | Leere Zeilen behalten, nicht als Footer verwerfen | ✅ in der Mitte; ⚠ am Dateiende verwirft der Pre-Scanner sie als Footer (Warnung bei der Startzeit-Regel) |
-| P25 | Excel: Kopfzeile nicht in Zeile 1, Spalten ohne Überschrift, Uhrzeiten ohne Datum, `#DIV/0!` in Vorlagezeilen | Kopfzeilen-Erkennung, Platzhalternamen, `clock_date`, Tabellenfehler als Sentinel | ✅ `read_excel`, `TimeConfig.clock_date`, Sentinels |
+| P25 | Excel: Kopfzeile nicht in Zeile 1, Spalten ohne Überschrift, Uhrzeiten ohne Datum, `#DIV/0!` in Vorlagezeilen | Kopfzeilen-Erkennung, Platzhalternamen, `clock_date`, Tabellenfehler als Sentinel | ✅ `read_excel`, `TimeConfig.clock_date`, Sentinels; GUI fragt Blatt und Datum ab (Vorschlag aus dem Blattnamen) |
 | P26 | Geräteeinstellungen und Kalibrierung stecken in Nebenblättern | Als Metadaten mitnehmen statt verwerfen | ✅ `ExcelOptions.meta_sheets`, `ds.source_meta` |
 | P27 | Gelöschte Experimente/Runs in der Datenbank | Fehlende IDs anzeigen | ✅ `source_meta["missing_ids"]` |
 | P28 | Ungültige OCR-Lesungen (`is_valid = 0`) | Als leer markieren, nicht als Messwert | ✅ Profil `instrument_reader_db` |

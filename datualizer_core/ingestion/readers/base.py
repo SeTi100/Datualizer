@@ -10,7 +10,17 @@ import polars as pl
 
 
 class ReaderError(ValueError):
-    """A source cannot be read with the given options (e.g. sheet or table missing)."""
+    """A source cannot be read with the given options (e.g. sheet or table missing).
+
+    If the user has to pick a part of the source, `choice` names the profile field to set
+    (`"excel.sheet"` or `"sqlite.table"`) and `options` lists the valid values, so a GUI can
+    offer them instead of only showing the message.
+    """
+
+    def __init__(self, message: str, *, choice: str | None = None, options: Sequence[str] = ()) -> None:
+        super().__init__(message)
+        self.choice = choice
+        self.options = list(options)
 
 
 @dataclass(frozen=True)

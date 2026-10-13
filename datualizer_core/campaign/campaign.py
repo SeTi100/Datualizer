@@ -21,6 +21,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from datualizer_core.campaign.clock import ClockModel, epoch_seconds, to_epoch_s
 from datualizer_core.campaign.coverage import SourceCoverage, coverage_intervals, value_rows
 from datualizer_core.campaign.display import ChannelDisplay, YScale
+from datualizer_core.campaign.intervals import (
+    Interval,
+    IntervalConfigError,
+    IntervalMapping,
+    IntervalSet,
+    WindowRule,
+    derive_intervals,
+    resolve_manual,
+    suggest_mapping,
+)
 from datualizer_core.dataset import DualModeDataset
 from datualizer_core.ingestion.config import IngestionConfig
 from datualizer_core.ingestion.profiles import SourceProfile, detect_profile
@@ -69,6 +79,11 @@ class Campaign(BaseModel):
         None, description="Reference t0 of the relative time axis (with UTC offset); None = start of the data shown."
     )
     sources: list[CampaignSource] = Field(default_factory=list)
+    interval_mappings: list[IntervalMapping] = Field(
+        default_factory=list, description="Sources that list measurement steps, with their column roles."
+    )
+    intervals: list[Interval] = Field(default_factory=list, description="Measurement steps set by hand.")
+    window_rule: WindowRule = Field(default_factory=WindowRule, description="Evaluated part of each step.")
     notes: str = ""
 
     def source(self, source_id: str) -> CampaignSource:
@@ -126,6 +141,7 @@ class CampaignSession:
         self._master_cache: dict[str, tuple[ClockModel, str, np.ndarray | None]] = {}
         self._track_cache: dict[tuple[str, str], Track] = {}
         self._coverage_cache: dict[tuple[str, tuple[str, ...] | None], tuple[np.ndarray | None, SourceCoverage]] = {}
+        self._interval_cache: tuple[tuple, IntervalSet] | None = None
         for src in self.campaign.sources:
             self._load(src)
 
@@ -179,6 +195,9 @@ class CampaignSession:
 
     def remove_source(self, source_id: str) -> None:
         self.campaign.sources = [s for s in self.campaign.sources if s.id != source_id]
+        self.campaign.interval_mappings = [
+            m for m in self.campaign.interval_mappings if source_id not in (m.source_id, m.clock_source)
+        ]
         self.datasets.pop(source_id, None)
         self._forget(source_id)
 
@@ -309,6 +328,89 @@ class CampaignSession:
             cov = SourceCoverage(source_id, label, self.span(source_id), segments, gaps)
         self._coverage_cache[key] = (t, cov)
         return cov
+
+    # ---------------------------------------------------------------- intervals
+    def suggest_mapping(self, source_id: str) -> IntervalMapping:
+        """Column roles for steps of a source: the profile's suggestion if it fits, else from the data shape."""
+        src = self.campaign.source(source_id)
+        ds = self.datasets.get(source_id)
+        if ds is None:
+            raise IntervalConfigError(f"Source {source_id!r} is not loaded.")
+        return suggest_mapping(ds, source_id, src.profile.intervals if src.profile else None)
+
+    def set_mapping(self, mapping: IntervalMapping) -> None:
+        """Add or replace the step mapping of `mapping.source_id` (checked against the data first)."""
+        self.campaign.source(mapping.source_id)
+        if mapping.clock_source is not None:
+            self.campaign.source(mapping.clock_source)
+        self.preview_steps(mapping)  # unknown columns fail loudly here, not later in the plot
+        others = [m for m in self.campaign.interval_mappings if m.source_id != mapping.source_id]
+        self.campaign.interval_mappings = others + [mapping]
+
+    def remove_mapping(self, source_id: str) -> None:
+        self.campaign.interval_mappings = [m for m in self.campaign.interval_mappings if m.source_id != source_id]
+
+    def set_window_rule(self, rule: WindowRule) -> None:
+        self.campaign.window_rule = rule
+
+    def add_interval(self, start: datetime, end: datetime, label: str = "", **kwargs) -> Interval:
+        """Add a step set by hand (master wall-clock times in the campaign zone); start and end may be swapped."""
+        if end < start:
+            start, end = end, start
+        ids = {iv.id for iv in self.campaign.intervals}
+        n = len(ids) + 1
+        while f"m{n}" in ids:
+            n += 1
+        iv = Interval(id=f"m{n}", label=label or f"Step {n}", start=start, end=end, **kwargs)
+        self.campaign.intervals.append(iv)
+        return iv
+
+    def update_interval(self, interval_id: str, **changes) -> Interval:
+        for i, iv in enumerate(self.campaign.intervals):
+            if iv.id == interval_id:
+                new = Interval.model_validate({**iv.model_dump(), **changes})
+                self.campaign.intervals[i] = new
+                return new
+        raise KeyError(f"No manual step {interval_id!r}.")
+
+    def remove_interval(self, interval_id: str) -> None:
+        self.campaign.intervals = [iv for iv in self.campaign.intervals if iv.id != interval_id]
+
+    def intervals(self) -> IntervalSet:
+        """All measurement steps on master time: derived from the mappings, then the manual ones.
+
+        Derived steps are computed anew whenever data, clocks, mappings or the window rule change.
+        """
+        c = self.campaign
+        key = (
+            c.timezone,
+            c.model_dump_json(include={"interval_mappings", "intervals", "window_rule"}),
+            tuple((s.id, s.clock.model_dump_json(), id(self.datasets.get(s.id))) for s in c.sources),
+        )
+        if self._interval_cache is not None and self._interval_cache[0] == key:
+            return self._interval_cache[1]
+        out, problems = [], []
+        for m in c.interval_mappings:
+            try:
+                ivs, probs = self.preview_steps(m)
+            except (IntervalConfigError, KeyError) as exc:
+                ivs, probs = [], [f"{m.source_id}: {exc}"]
+            out += ivs
+            problems += probs
+        out += [resolve_manual(iv, c.timezone, c.window_rule) for iv in c.intervals if iv.enabled]
+        result = IntervalSet(sorted(out, key=lambda iv: iv.start), problems)
+        self._interval_cache = (key, result)
+        return result
+
+    def preview_steps(self, m: IntervalMapping):
+        """Steps a mapping would give (without storing it); unknown columns raise IntervalConfigError."""
+        ds = self.datasets.get(m.source_id)
+        if ds is None:
+            return [], [f"{m.source_id}: source not loaded, no steps."]
+        src = self.campaign.source(m.source_id)
+        clock = self.campaign.source(m.clock_source or m.source_id).clock
+        formats = src.spec.time.datetime_formats if src.spec is not None else ()
+        return derive_intervals(ds, m, self.campaign.timezone, clock, self.campaign.window_rule, formats)
 
     # ------------------------------------------------------------- persistence
     def save(self, path: str | Path) -> None:

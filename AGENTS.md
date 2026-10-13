@@ -154,10 +154,11 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
   - Schritt 6, Paket C: zweiseitiges `spike`-Flag (Hampel, P31) in `quality.py`; `QualityConfig.spike_window_s` (Sekunden, ohne Vorgabe 21 Abtastschritte), `spike_k`, `spike_channels`, `spike_min_scale` (ohne Vorgabe die Auflösung), alles aufgelöst in der Spec; nicht Beurteilbares (MAD = 0) in `ds.quality_notes`
   - Einstellungen des Kampagnenfensters, Teil 1: Darstellung pro Kanal (`ChannelDisplay`: Alias, `PlotStyle`, `YScale` auto/robust/fest) in `campaign.json`, Standardstil aus `SourceProfile.plot_style`, Dialog `components/channel_display_dialog.py`, Randmarker für Werte ausserhalb des Bereichs
   - Einstellungen des Kampagnenfensters, Teil 2: Zoom nur auf der Zeitachse und Y passend zum sichtbaren Ausschnitt (`components/time_axis.TimeViewBox`), Zeitachse als Uhrzeit, Datum + Uhrzeit oder t − t0 (`Campaign.time_reference`), Zone der Kampagne (`session.set_timezone`), Mindesthöhe der Subplots mit Scrollen
+  - Einstellungen des Kampagnenfensters, Teil 3: Subplots pro Kanal, nach Einheit oder nach Quelle mit Legende, Farben nach Kanal, Quelle oder manuell (`components/plot_groups.py`, `ChannelDisplay.color`). `canvas.plot_items` ist nach Subplot geschlüsselt (bei „pro Kanal“ gleich dem Spur-Schlüssel `quelle/kanal`), `canvas.curves` und `edge_markers` immer nach Spur
 
 **Nächste offene Punkte:**
 
-1. **Einstellungen des Kampagnenfensters, Punkte 5, 6 und 8** (Gruppierung und Farben, Infozeile, Export; siehe Masterplan unter Schritt 4).
+1. **Einstellungen des Kampagnenfensters, Punkte 6 und 8** (Infozeile, Export; siehe Masterplan unter Schritt 4).
 2. **Etappe 2b, Schritte 6–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md)): Fenster-Statistik (Pakete A, B, D laut Recherche; `spike` ist fertig), Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
 3. **Wert und Einheit in einer Zelle (P6)** (`Konzentration = "20 °C"`) und widersprüchliche Metadaten anzeigen (P8).
 4. Danach: Block-Segmentation und Ragged-Healer (ursprünglicher Etappe-2-Plan), sobald Gerätedaten mit Kopfblöcken vorliegen.

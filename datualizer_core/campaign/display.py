@@ -70,6 +70,9 @@ class ChannelDisplay(BaseModel):
     alias: str = Field("", description="Display name for axis, tree and readout; the channel name in the data stays.")
     style: PlotStyle | None = Field(None, description="Plot style; None = default of the source profile.")
     y_scale: YScale = Field(default_factory=YScale)
+    color: str | None = Field(
+        None, pattern=r"^#[0-9a-fA-F]{6}$", description="Line colour '#rrggbb' for the manual colour scheme."
+    )
 
     def is_default(self) -> bool:
         return self == ChannelDisplay()

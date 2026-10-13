@@ -6,14 +6,18 @@ Display only: the settings go to campaign.json, the dataset stays as loaded.
 from __future__ import annotations
 
 import numpy as np
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -100,6 +104,17 @@ class ChannelDisplayDialog(QDialog):
         self.max_spin.setValue(scale.max if scale.max is not None else data_hi)
         form.addRow("Min", self.min_spin)
         form.addRow("Max", self.max_spin)
+        self._color: str | None = display.color
+        color_row = QHBoxLayout()
+        self.color_button = QPushButton()
+        self.color_button.setToolTip("Used with Settings → Subplots and Colours → Manual Colours")
+        self.color_button.clicked.connect(self._choose_color)
+        self.color_clear = QPushButton("Automatic")
+        self.color_clear.clicked.connect(lambda: self.set_color(None))
+        color_row.addWidget(self.color_button)
+        color_row.addWidget(self.color_clear)
+        form.addRow("Colour", color_row)
+        self.set_color(display.color)
         self._form = form
 
         self.error_label = QLabel()
@@ -112,6 +127,17 @@ class ChannelDisplayDialog(QDialog):
         layout.addWidget(buttons)
         self.scale_combo.currentIndexChanged.connect(self._update_enabled)
         self._update_enabled()
+
+    def set_color(self, color: str | None) -> None:
+        """Manual colour '#rrggbb' (None = automatic)."""
+        self._color = color
+        self.color_button.setText(color or "Automatic")
+        self.color_button.setStyleSheet(f"background-color: {color};" if color else "")
+
+    def _choose_color(self) -> None:
+        chosen = QColorDialog.getColor(QColor(self._color or "#00d2ff"), self, "Line colour")
+        if chosen.isValid():
+            self.set_color(chosen.name())
 
     def style(self) -> PlotStyle | None:
         """Chosen style, None = profile default."""
@@ -141,7 +167,7 @@ class ChannelDisplayDialog(QDialog):
             scale = YScale(mode=mode, min=self.min_spin.value(), max=self.max_spin.value())
         else:
             scale = YScale()
-        return ChannelDisplay(alias=self.alias_edit.text().strip(), style=self.style(), y_scale=scale)
+        return ChannelDisplay(alias=self.alias_edit.text().strip(), style=self.style(), y_scale=scale, color=self._color)
 
     def accept(self) -> None:
         try:

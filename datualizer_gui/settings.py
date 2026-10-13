@@ -13,6 +13,8 @@ WHEEL_TIME_ONLY = "view/wheel_time_only"  # mouse wheel zooms the time axis only
 Y_FIT_VISIBLE = "view/y_fit_visible"  # auto y range fits the visible time span
 TIME_AXIS = "time/axis_mode"  # TimeAxisMode value: auto, clock, datetime, relative
 MIN_SUBPLOT_HEIGHT = "layout/min_subplot_height"  # px; below that the plot area scrolls (0 = off)
+GROUP_BY = "layout/group_by"  # GroupBy value: channel, unit, source
+COLOR_BY = "layout/color_by"  # ColorBy value: channel, source, manual
 INTERVAL_BANDS = "tools/interval_bands"  # draw measurement steps as bands in the campaign plots
 
 DEFAULTS: dict[str, object] = {
@@ -22,6 +24,8 @@ DEFAULTS: dict[str, object] = {
     Y_FIT_VISIBLE: True,
     TIME_AXIS: "auto",
     MIN_SUBPLOT_HEIGHT: 120,
+    GROUP_BY: "channel",
+    COLOR_BY: "channel",
 }
 
 

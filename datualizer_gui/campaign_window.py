@@ -32,9 +32,12 @@ from datualizer_gui.components.campaign_canvas import CampaignPlotCanvas
 from datualizer_gui.components.intervals_panel import IntervalsPanel
 from datualizer_gui.components.source_dialog import load_source_interactive
 from datualizer_gui.components.sources_panel import SourcesPanel
+from datualizer_gui.components.plot_groups import ColorBy, GroupBy
 from datualizer_gui.components.time_axis import TimeAxisMode
 from datualizer_gui.settings import (
+    COLOR_BY,
     COVERAGE_INFO,
+    GROUP_BY,
     INTERVAL_BANDS,
     MIN_SUBPLOT_HEIGHT,
     TIME_AXIS,
@@ -52,6 +55,17 @@ TIME_AXIS_NAMES = {
     TimeAxisMode.CLOCK: "&Clock Time",
     TimeAxisMode.DATETIME: "&Date + Time",
     TimeAxisMode.RELATIVE: "&Relative (t \u2212 t0)",
+}
+
+GROUP_NAMES = {
+    GroupBy.CHANNEL: "One Subplot per &Channel",
+    GroupBy.UNIT: "Group by &Unit",
+    GroupBy.SOURCE: "Group by &Source",
+}
+COLOR_NAMES = {
+    ColorBy.CHANNEL: "Colours by &Channel",
+    ColorBy.SOURCE: "Colours by &Source",
+    ColorBy.MANUAL: "&Manual Colours (Channel Display)",
 }
 
 SOURCE_FILTER = (
@@ -141,6 +155,10 @@ class CampaignWindow(QMainWindow):
             action.toggled.connect(lambda on, key=key: self._on_view_option(key, on))
             settings_menu.addAction(action)
         settings_menu.addAction("Minimum Subplot &Height...", self._on_min_height)
+        layout_menu = settings_menu.addMenu("&Subplots and Colours")
+        self.group_actions = self._radio_actions(layout_menu, GROUP_NAMES, lambda v: self.set_grouping(group_by=GroupBy(v)))
+        layout_menu.addSeparator()
+        self.color_actions = self._radio_actions(layout_menu, COLOR_NAMES, lambda v: self.set_grouping(color_by=ColorBy(v)))
         settings_menu.addSeparator()
         tools_menu = settings_menu.addMenu("&Tools")
         self.action_coverage = QAction("&Coverage Info", self)
@@ -216,6 +234,37 @@ class CampaignWindow(QMainWindow):
         self.refresh_plot()
 
     # ----------------------------------------------------------- time and view
+    def _radio_actions(self, menu, names: dict, slot) -> dict:
+        """Exclusive checkable actions for an enum; `slot` gets the enum value string."""
+        group = QActionGroup(menu)
+        actions = {}
+        for value, text in names.items():
+            action = QAction(text, menu)
+            action.setCheckable(True)
+            action.setData(value.value)  # Qt returns str enums as plain str
+            group.addAction(action)
+            menu.addAction(action)
+            actions[value] = action
+        group.triggered.connect(lambda a: slot(a.data()))
+        return actions
+
+    def set_grouping(self, group_by: GroupBy | None = None, color_by: ColorBy | None = None) -> None:
+        """Subplots per channel, unit or source and the colour scheme; remembered as preferences."""
+        group_by = GroupBy(group_by) if group_by is not None else self._setting_enum(GROUP_BY, GroupBy)
+        color_by = ColorBy(color_by) if color_by is not None else self._setting_enum(COLOR_BY, ColorBy)
+        set_value(GROUP_BY, group_by.value)
+        set_value(COLOR_BY, color_by.value)
+        self.group_actions[group_by].setChecked(True)
+        self.color_actions[color_by].setChecked(True)
+        self.canvas.set_grouping(group_by, color_by)
+
+    @staticmethod
+    def _setting_enum(key: str, enum):
+        try:
+            return enum(get_str(key))
+        except ValueError:  # edited by hand
+            return next(iter(enum))
+
     def set_time_axis_mode(self, mode: TimeAxisMode) -> None:
         """Clock time, date + time or relative to t0; remembered as a personal preference."""
         mode = TimeAxisMode(mode)
@@ -243,12 +292,10 @@ class CampaignWindow(QMainWindow):
     def _apply_view_settings(self) -> None:
         self.canvas.set_view_options(get_bool(WHEEL_TIME_ONLY), get_bool(Y_FIT_VISIBLE))
         self.canvas.set_min_subplot_height(get_int(MIN_SUBPLOT_HEIGHT))
-        try:
-            mode = TimeAxisMode(get_str(TIME_AXIS))
-        except ValueError:  # edited by hand
-            mode = TimeAxisMode.AUTO
+        mode = self._setting_enum(TIME_AXIS, TimeAxisMode)
         self.time_axis_actions[mode].setChecked(True)
         self.canvas.set_time_axis(mode, self._session.time_reference_s)
+        self.set_grouping()
 
     def _on_view_option(self, key: str, on: bool) -> None:
         set_bool(key, on)
@@ -312,7 +359,11 @@ class CampaignWindow(QMainWindow):
             [self._session.coverage(src.id) for src in self._session.campaign.sources]
             if self.coverage_visible else []
         )
-        self.canvas.set_tracks(tracks, self._session.campaign.timezone, coverage)
+        sources = self._session.campaign.sources
+        self.canvas.set_tracks(
+            tracks, self._session.campaign.timezone, coverage,
+            source_order=[s.id for s in sources], source_labels={s.id: s.label or s.id for s in sources},
+        )
         self.refresh_steps()
 
     def refresh_steps(self) -> None:

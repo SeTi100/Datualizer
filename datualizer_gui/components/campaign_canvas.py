@@ -1,4 +1,4 @@
-"""Plot canvas for a campaign: one subplot per track, each with its own x array on master time."""
+"""Plot canvas for a campaign: tracks in subplots (per channel, unit or source), each with its own x array on master time."""
 
 from __future__ import annotations
 
@@ -35,6 +35,7 @@ from datualizer_gui.components.coverage_strip import (
 )
 from datualizer_gui.components.interval_bands import PENDING_PEN, StepBand, StepsItem, marker_icon, marker_text
 from datualizer_gui.components.plot_canvas import CHANNEL_COLORS
+from datualizer_gui.components.plot_groups import ColorBy, GroupBy, PlotGroup, group_tracks, track_colors, track_key
 from datualizer_gui.components.readout import ReadoutLabel, format_value
 from datualizer_gui.components.time_axis import TimeAxisMode, TimeViewBox, format_relative, make_time_axis
 
@@ -44,6 +45,15 @@ def utc_offset_s(epoch_s: float, zone: str) -> int:
     s = pl.Series([int(epoch_s * 1e6)]).cast(pl.Datetime("us")).dt.replace_time_zone("UTC")
     local = s.dt.convert_time_zone(zone).dt.replace_time_zone(None)
     return int((local.dt.epoch("us")[0] - int(epoch_s * 1e6)) / 1e6)
+
+
+def group_limits(tracks: Sequence[Track]) -> tuple[float, float] | None:
+    """Y range of a subplot: the union of its tracks' fixed or robust ranges; auto (None) as
+    soon as one track is auto-scaled."""
+    limits = [tr.y_scale.limits(tr.y) for tr in tracks]
+    if not limits or any(lim is None for lim in limits):
+        return None
+    return min(lo for lo, _ in limits), max(hi for _, hi in limits)  # type: ignore[misc]
 
 
 def connect_mask(values: np.ndarray, gap_rows: np.ndarray) -> np.ndarray:
@@ -73,8 +83,14 @@ class CampaignPlotCanvas(QWidget):
         self._curves: dict[str, FastCurve] = {}
         self._crosshair_lines: dict[str, pg.InfiniteLine] = {}
         self._edge_markers: dict[str, OutOfRangeMarkers] = {}  # tracks with a fixed or robust y range
-        self._y_limits: dict[str, tuple[float, float]] = {}
-        self._track_of: dict[str, Track] = {}  # track each kept subplot was drawn from
+        self._y_limits: dict[str, tuple[float, float]] = {}  # per subplot
+        self._groups: list[PlotGroup] = []
+        self._group_tracks: dict[str, tuple[Track, ...]] = {}  # tracks each kept subplot was drawn from
+        self._colors: dict[str, str] = {}  # per track key
+        self._group_by = GroupBy.CHANNEL
+        self._color_by = ColorBy.CHANNEL
+        self._source_order: list[str] = []
+        self._source_labels: dict[str, str] = {}
         self._coverage: list[SourceCoverage] = []
         self.coverage_plot: pg.PlotItem | None = None
         self.coverage_item: CoverageItem | None = None
@@ -149,45 +165,75 @@ class CampaignPlotCanvas(QWidget):
 
     @property
     def edge_markers(self) -> dict[str, OutOfRangeMarkers]:
+        """Edge markers per track key (tracks in a subplot with a fixed or robust y range)."""
         return self._edge_markers
+
+    @property
+    def groups(self) -> list[PlotGroup]:
+        return list(self._groups)
+
+    @property
+    def colors(self) -> dict[str, str]:
+        """Colour per track key."""
+        return dict(self._colors)
+
+    def set_grouping(self, group_by: GroupBy, color_by: ColorBy) -> None:
+        """Subplot per channel, per unit or per source; colours by channel, by source or manual."""
+        group_by, color_by = GroupBy(group_by), ColorBy(color_by)
+        if (group_by, color_by) == (self._group_by, self._color_by):
+            return
+        self._group_by, self._color_by = group_by, color_by
+        self.set_tracks(self._tracks, self._zone, self._coverage)
 
     @property
     def coverage(self) -> list[SourceCoverage]:
         return list(self._coverage)
 
     def set_tracks(
-        self, tracks: Sequence[Track], zone: str = "UTC", coverage: Sequence[SourceCoverage] = ()
+        self,
+        tracks: Sequence[Track],
+        zone: str = "UTC",
+        coverage: Sequence[SourceCoverage] = (),
+        source_order: Sequence[str] | None = None,
+        source_labels: dict[str, str] | None = None,
     ) -> None:
         """Show the coverage of these sources and these tracks on one time axis.
 
-        A range the user zoomed to is kept, otherwise everything is shown. Subplots of tracks
-        that are still shown (the same Track object) are kept with their drawn curve, so ticking
-        one more channel does not redraw all the others.
+        A range the user zoomed to is kept, otherwise everything is shown. Subplots whose tracks
+        are still the same Track objects are kept with their drawn curves, so ticking one more
+        channel does not redraw all the others. `source_order` (the campaign's sources) gives
+        each source its colour; `source_labels` names source subplots.
         """
         self._tracks = list(tracks)
         self._coverage = list(coverage)
+        if source_order is not None:
+            self._source_order = list(source_order)
+        if source_labels is not None:
+            self._source_labels = dict(source_labels)
         starts = [float(np.nanmin(t.x)) for t in self._tracks if np.isfinite(t.x).any()]
         starts += [c.span[0] for c in self._coverage if c.span is not None]
         offset = utc_offset_s(min(starts), zone) if starts else 0
         t0 = self._t0_setting if self._t0_setting is not None else (min(starts) if starts else None)
         if self._axis_mode is not TimeAxisMode.RELATIVE:
             t0 = None  # only the relative axis depends on it: no redraw when the data start moves
-        old_plots, old_curves, old_lines, old_tracks = self._plot_items, self._curves, self._crosshair_lines, self._track_of
+        old_plots, old_curves, old_lines, old_groups = self._plot_items, self._curves, self._crosshair_lines, self._group_tracks
         old_markers = self._edge_markers
         if (offset, zone, t0) != (self._utc_offset, self._zone, self._t0):
-            old_tracks = {}  # axis labels depend on offset and t0: build all subplots anew
+            old_groups = {}  # axis labels depend on offset and t0: build all subplots anew
         self._zone, self._utc_offset, self._t0 = zone, offset, t0
         for p in old_plots.values():  # unlink first: the old coverage strip is deleted below
             p.setXLink(None)
         self.graphics_layout.clear()  # detaches the subplots, kept ones are added back below
-        self._plot_items, self._curves, self._crosshair_lines, self._track_of = {}, {}, {}, {}
+        self._plot_items, self._curves, self._crosshair_lines, self._group_tracks = {}, {}, {}, {}
         self._edge_markers, self._y_limits = {}, {}
         self.coverage_plot = self.coverage_item = self._coverage_line = None
+        self._groups = group_tracks(self._tracks, self._group_by, self._source_labels)
+        self._colors = track_colors(self._tracks, self._color_by, CHANNEL_COLORS, self._source_order)
 
         first: pg.PlotItem | None = None
         if self._coverage:  # rebuilt every time: cheap, and the lanes follow the source list
             first, self.coverage_item = build_coverage_plot(
-                self.graphics_layout, self._coverage, CHANNEL_COLORS, self._utc_offset, axis=self._make_axis()
+                self.graphics_layout, self._coverage, self._lane_colors(), self._utc_offset, axis=self._make_axis()
             )
             first.getAxis("bottom").setStyle(showValues=not self._tracks)
             first.getViewBox().sigRangeChangedManually.connect(self._on_manual_range)
@@ -196,30 +242,32 @@ class CampaignPlotCanvas(QWidget):
             )
             first.addItem(self._coverage_line, ignoreBounds=True)
             self.coverage_plot = first
-        for i, tr in enumerate(self._tracks):
-            key = f"{tr.source_id}/{tr.channel}"
-            pen = curve_pen(CHANNEL_COLORS[i % len(CHANNEL_COLORS)])
+        for i, group in enumerate(self._groups):
+            gkey = group.key
             row = i + 1  # row 0 belongs to the coverage strip
-            limits = tr.y_scale.limits(tr.y)
+            limits = group_limits(group.tracks)
             if limits is not None:
-                self._y_limits[key] = limits
-            if old_tracks.get(key) is tr:
-                p, curve, line = old_plots[key], old_curves[key], old_lines[key]
+                self._y_limits[gkey] = limits
+            kept = old_groups.get(gkey)
+            if kept is not None and len(kept) == len(group.tracks) and all(a is b for a, b in zip(kept, group.tracks)):
+                p, line = old_plots[gkey], old_lines[gkey]
                 self.graphics_layout.addItem(p, row=row, col=0)
-                curve.set_pen(pen)
-                if key in old_markers:
-                    old_markers[key].setPen(pen.color())
-                    old_markers[key].setBrush(pen.color())
-                    self._edge_markers[key] = old_markers[key]
+                for tr in group.tracks:
+                    key = track_key(tr)
+                    pen = curve_pen(self._colors[key])
+                    self._curves[key] = old_curves[key]
+                    self._curves[key].set_pen(pen)
+                    if key in old_markers:
+                        old_markers[key].setPen(pen.color())
+                        old_markers[key].setBrush(pen.color())
+                        self._edge_markers[key] = old_markers[key]
             else:
-                p, curve, line = self._new_plot(row, tr, pen)
-                if limits is not None:
-                    self._edge_markers[key] = add_edge_markers(p, tr.x, tr.y, pen.color())
+                p, line = self._new_plot(row, group, limits is not None)
             p.setXLink(first)  # None for the first subplot
             if first is None:
                 first = p
-            self._plot_items[key], self._curves[key], self._crosshair_lines[key] = p, curve, line
-            self._track_of[key] = tr
+            self._plot_items[gkey], self._crosshair_lines[gkey] = p, line
+            self._group_tracks[gkey] = tuple(group.tracks)
         width = LEFT_AXIS_MIN_PX
         if self.coverage_plot is not None:
             width = left_axis_width(self.coverage_plot, [lane_label(c) for c in self._coverage])
@@ -266,7 +314,7 @@ class CampaignPlotCanvas(QWidget):
         self._apply_min_height()
 
     def _rebuild(self) -> None:
-        self._track_of = {}  # nothing to keep: the axes change
+        self._group_tracks = {}  # nothing to keep: the axes change
         self.set_tracks(self._tracks, self._zone, self._coverage)
 
     def _make_axis(self) -> pg.AxisItem:
@@ -443,18 +491,41 @@ class CampaignPlotCanvas(QWidget):
     def _all_plots(self) -> list[pg.PlotItem]:
         return ([self.coverage_plot] if self.coverage_plot is not None else []) + list(self._plot_items.values())
 
-    def _new_plot(self, row: int, tr: Track, pen) -> tuple[pg.PlotItem, FastCurve, pg.InfiniteLine]:
+    def _new_plot(self, row: int, group: PlotGroup, edge_markers: bool) -> tuple[pg.PlotItem, pg.InfiniteLine]:
+        """Subplot with all curves of a group (legend if more than one), edge markers if the
+        group has a fixed or robust y range."""
         p = self.graphics_layout.addPlot(
             row=row, col=0, axisItems={"bottom": self._make_axis()}, viewBox=TimeViewBox(self._wheel_time_only)
         )
         light_grid(p, alpha=0.25)
-        p.setLabel("left", tr.name, units=tr.unit or None)
-        p.setTitle(tr.label, size="9pt", color="#aaaaaa")
-        curve = add_curve(p, tr.x, tr.y, tr.gap_rows, pen, tr.style)
+        p.setLabel("left", group.axis_label, units=group.unit or None)
+        p.setTitle(group.title, size="9pt", color="#aaaaaa")
+        legend = None
+        if group.legend:
+            legend = p.addLegend(offset=(10, 5), labelTextSize="8pt", brush=pg.mkBrush(24, 24, 28, 200))
+        for tr in group.tracks:
+            key = track_key(tr)
+            pen = curve_pen(self._colors[key])
+            curve = add_curve(p, tr.x, tr.y, tr.gap_rows, pen, tr.style)
+            if legend is not None:
+                legend.addItem(curve, tr.label if self._group_by is not GroupBy.SOURCE else tr.name)
+            self._curves[key] = curve
+            if edge_markers:
+                self._edge_markers[key] = add_edge_markers(p, tr.x, tr.y, pen.color())
         line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#888888", style=pg.QtCore.Qt.DashLine))
         p.addItem(line, ignoreBounds=True)
         p.getViewBox().sigRangeChangedManually.connect(self._on_manual_range)
-        return p, curve, line
+        return p, line
+
+    def _lane_colors(self) -> list[str]:
+        """Coverage lane colours: with colours by source, the same as the source's curves."""
+        if self._color_by is not ColorBy.SOURCE:
+            return list(CHANNEL_COLORS)
+        order = self._source_order or [c.source_id for c in self._coverage]
+        return [
+            CHANNEL_COLORS[(order.index(c.source_id) if c.source_id in order else i) % len(CHANNEL_COLORS)]
+            for i, c in enumerate(self._coverage)
+        ]
 
     def full_range(self) -> tuple[float, float] | None:
         """Union of the spans of all tracks and sources (linked axes otherwise follow the first plot only)."""

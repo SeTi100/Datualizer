@@ -66,6 +66,7 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 └── profiles/*.json               # Geräteprofile (Daten, kein Code)
 datualizer_gui/                   # PySide6-App, Einstieg: python -m datualizer_gui.app
                                   # campaign_window.py: Kampagnenansicht (Quellen-Dock, Uhren-Editor, Plot auf Master-Zeit)
+                                  # components/curves.py: schnelle Kurven (Peak-Downsampling, Clip-to-View, Cache) für alle Plots
 tests/fixtures/runs_export/       # 13 echte Pipeline-Exporte (unveränderlich!)
 tests/fixtures/sa_12_10/          # Ausschnitte einer echten Mehrgeräte-Messkampagne (unveränderlich!)
 ```
@@ -92,6 +93,8 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
 - Das lokale `.venv` wurde mit uv erstellt; `uv` ist nicht im PATH. pip wurde mit Zustimmung des Nutzers per `python -m ensurepip` nachgerüstet. Keine Pakete ungefragt installieren.
 - `python -m datualizer_gui.main_window` startet **nichts**. Der Einstieg ist `datualizer_gui.app`.
 - CI (`.github/workflows/pytest.yml`, Ubuntu, Python 3.11) installiert per `pip install -e ".[dev]"` und testet damit auch die Paket-Metadaten.
+- **pyqtgraph ≥ 0.14** ist nötig: Erst ab 0.14 wird das `connect`-Array beim Clip-to-View und Downsampling mitgeschnitten. Ältere Versionen zeichnen jeden Punkt (richtig, aber langsam; `curves.FAST_CURVES`). Ein bestehendes `.venv` mit `pip install -U "pyqtgraph>=0.14"` nachziehen.
+- Plots nie mit `p.plot(...)` direkt bauen, sondern über `curves.add_curve`, sonst fehlen Downsampling, Clip-to-View und Cache. `PlotDataItem.getData()` liefert die *angezeigten* (reduzierten) Daten, die vollen stehen in `xData`/`yData`.
 - **PySide6 6.12.0** bricht die GUI-Tests mit einem Speicherfehler ab („deallocating None“). `pyproject.toml` begrenzt deshalb auf `<6.12`. Vor dem Anheben die GUI-Tests mit der neuen Version mehrfach laufen lassen.
 - Änderungen an `.github/workflows/` brauchen beim Push den OAuth-Scope `workflow` (`gh auth refresh -s workflow`).
 

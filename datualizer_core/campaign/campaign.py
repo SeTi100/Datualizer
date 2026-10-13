@@ -93,6 +93,9 @@ class CampaignSession:
         self.base_dir = Path(base_dir) if base_dir is not None else Path.cwd()
         self.datasets: dict[str, DualModeDataset] = {}
         self.warnings: list[str] = []
+        # Derived per source, dropped when the source or its clock changes
+        self._master_cache: dict[str, tuple[ClockModel, str, np.ndarray | None]] = {}
+        self._track_cache: dict[tuple[str, str], Track] = {}
         for src in self.campaign.sources:
             self._load(src)
 
@@ -141,25 +144,44 @@ class CampaignSession:
         )
         self.campaign.sources.append(src)
         self.datasets[sid] = ds
+        self._forget(sid)
         return src
 
     def remove_source(self, source_id: str) -> None:
         self.campaign.sources = [s for s in self.campaign.sources if s.id != source_id]
         self.datasets.pop(source_id, None)
+        self._forget(source_id)
 
     def set_clock(self, source_id: str, clock: ClockModel) -> None:
         self.campaign.source(source_id).clock = clock
+        self._forget(source_id)
+
+    def _forget(self, source_id: str) -> None:
+        """Drop cached master times and tracks of a source (after its data or clock changed)."""
+        self._master_cache.pop(source_id, None)
+        for key in [k for k in self._track_cache if k[0] == source_id]:
+            del self._track_cache[key]
 
     # ------------------------------------------------------------ master time
     def master_time(self, source_id: str) -> np.ndarray | None:
-        """Master epoch seconds of every row of a source (None if it has no absolute time)."""
+        """Master epoch seconds of every row of a source (None if it has no absolute time).
+
+        Cached per source while its clock model and the campaign zone stay the same; the array
+        is read-only.
+        """
         ds = self.datasets.get(source_id)
         if ds is None:
             return None
-        t = epoch_seconds(ds, self.campaign.timezone)
-        if t is None:
-            return None
-        return self.campaign.source(source_id).clock.apply(t, self.campaign.timezone)
+        clock, zone = self.campaign.source(source_id).clock, self.campaign.timezone
+        cached = self._master_cache.get(source_id)
+        if cached is not None and cached[0] == clock and cached[1] == zone:
+            return cached[2]
+        t = epoch_seconds(ds, zone)
+        if t is not None:
+            t = clock.apply(t, zone)
+            t.setflags(write=False)
+        self._master_cache[source_id] = (clock.model_copy(deep=True), zone, t)
+        return t
 
     def span(self, source_id: str) -> tuple[float, float] | None:
         """First and last master time of a source."""
@@ -169,15 +191,25 @@ class CampaignSession:
         return float(np.nanmin(t)), float(np.nanmax(t))
 
     def track(self, source_id: str, channel: str) -> Track:
-        """One channel of a source on master time."""
+        """One channel of a source on master time.
+
+        The same Track object is returned until the source or its clock changes, so a plot can
+        tell which curves it does not need to redraw.
+        """
         ds = self.datasets[source_id]
         x = self.master_time(source_id)
+        cached = self._track_cache.get((source_id, channel))
+        if cached is not None and cached.x is x:
+            return cached
         if x is None:
             raise ValueError(f"Source {source_id!r} has no absolute time; set TimeConfig.origin.")
         y = ds.df[channel].cast(float).to_numpy().astype(float)
         gap = np.flatnonzero(ds.flag_mask(["gap"]).to_numpy())
         src = self.campaign.source(source_id)
-        return Track(source_id, channel, f"{src.label or src.id}: {channel}", ds.units.get(channel, ""), x, y, gap)
+        y.setflags(write=False)
+        tr = Track(source_id, channel, f"{src.label or src.id}: {channel}", ds.units.get(channel, ""), x, y, gap)
+        self._track_cache[(source_id, channel)] = tr
+        return tr
 
     # ------------------------------------------------------------- persistence
     def save(self, path: str | Path) -> None:

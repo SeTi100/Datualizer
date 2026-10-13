@@ -9,6 +9,7 @@ from PySide6.QtCore import QPointF, Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from datualizer_core.dataset import DualModeDataset
+from datualizer_gui.components.curves import add_curve, connect_mask, rate_limited_mouse
 
 # High-contrast color palette for clear channel identification
 CHANNEL_COLORS = [
@@ -85,7 +86,7 @@ class MultiChannelPlotCanvas(QWidget):
         pg.setConfigOptions(antialias=True, useOpenGL=False)
         self.graphics_layout = pg.GraphicsLayoutWidget()
         self.graphics_layout.setBackground("#18181c")
-        self.graphics_layout.scene().sigMouseMoved.connect(self._on_mouse_moved)
+        self._mouse_proxy = rate_limited_mouse(self.graphics_layout.scene(), self._on_mouse_moved)
         layout.addWidget(self.graphics_layout)
 
     @property
@@ -175,13 +176,7 @@ class MultiChannelPlotCanvas(QWidget):
 
     def _connect_mask(self, values: np.ndarray) -> np.ndarray:
         """Connect sample i to i+1 only if both are finite and no gap starts at i+1."""
-        finite = np.isfinite(np.asarray(values, dtype=np.float64))
-        connect = finite & np.roll(finite, -1)
-        if len(connect):
-            connect[-1] = False
-        gap_rows = self._gap_rows[(self._gap_rows > 0) & (self._gap_rows < len(connect))]
-        connect[gap_rows - 1] = False
-        return connect
+        return connect_mask(values, self._gap_rows)
 
     def _rebuild_plots(self) -> None:
         """Reconstruct the stacked subplots, link X-axes, and attach crosshair lines."""
@@ -230,13 +225,8 @@ class MultiChannelPlotCanvas(QWidget):
                 p.setLabel("bottom", self._x_label, color="#a0a0a0")
 
             # Plot series data
-            p.plot(
-                self._time_data,
-                ch_data,
-                pen=pg.mkPen(color=color, width=1.5),
-                name=ch,
-                connect=self._connect_mask(ch_data),
-            )
+            # Plot series data (only the visible part, peak-downsampled to the screen width)
+            add_curve(p, self._time_data, ch_data, self._gap_rows, pg.mkPen(color=color, width=1.5))
 
             # Add crosshair vertical line
             v_line = pg.InfiniteLine(

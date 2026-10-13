@@ -33,6 +33,7 @@ from datualizer_gui.components.intervals_panel import IntervalsPanel
 from datualizer_gui.components.source_dialog import load_source_interactive
 from datualizer_gui.components.sources_panel import SourcesPanel
 from datualizer_gui.components.plot_groups import ColorBy, GroupBy
+from datualizer_gui.components.readout import AUTO_DECIMALS, ReadoutMode
 from datualizer_gui.components.time_axis import TimeAxisMode
 from datualizer_gui.settings import (
     COLOR_BY,
@@ -40,6 +41,8 @@ from datualizer_gui.settings import (
     GROUP_BY,
     INTERVAL_BANDS,
     MIN_SUBPLOT_HEIGHT,
+    READOUT_DECIMALS,
+    READOUT_MODE,
     TIME_AXIS,
     WHEEL_TIME_ONLY,
     Y_FIT_VISIBLE,
@@ -68,6 +71,12 @@ COLOR_NAMES = {
     ColorBy.MANUAL: "&Manual Colours (Channel Display)",
 }
 
+READOUT_NAMES = {
+    ReadoutMode.BAR: "&Bar Above the Plots",
+    ReadoutMode.TOOLTIP: "&Tooltip at the Cursor",
+    ReadoutMode.TABLE: "T&able in a Dock",
+}
+
 SOURCE_FILTER = (
     "Measurement Files (*.csv *.tsv *.txt *.dat *.xls *.xlsx *.xlsm *.db *.sqlite *.sqlite3);;All Files (*)"
 )
@@ -89,6 +98,10 @@ class CampaignWindow(QMainWindow):
         self.dock_sources = QDockWidget("Sources", self)
         self.dock_sources.setWidget(self.sources_panel)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.dock_sources)
+        self.dock_values = QDockWidget("Values", self)
+        self.dock_values.setWidget(self.canvas.readout_table)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock_values)
+        self.dock_values.hide()
         self.intervals_panel = IntervalsPanel()
         self.dock_steps = QDockWidget("Steps", self)
         self.dock_steps.setWidget(self.intervals_panel)
@@ -126,6 +139,11 @@ class CampaignWindow(QMainWindow):
         self.action_channel_display.triggered.connect(self._on_channel_display)
         settings_menu.addAction(self.action_channel_display)
         settings_menu.addSeparator()
+
+        readout_menu = settings_menu.addMenu("&Values under Cursor")
+        self.readout_actions = self._radio_actions(readout_menu, READOUT_NAMES, lambda v: self.set_readout(mode=ReadoutMode(v)))
+        readout_menu.addSeparator()
+        readout_menu.addAction("&Decimals...", self._on_decimals)
 
         time_menu = settings_menu.addMenu("&Time Axis")
         group = QActionGroup(time_menu)
@@ -258,6 +276,25 @@ class CampaignWindow(QMainWindow):
         self.color_actions[color_by].setChecked(True)
         self.canvas.set_grouping(group_by, color_by)
 
+    def set_readout(self, mode: ReadoutMode | None = None, decimals: int | None = None) -> None:
+        """Values under the cursor as bar, tooltip or table; decimals (AUTO_DECIMALS = 4 significant
+        digits). Remembered as preferences."""
+        mode = ReadoutMode(mode) if mode is not None else self._setting_enum(READOUT_MODE, ReadoutMode)
+        decimals = decimals if decimals is not None else get_int(READOUT_DECIMALS)
+        set_value(READOUT_MODE, mode.value)
+        set_value(READOUT_DECIMALS, decimals)
+        self.readout_actions[mode].setChecked(True)
+        self.dock_values.setVisible(mode is ReadoutMode.TABLE)
+        self.canvas.set_readout(mode, decimals)
+
+    def _on_decimals(self) -> None:
+        value, ok = QInputDialog.getInt(
+            self, "Decimals", "Decimals of the values (-1 = automatic, 4 significant digits):",
+            get_int(READOUT_DECIMALS), AUTO_DECIMALS, 12, 1,
+        )
+        if ok:
+            self.set_readout(decimals=value)
+
     @staticmethod
     def _setting_enum(key: str, enum):
         try:
@@ -296,6 +333,7 @@ class CampaignWindow(QMainWindow):
         self.time_axis_actions[mode].setChecked(True)
         self.canvas.set_time_axis(mode, self._session.time_reference_s)
         self.set_grouping()
+        self.set_readout()
 
     def _on_view_option(self, key: str, on: bool) -> None:
         set_bool(key, on)

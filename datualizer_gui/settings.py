@@ -15,6 +15,8 @@ TIME_AXIS = "time/axis_mode"  # TimeAxisMode value: auto, clock, datetime, relat
 MIN_SUBPLOT_HEIGHT = "layout/min_subplot_height"  # px; below that the plot area scrolls (0 = off)
 GROUP_BY = "layout/group_by"  # GroupBy value: channel, unit, source
 COLOR_BY = "layout/color_by"  # ColorBy value: channel, source, manual
+READOUT_MODE = "readout/mode"  # ReadoutMode value: bar, tooltip, table
+READOUT_DECIMALS = "readout/decimals"  # decimals of values; -1 = 4 significant digits
 INTERVAL_BANDS = "tools/interval_bands"  # draw measurement steps as bands in the campaign plots
 
 DEFAULTS: dict[str, object] = {
@@ -26,6 +28,8 @@ DEFAULTS: dict[str, object] = {
     MIN_SUBPLOT_HEIGHT: 120,
     GROUP_BY: "channel",
     COLOR_BY: "channel",
+    READOUT_MODE: "bar",
+    READOUT_DECIMALS: -1,
 }
 
 

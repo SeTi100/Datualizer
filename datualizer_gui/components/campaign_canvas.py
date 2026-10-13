@@ -9,9 +9,9 @@ import weakref
 import numpy as np
 import polars as pl
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
-from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QScrollArea, QToolTip, QVBoxLayout, QWidget
 
 from datualizer_core.campaign import IntervalSet, ResolvedInterval, SourceCoverage, Track
 from datualizer_gui.components import curves
@@ -36,7 +36,7 @@ from datualizer_gui.components.coverage_strip import (
 from datualizer_gui.components.interval_bands import PENDING_PEN, StepBand, StepsItem, marker_icon, marker_text
 from datualizer_gui.components.plot_canvas import CHANNEL_COLORS
 from datualizer_gui.components.plot_groups import ColorBy, GroupBy, PlotGroup, group_tracks, track_colors, track_key
-from datualizer_gui.components.readout import ReadoutLabel, format_value
+from datualizer_gui.components.readout import VALUE_WIDTH, ReadoutLabel, ReadoutMode, ReadoutTable, format_value
 from datualizer_gui.components.time_axis import TimeAxisMode, TimeViewBox, format_relative, make_time_axis
 
 
@@ -140,6 +140,9 @@ class CampaignPlotCanvas(QWidget):
         layout.setContentsMargins(2, 2, 2, 2)
         self.crosshair_label = ReadoutLabel("Add sources and select channels to plot them on one time axis.")
         layout.addWidget(self.crosshair_label)
+        self.readout_table = ReadoutTable()  # shown by the window in a dock (readout mode TABLE)
+        self._readout_mode = ReadoutMode.BAR
+        self._decimals: int | None = None  # None: 4 significant digits
         self.graphics_layout = pg.GraphicsLayoutWidget()
         self.graphics_layout.setBackground("#18181c")
         ensure_pixmap_cache()
@@ -588,31 +591,63 @@ class CampaignPlotCanvas(QWidget):
             text += f" (t \u2212 t0 = {format_relative(epoch_s - self._t0)})"
         return text
 
-    def update_crosshair(self, x: float) -> str:
-        """Move the crosshair to master time `x` and return the readout text."""
-        self.crosshair_x = x
-        for line in self._crosshair_lines.values():
-            line.setPos(x)
-        if self._coverage_line is not None:
-            self._coverage_line.setPos(x)
-        parts = [self.format_time(x)]
+    @property
+    def readout_mode(self) -> ReadoutMode:
+        return self._readout_mode
+
+    def set_readout(self, mode: ReadoutMode, decimals: int | None = None) -> None:
+        """Values under the crosshair as a bar, a tooltip at the cursor or a table (dock).
+
+        `decimals`: fixed number of decimals, None (or negative) = 4 significant digits.
+        """
+        self._readout_mode = ReadoutMode(mode)
+        self._decimals = decimals if decimals is not None and decimals >= 0 else None
+        self.crosshair_label.setVisible(self._readout_mode is ReadoutMode.BAR)
+        if self._readout_mode is not ReadoutMode.TOOLTIP:
+            QToolTip.hideText()
+        if self.crosshair_x is not None:
+            self.update_crosshair(self.crosshair_x)
+
+    def readout_rows(self, x: float) -> tuple[str, list[tuple[str, str, str]], list[str]]:
+        """(time text, rows of (track label, value, unit), notes: gaps and the current step) at master time `x`."""
+        rows = []
         for tr in self._tracks:
             if not len(tr.x):
                 continue
             idx = int(np.clip(np.searchsorted(tr.x, x), 1, len(tr.x) - 1))
             j = idx - 1 if abs(tr.x[idx - 1] - x) <= abs(tr.x[idx] - x) else idx
-            val = tr.y[j]
-            parts.append(f"{tr.label} = {format_value(val)} {tr.unit}".rstrip())
-        parts += [g for g in (describe_gap(c, x) for c in self._coverage) if g]
+            rows.append((tr.label, format_value(tr.y[j], self._decimals).strip(), tr.unit))
+        notes = [g for g in (describe_gap(c, x) for c in self._coverage) if g]
         step = self.step_at(x)
         if step is not None:
-            parts.append(f"step: {step.label}")
-        text = " | ".join(parts)
-        self.crosshair_label.setText(text)
+            notes.append(f"step: {step.label}")
+        return self.format_time(x), rows, notes
+
+    def update_crosshair(self, x: float, global_pos: QPoint | None = None) -> str:
+        """Move the crosshair to master time `x`, show the values and return them as one line.
+
+        `global_pos`: cursor position on screen, for the tooltip readout.
+        """
+        self.crosshair_x = x
+        for line in self._crosshair_lines.values():
+            line.setPos(x)
+        if self._coverage_line is not None:
+            self._coverage_line.setPos(x)
+        time_text, rows, notes = self.readout_rows(x)
+        values = [f"{name} = {value.rjust(VALUE_WIDTH)} {unit}".rstrip() for name, value, unit in rows]
+        text = " | ".join([time_text, *values, *notes])
+        if self._readout_mode is ReadoutMode.BAR:
+            self.crosshair_label.setText(text)
+        elif self._readout_mode is ReadoutMode.TABLE:
+            self.readout_table.show_values(time_text, rows, notes)
+        elif global_pos is not None:
+            lines = [time_text, *[f"{name} = {value} {unit}".rstrip() for name, value, unit in rows], *notes]
+            QToolTip.showText(global_pos + QPoint(16, 16), "\n".join(lines), self.graphics_layout)
         return text
 
     def _on_mouse_moved(self, pos) -> None:
         for p in self._all_plots():
             if p.sceneBoundingRect().contains(pos):
-                self.update_crosshair(p.getViewBox().mapSceneToView(pos).x())
+                view = self.graphics_layout
+                self.update_crosshair(p.getViewBox().mapSceneToView(pos).x(), view.mapToGlobal(view.mapFromScene(pos)))
                 return

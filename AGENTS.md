@@ -102,7 +102,7 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
 - Mit `setXLink` verlinkte Plots gleicht pyqtgraph in Bildschirm-Pixeln ab. Unterschiedlich breite linke Achsen ergeben deshalb unterschiedliche x-Bereiche. Im Kampagnenfenster bekommen alle linken Achsen dieselbe feste Breite (`coverage_strip.left_axis_width`).
 - Viele gleichartige Markierungen in Plots (Schritt-Bänder) nicht als je ein `LinearRegionItem` pro Plot bauen, sondern als ein `GraphicsObject`, das nur die sichtbaren in Pixeln zeichnet (`interval_bands.StepsItem`, Muster wie `coverage_strip.CoverageItem`). 38 Regionen × 7 Plots kosteten 64 statt 13 ms pro Frame.
 - Closures, die an pyqtgraph-Objekte gehängt werden (z. B. ersetztes `raiseContextMenu`), halten diese nur per `weakref`. Ein Zyklus hält den Python-Wrapper eines von Qt gelöschten Plots am Leben, verlinkte Views rufen dann hinein: Segfault unter Linux, unter Windows nur eine ausgegebene RuntimeError.
-- Wechselnde Anzeigetexte (Fadenkreuz-Werte) über `components/readout.ReadoutLabel`: Ein normales `QLabel` meldet seine Textbreite als Mindestbreite und zieht beim Hovern das ganze Fenster mit.
+- Wechselnde Anzeigetexte (Fadenkreuz-Werte) über `components/readout.ReadoutLabel`: Ein normales `QLabel` meldet seine Textbreite als Mindestbreite und zieht beim Hovern das ganze Fenster mit. `QToolTip.hideText()` blendet erst nach einer kurzen Verzögerung aus; Tests warten mit `QTest.qWait`.
 - Nutzer-Einstellungen der GUI (Menü *Settings*) liegen in `datualizer_gui/settings.py` (`QSettings`, INI pro Nutzer). Tests leiten die Datei über `tests/conftest.py` in ein temporäres Verzeichnis um, damit sie nie die echten Einstellungen lesen oder ändern.
 - Zwei Ebenen von Einstellungen im Kampagnenfenster: Was zu einem Kanal oder einer Quelle gehört (Stil, Y-Skalierung, Alias), steht als pydantic-Feld in `datualizer_core/campaign/` und damit in `campaign.json`; persönliche Vorlieben gehören in `datualizer_gui/settings.py`. Beides betrifft nur die Darstellung. Standardwerte pro Gerät kommen aus dem Profil (`SourceProfile.plot_style`), nie aus dem Code.
 - Qt gibt `str`-Enums aus `itemData`/`QAction.data()` als einfachen `str` zurück. Deshalb `.value` speichern und beim Lesen wieder in das Enum umwandeln.
@@ -155,10 +155,11 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
   - Einstellungen des Kampagnenfensters, Teil 1: Darstellung pro Kanal (`ChannelDisplay`: Alias, `PlotStyle`, `YScale` auto/robust/fest) in `campaign.json`, Standardstil aus `SourceProfile.plot_style`, Dialog `components/channel_display_dialog.py`, Randmarker für Werte ausserhalb des Bereichs
   - Einstellungen des Kampagnenfensters, Teil 2: Zoom nur auf der Zeitachse und Y passend zum sichtbaren Ausschnitt (`components/time_axis.TimeViewBox`), Zeitachse als Uhrzeit, Datum + Uhrzeit oder t − t0 (`Campaign.time_reference`), Zone der Kampagne (`session.set_timezone`), Mindesthöhe der Subplots mit Scrollen
   - Einstellungen des Kampagnenfensters, Teil 3: Subplots pro Kanal, nach Einheit oder nach Quelle mit Legende, Farben nach Kanal, Quelle oder manuell (`components/plot_groups.py`, `ChannelDisplay.color`). `canvas.plot_items` ist nach Subplot geschlüsselt (bei „pro Kanal“ gleich dem Spur-Schlüssel `quelle/kanal`), `canvas.curves` und `edge_markers` immer nach Spur
+  - Einstellungen des Kampagnenfensters, Teil 4: Werte unter dem Mauszeiger als Leiste, Tooltip oder Tabelle im Dock (`readout.ReadoutMode`, `ReadoutTable`), Nachkommastellen
 
 **Nächste offene Punkte:**
 
-1. **Einstellungen des Kampagnenfensters, Punkte 6 und 8** (Infozeile, Export; siehe Masterplan unter Schritt 4).
+1. **Einstellungen des Kampagnenfensters, Punkt 8** (Export für den Bericht; siehe Masterplan unter Schritt 4).
 2. **Etappe 2b, Schritte 6–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md)): Fenster-Statistik (Pakete A, B, D laut Recherche; `spike` ist fertig), Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
 3. **Wert und Einheit in einer Zelle (P6)** (`Konzentration = "20 °C"`) und widersprüchliche Metadaten anzeigen (P8).
 4. Danach: Block-Segmentation und Ragged-Healer (ursprünglicher Etappe-2-Plan), sobald Gerätedaten mit Kopfblöcken vorliegen.

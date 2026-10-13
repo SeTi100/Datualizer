@@ -271,7 +271,8 @@ class CSVLoader:
         channels = [c for c, k in column_kinds.items() if k is ColumnKind.NUMERIC]
         names = {**raw_to_clean, **{raw: ch for ch, raw in raw_variables.items()}}
         quality = resolve_quality(
-            self.config.quality, df, channels, run_columns, channel_attrs, names, self.config.vocabulary
+            self.config.quality, df, time_col, channels, run_columns, channel_attrs, names,
+            self.config.vocabulary,
         )
 
         # 7. Units from headers or long-table attributes (P20)

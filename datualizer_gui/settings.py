@@ -17,6 +17,8 @@ GROUP_BY = "layout/group_by"  # GroupBy value: channel, unit, source
 COLOR_BY = "layout/color_by"  # ColorBy value: channel, source, manual
 READOUT_MODE = "readout/mode"  # ReadoutMode value: bar, tooltip, table
 READOUT_DECIMALS = "readout/decimals"  # decimals of values; -1 = 4 significant digits
+EXPORT_OPTIONS = "export/options"  # last plot export options as JSON (ExportOptions)
+EXPORT_DIR = "export/last_dir"
 
 DEFAULTS: dict[str, object] = {
     COVERAGE_INFO: False,

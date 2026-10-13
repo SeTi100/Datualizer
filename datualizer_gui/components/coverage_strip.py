@@ -59,6 +59,7 @@ class CoverageItem(pg.GraphicsObject):
 
     def __init__(self, coverage: Sequence[SourceCoverage], colors: Sequence[str]) -> None:
         super().__init__()
+        self.hatch_color = "#e8e8e8"  # stripes of a gap (darker on a light export background)
         self._lanes: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, QColor]] = []
         lo, hi = np.inf, -np.inf
         for i, cov in enumerate(coverage):
@@ -87,7 +88,7 @@ class CoverageItem(pg.GraphicsObject):
             fill = QColor(color)
             fill.setAlpha(170)
             self._draw(painter, to_device, s0, s1, y0, QBrush(fill), QPen(Qt.PenStyle.NoPen), x_lo, x_hi)
-            hatch = QBrush(QColor("#e8e8e8"), Qt.BrushStyle.BDiagPattern)
+            hatch = QBrush(QColor(self.hatch_color), Qt.BrushStyle.BDiagPattern)
             outline = QPen(QColor(color))
             outline.setCosmetic(True)
             self._draw(painter, to_device, g0, g1, y0, hatch, outline, x_lo, x_hi)

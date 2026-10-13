@@ -29,12 +29,16 @@ from datualizer_core.campaign import Campaign, CampaignSession
 from datualizer_gui.components.campaign_canvas import CampaignPlotCanvas
 from datualizer_gui.components.source_dialog import load_source_interactive
 from datualizer_gui.components.sources_panel import SourcesPanel
+from datualizer_gui.components.export_dialog import ExportDialog, options_from_json, options_to_json
+from datualizer_gui.components.plot_export import ExportFormat, ExportOptions, export_plot
 from datualizer_gui.components.plot_groups import ColorBy, GroupBy
 from datualizer_gui.components.readout import AUTO_DECIMALS, ReadoutMode
 from datualizer_gui.components.time_axis import TimeAxisMode
 from datualizer_gui.settings import (
     COLOR_BY,
     COVERAGE_INFO,
+    EXPORT_DIR,
+    EXPORT_OPTIONS,
     GROUP_BY,
     MIN_SUBPLOT_HEIGHT,
     READOUT_DECIMALS,
@@ -111,6 +115,7 @@ class CampaignWindow(QMainWindow):
             ("&Open Campaign...", "Ctrl+Shift+K", self._on_open),
             ("&Save Campaign...", "Ctrl+Shift+S", self._on_save),
             ("&Reset Zoom", "Ctrl+R", self.canvas.reset_zoom),
+            ("&Export Plot...", "Ctrl+E", self._on_export),
         ]:
             action = QAction(text, self)
             action.setShortcut(QKeySequence(key))
@@ -386,6 +391,35 @@ class CampaignWindow(QMainWindow):
             QMessageBox.information(self, "Channel Display", "Select a channel in the source list first.")
             return
         self.sources_panel.edit_display(*current)
+
+    def export_plot(self, path: str | Path, options: ExportOptions | None = None) -> Path:
+        """Write the plot as shown (time span, y ranges) to PNG, SVG or PDF; the options are remembered."""
+        options = options if options is not None else options_from_json(get_str(EXPORT_OPTIONS))
+        out = export_plot(self.canvas, path, options)
+        set_value(EXPORT_OPTIONS, options_to_json(options))
+        set_value(EXPORT_DIR, str(out.resolve().parent))
+        self.status_bar.showMessage(f"Exported {out.name}")
+        return out
+
+    def _on_export(self) -> None:
+        if not self.canvas.all_plots():
+            QMessageBox.information(self, "Export Plot", "Select channels or show the coverage strip first.")
+            return
+        start = str(Path(get_str(EXPORT_DIR) or ".") / f"{self._session.campaign.name}.png")
+        path, chosen = QFileDialog.getSaveFileName(
+            self, "Export Plot", start, "PNG image (*.png);;SVG vector graphic (*.svg);;PDF document (*.pdf)"
+        )
+        if not path:
+            return
+        if Path(path).suffix.lower() not in (".png", ".svg", ".pdf"):
+            path += "." + chosen.split("*.")[-1].rstrip(")")
+        dialog = ExportDialog(options_from_json(get_str(EXPORT_OPTIONS)), ExportFormat.from_path(path), self)
+        if dialog.exec() != ExportDialog.DialogCode.Accepted:
+            return
+        try:
+            self.export_plot(path, dialog.options())
+        except Exception as exc:  # show, do not crash the window
+            QMessageBox.critical(self, "Export Plot", str(exc))
 
     def _on_add(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "Add Source(s) to Campaign", "", SOURCE_FILTER)

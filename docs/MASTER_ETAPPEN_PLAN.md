@@ -140,7 +140,7 @@ flowchart TD
      5. ✅ Kanäle gruppieren (ein Subplot pro Kanal, nach Einheit, nach Quelle) mit Legende; Farben nach Kanal, nach Quelle (wie die Abdeckungsspur) oder manuell (`ChannelDisplay.color`). Y-Bereich einer Gruppe: Vereinigung der festen bzw. robusten Bereiche, sonst auto.
      6. ✅ Werte unter dem Mauszeiger als Leiste, Tooltip am Mauszeiger oder Tabelle im Dock *Values* (alles sichtbar, nichts abgeschnitten); Nachkommastellen fest oder automatisch (4 signifikante Stellen).
      7. ✅ Zeit: Zone der Kampagne wählbar (`session.set_timezone`), Achse automatisch, als Uhrzeit, Datum + Uhrzeit oder t − t0 (`Campaign.time_reference` in `campaign.json`); Mindesthöhe der Subplots, darunter scrollt die Ansicht und jeder Subplot zeigt seine Zeitachse.
-     8. ⏳ Export als PNG, SVG, PDF mit hellem Theme für den Bericht.
+     8. ✅ Export als PNG, SVG, PDF für den Bericht (*Campaign → Export Plot…*): helles Theme, Breite/Höhe in mm, Schrift in pt, Linienbreite in pt, dpi für PNG; zeigt den Ausschnitt und die Y-Bereiche wie am Bildschirm. SVG und PDF bleiben Vektor.
      - Später mit Schritt 5/6: Qualitäts-Flags als Marker, Lücken-Schwelle, Standardauswahl der Kanäle.
 5. ⏳ **Intervalle** aus dem Labjournal, Bänder im Plot, Teilfenster-Regeln.
 6. ⏳ **Fenster-Statistik + Fenster-Inspektor** (Steigung mit Standardfehler, 2-Punkt, Drift, Integral) und zweiseitiges `spike`-Flag.

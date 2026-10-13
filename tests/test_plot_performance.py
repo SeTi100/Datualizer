@@ -154,6 +154,18 @@ class TestFastCurve:
         assert xd.min() >= 99_000 and xd.max() <= 102_000  # only the visible part is drawn
         w.close()
 
+    def test_no_plot_options_menu_for_fast_curves(self, qapp: QApplication) -> None:
+        """pyqtgraphs "Plot Options" (Alpha, FFT, Downsample, Log) rufen PlotDataItem-Methoden auf.
+
+        FastCurve hat sie nicht (eigenes Downsampling), jeder Klick warf einen AttributeError.
+        """
+        p = pg.PlotItem()
+        with pytest.raises(AttributeError):  # so sah der Fehler aus
+            add_curve(p, np.arange(3.0), np.arange(3.0), np.array([], dtype=np.int64), pg.mkPen("w"))
+            p.updateAlpha()
+        assert p.getContextMenus(None) is None  # kein "Plot Options"
+        assert p.getViewBox().menuEnabled()  # View All, Achsen, Export bleiben
+
     def test_main_canvas_uses_fast_curves(self, qapp: QApplication) -> None:
         from datualizer_core import load_source
 

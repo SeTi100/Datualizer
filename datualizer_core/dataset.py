@@ -141,6 +141,7 @@ class DualModeDataset:
         self._units = {c: u for c, u in (units or {}).items() if u}
         self._quality = quality
         self._quality_flags: pl.DataFrame | None = None
+        self._quality_notes: pl.DataFrame | None = None
         self._sources = sources if sources is not None else empty_sources()
         self._audit_log = audit_log if audit_log is not None else AuditLog()
         self._channel_attrs = channel_attrs or {}
@@ -362,21 +363,36 @@ class DualModeDataset:
 
     @property
     def quality_flags(self) -> pl.DataFrame:
-        """Return every quality flag as an event table `row, channel, flag` (P12–P17).
+        """Return every quality flag as an event table `row, channel, flag` (P12–P17, P31).
 
         `row` indexes `df`, `channel` is null for row-level flags (`gap`). Flags are `gap`,
-        `missing`, `missing_calculated`, `stuck`, `jump`, `dropout` and `out_of_range`; see
-        `datualizer_core.quality`. The data itself is never changed. Empty if detection is off
+        `missing`, `missing_calculated`, `stuck`, `jump`, `dropout`, `out_of_range` and `spike`;
+        see `datualizer_core.quality`. The data itself is never changed. Empty if detection is off
         or the dataset was built in memory without quality settings.
         """
         if self._quality_flags is None:
             if self._quality is None:
                 self._quality_flags = _quality.empty_flags()
+                self._quality_notes = _quality.empty_notes()
             else:
+                notes: list[dict] = []
                 self._quality_flags = _quality.detect_flags(
-                    self._df, self._time_col, self._run_columns, self.channels, self._quality
+                    self._df, self._time_col, self._run_columns, self.channels, self._quality, notes
                 )
+                self._quality_notes = pl.DataFrame(notes, schema=_quality.NOTES_SCHEMA)
         return self._quality_flags
+
+    @property
+    def quality_notes(self) -> pl.DataFrame:
+        """Return what the detectors could not judge, as a table `channel, note, n`.
+
+        `spike_mad_zero`: n samples differ from their window median, but the window had MAD = 0
+        (quantised or constant values) and the channel's `QualityConfig.spike_min_scale` was set
+        to 0, so no spike was flagged. Set a floor (e.g. the device resolution) to judge them.
+        """
+        self.quality_flags  # computes the notes as well
+        assert self._quality_notes is not None
+        return self._quality_notes
 
     @property
     def quality_summary(self) -> pl.DataFrame:

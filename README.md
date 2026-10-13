@@ -182,6 +182,13 @@ s.track("SA_Labjournal", "col_9").name                   # "Massenstrom Waage"
 
 **Werte unter dem Mauszeiger** (*Settings → Values under Cursor*): als Leiste über den Plots (Standard; was nicht passt, wird abgeschnitten), als Tooltip am Mauszeiger (eine Zeile pro Kanal) oder als Tabelle im Dock *Values* (Kanal, Wert, Einheit, darüber Zeit und Lücken). *Decimals…* legt die Nachkommastellen fest; −1 heisst automatisch (4 signifikante Stellen).
 
+**Export für den Bericht** (*Campaign → Export Plot…*, Ctrl+E): schreibt den gezeigten Zeitausschnitt mit den gezeigten Y-Bereichen, Subplots, Farben und der Abdeckungsspur als PNG, SVG oder PDF. Einstellbar sind Breite und Höhe in mm (Höhe automatisch: pro Subplot eine feste Höhe), Schriftgrösse und Linienbreite in pt, die Auflösung (nur PNG; SVG und PDF sind Vektordateien) und ein helles oder dunkles Theme. Am Bildschirm bleiben die Linien 1 px breit (Geschwindigkeit); dickere Linien und grössere Punkte gibt es nur in der Datei. Die letzten Einstellungen werden gemerkt.
+
+```python
+from datualizer_gui.components.plot_export import ExportOptions
+window.export_plot("bericht_12_10.pdf", ExportOptions(width_mm=170, font_pt=8, line_width_pt=0.75))
+```
+
 **Absolute Zeit** bleibt erhalten: `time_seconds` zählt ab dem ersten gültigen Sample, `ds.time_origin` ist der absolute Zeitpunkt dazu, `ds.time_abs` die absolute Zeit jeder Zeile und `ds.with_time_abs()` die Tabelle mit Spalte `time_abs`. Damit lassen sich später mehrere Geräte einer Messkampagne auf eine Zeitachse legen (Etappe 2b). Datums- und Zeitwerte ohne Zeitzone gelten als Wanduhrzeit. Mit `IngestionConfig(time=TimeConfig(timezone="Europe/Zurich"))` werden sie in dieser Zone gelesen, dann bleiben die Sekunden auch über die Sommerzeitumstellung korrekt (doppelte oder fehlende Uhrzeiten stehen im Audit). Logger, die nur die verstrichene Zeit exportieren (z. B. PicoLog `00:00:00`), bekommen ihren Startzeitpunkt über `TimeConfig(origin=datetime(...))`. Uhrzeiten ohne Datum (z. B. im Labjournal) bekommen ihr Datum über `TimeConfig(clock_date=date(...))`. Weitere Datumsformate: `TimeConfig(datetime_formats=[...])`; ein erzwungenes `TimeConfig(format=TimeFormat.DATETIME)`, das nicht passt, schlägt laut fehl (`TimeConfigError`).
 
 Die mitgelieferten Namenslisten (`Vocabulary`) sind nur Startwerte und keine Konvention, an die sich deine Daten halten müssen.

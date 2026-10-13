@@ -34,9 +34,10 @@ EDGE_MARKER_SIZE_PX = 8
 EDGE_INSET = 0.03  # edge markers sit this fraction of the view height inside the edge
 
 
-def curve_pen(color: str | QColor) -> QPen:
-    """1 px cosmetic pen: Qt strokes it on a fast path, wider lines cost about three times as much."""
-    pen = pg.mkPen(color, width=1)
+def curve_pen(color: str | QColor, width: float = 1) -> QPen:
+    """Cosmetic pen, 1 px by default: Qt strokes it on a fast path, wider lines cost about three
+    times as much. Wider lines only for file export."""
+    pen = pg.mkPen(color, width=width)
     pen.setCosmetic(True)
     return pen
 
@@ -169,7 +170,7 @@ def view_window(item: QGraphicsItem) -> tuple[tuple[float, float] | None, int]:
         if not vb.autoRangeEnabled()[0]:
             x_range = tuple(vb.viewRange()[0])
         if vb.width() > 1:
-            columns = int(vb.width())
+            columns = int(vb.width() * getattr(item, "lod_scale", 1.0))
     return x_range, columns
 
 
@@ -193,6 +194,7 @@ class FastCurve(pg.PlotCurveItem):
             cs = np.zeros(len(cs), dtype=bool)
         self._full = (xs, ys, cs, x_sorted)
         self.markers: FastScatter | None = None
+        self.lod_scale = 1.0  # device pixels per view pixel (file export at a higher resolution)
         if self.style in (PlotStyle.POINTS, PlotStyle.LINE_POINTS):
             self.markers = FastScatter(self._samples[0], self._samples[1], x_sorted, pg.mkPen(pen).color())
         self._lod_key: tuple | None = None
@@ -236,6 +238,7 @@ class FastScatter(pg.ScatterPlotItem):
         super().__init__(pen=None, brush=pg.mkBrush(color), size=size, symbol="o", pxMode=True)
         self._full = (x, y, np.zeros(len(x), dtype=bool), x_sorted)
         self._lod_key: tuple | None = None
+        self.lod_scale = 1.0
         self.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
         self._update_lod(force=True)
 

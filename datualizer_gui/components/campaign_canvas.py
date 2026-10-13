@@ -355,6 +355,37 @@ class CampaignPlotCanvas(QWidget):
         super().resizeEvent(event)
         self._update_time_labels()
 
+    # ----------------------------------------------------------------- export
+    def view_x_range(self) -> tuple[float, float] | None:
+        """Master time range currently shown."""
+        first = self._master_plot()
+        return tuple(first.getViewBox().viewRange()[0]) if first is not None else None  # type: ignore[return-value]
+
+    def export_copy(self) -> "CampaignPlotCanvas":
+        """A new canvas with the same tracks, subplots, colours, time axis and x/y ranges,
+        with the step bands but without crosshair, for rendering into a file (see `plot_export`). Not shown."""
+        c = CampaignPlotCanvas()
+        c._axis_mode, c._t0_setting = self._axis_mode, self._t0_setting
+        c._group_by, c._color_by = self._group_by, self._color_by
+        c.set_tracks(self._tracks, self._zone, self._coverage, self._source_order, self._source_labels)
+        rng = self.view_x_range()
+        if rng is not None:
+            c.set_view_range(*rng)
+        for key, p in c._plot_items.items():
+            shown = self._plot_items.get(key)
+            if shown is not None:
+                p.enableAutoRange(axis="y", enable=False)
+                p.setYRange(*shown.getViewBox().viewRange()[1], padding=0)
+        c.set_intervals(self._intervals)  # step bands as shown (empty if switched off)
+        for line in [*c._crosshair_lines.values(), c._coverage_line]:
+            if line is not None:
+                line.hide()
+        return c
+
+    def all_plots(self) -> list[pg.PlotItem]:
+        """Coverage strip (if shown) and all subplots, top to bottom."""
+        return self._all_plots()
+
     # ------------------------------------------------------------------ steps
     @property
     def intervals(self) -> IntervalSet:

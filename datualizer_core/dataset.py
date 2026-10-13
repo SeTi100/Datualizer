@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 import numpy as np
@@ -10,6 +11,7 @@ import polars as pl
 
 from datualizer_core import quality as _quality
 from datualizer_core import runs as _runs
+from datualizer_core import timebase as _timebase
 from datualizer_core.pipeline.operators import unpivot
 from datualizer_core.schema import ColumnKind
 
@@ -127,8 +129,12 @@ class DualModeDataset:
         sources: pl.DataFrame | None = None,
         quality: _quality.QualitySettings | None = None,
         units: dict[str, str] | None = None,
+        time_origin: datetime | None = None,
+        time_zone: str | None = None,
     ) -> None:
         self._df = df
+        self._time_origin = time_origin
+        self._time_zone = time_zone
         self._units = {c: u for c, u in (units or {}).items() if u}
         self._quality = quality
         self._quality_flags: pl.DataFrame | None = None
@@ -282,6 +288,10 @@ class DualModeDataset:
         df = self._df.with_columns(self.run_time()).filter(mask)
         if df.is_empty():
             raise KeyError(f"Run {key!r} not found.")
+        origin = self._time_origin
+        if origin is not None:
+            run_start = self._df.filter(mask)[self._time_col].min()
+            origin = origin + timedelta(seconds=run_start or 0.0)
         return DualModeDataset(
             df=df,
             audit_log=self._audit_log,
@@ -295,7 +305,38 @@ class DualModeDataset:
             sources=self._sources,
             quality=self._quality,
             units=self._units,
+            time_origin=origin,
+            time_zone=self._time_zone,
         )
+
+    @property
+    def time_origin(self) -> datetime | None:
+        """Absolute time of `time_seconds == 0`; None if the source has no absolute time.
+
+        Naive for wall-clock sources, UTC-aware if the time zone is known (see `time_zone`).
+        """
+        return self._time_origin
+
+    @property
+    def time_zone(self) -> str | None:
+        """IANA zone the absolute times are shown in; None = wall-clock time without zone."""
+        return self._time_zone
+
+    @property
+    def time_abs(self) -> pl.Series | None:
+        """Absolute time of every row (`time_origin + time_seconds`), or None without an origin."""
+        if self._time_origin is None or self._time_col not in self._df.columns:
+            return None
+        return _timebase.absolute_series(self._df[self._time_col], self._time_origin, self._time_zone)
+
+    def with_time_abs(self, name: str = "time_abs") -> pl.DataFrame:
+        """Return the wide table with an absolute time column right after the time column."""
+        abs_time = self.time_abs
+        if abs_time is None:
+            raise ValueError("This dataset has no absolute time; set TimeConfig.origin when loading.")
+        cols = self._df.columns
+        idx = cols.index(self._time_col) + 1
+        return self._df.with_columns(abs_time.alias(name)).select([*cols[:idx], name, *cols[idx:]])
 
     @property
     def units(self) -> dict[str, str]:

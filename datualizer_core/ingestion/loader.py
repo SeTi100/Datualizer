@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 import io
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Sequence, TextIO
 import polars as pl
 
 from datualizer_core.dataset import SOURCES_SCHEMA, AuditEntry, AuditLog, DualModeDataset
-from datualizer_core.ingestion.config import IngestionConfig, LongFormatConfig, LongFormatMode
+from datualizer_core.ingestion.config import IngestionConfig, LongFormatConfig, LongFormatMode, TimeFormat
 from datualizer_core.ingestion.long_format import detect_long_format, pivot_long_to_wide
 from datualizer_core.ingestion.pre_scanner import PreScanResult, pre_scan
 from datualizer_core.ingestion.quality_rules import resolve_quality, to_settings
@@ -24,6 +25,42 @@ from datualizer_core.ingestion.type_inference import (
     parse_number,
 )
 from datualizer_core.pipeline.operators import clean_column_name, clean_names, drop_footer
+from datualizer_core.timebase import (
+    TimeConfigError,
+    aware_to_epoch_us,
+    check_zone,
+    epoch_us_to_datetime,
+    localize,
+    origin_epoch_us,
+    parse_datetime,
+)
+
+_CLOCK_RE = re.compile(r"^(\d{1,2}):(\d{2}):(\d{2}(?:[.,]\d+)?)$")
+
+
+@dataclass(frozen=True)
+class _TimeAxis:
+    """Relative seconds plus where they start in absolute time."""
+
+    seconds: pl.Series
+    origin: datetime | None
+    zone: str | None
+    format: TimeFormat
+
+
+def _parse_clock(text: str) -> float | None:
+    """Seconds of an `H:MM:SS[.fff]` value (comma or dot fraction)."""
+    m = _CLOCK_RE.match(text)
+    if not m:
+        return None
+    return float(m.group(1)) * 3600.0 + float(m.group(2)) * 60.0 + float(m.group(3).replace(",", "."))
+
+
+def _parse_number_seconds(text: str) -> float | None:
+    try:
+        return float(text.replace(",", "."))
+    except ValueError:
+        return None
 
 
 def read_raw_table(pre_scan_result: PreScanResult) -> pl.DataFrame:
@@ -130,13 +167,14 @@ class CSVLoader:
         detected_time_col = self._resolve_time_column(df_raw.columns)
         raw_to_clean = self.column_name_map(df_raw.columns)
 
-        # 1. Parse and convert time column to relative seconds
-        time_seconds = self._convert_time_column(
+        # 1. Parse and convert time column to relative seconds (plus their absolute origin)
+        time_axis = self._convert_time_column(
             df_raw[detected_time_col],
             col_name=raw_to_clean[detected_time_col],
             raw_col_name=detected_time_col,
             audit_log=audit_log,
         )
+        time_seconds = time_axis.seconds
 
         # 2. Infer column kinds, then cast only numeric channels with error harvesting
         processed_series: list[pl.Series] = [time_seconds]
@@ -246,6 +284,7 @@ class CSVLoader:
         resolved.quality = quality
         resolved.units.units = units
         resolved.time_column = detected_time_col
+        resolved.time.format = time_axis.format
         resolved.column_kinds = {
             raw: column_kinds.get(raw_to_clean[raw], kind) for raw, kind in resolved_kinds.items()
         }
@@ -276,6 +315,8 @@ class CSVLoader:
             sources=sources,
             quality=to_settings(quality),
             units=units,
+            time_origin=time_axis.origin,
+            time_zone=time_axis.zone,
         )
 
     def _long_config_with_clean_names(self, raw_to_clean: dict[str, str]) -> LongFormatConfig:
@@ -318,132 +359,125 @@ class CSVLoader:
         col_name: str,
         raw_col_name: str,
         audit_log: AuditLog,
-    ) -> pl.Series:
-        """Convert time column into Float64 relative seconds from start of measurement."""
-        if len(series) == 0:
-            return pl.Series(col_name, [], dtype=pl.Float64)
+    ) -> _TimeAxis:
+        """Convert the time column into Float64 seconds since the first valid sample.
 
+        Also returns the absolute time of that sample (`origin`, if determinable), the zone
+        absolute times are shown in, and the resolved format.
+        """
+        tcfg = self.config.time
         vals = series.to_list()
         sample = [
             str(v).strip()
             for v in vals
             if v is not None and str(v).strip() != "" and str(v).strip() not in self.sentinels
         ][:50]
+        if tcfg.timezone is not None:
+            check_zone(tcfg.timezone)
 
         if not sample:
             for idx, val in enumerate(vals):
                 if val is not None and str(val).strip() != "":
                     audit_log.add(idx, col_name, val, "invalid_timestamp", raw_column=raw_col_name)
-            return pl.Series(col_name, [None] * len(series), dtype=pl.Float64)
+            return _TimeAxis(pl.Series(col_name, [None] * len(series), dtype=pl.Float64), None, None, tcfg.format)
 
-        # Detect format
-        is_hms = sum(
-            bool(re.match(r"^\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?$", v)) for v in sample
-        ) >= len(sample) / 2
+        parsers = {
+            TimeFormat.CLOCK: _parse_clock,
+            TimeFormat.DATETIME: lambda v: parse_datetime(v, tcfg.datetime_formats),
+            TimeFormat.NUMERIC: _parse_number_seconds,
+        }
+        fmt = tcfg.format
+        if fmt is TimeFormat.AUTO:
+            fmt = next(
+                (f for f in (TimeFormat.CLOCK, TimeFormat.DATETIME)
+                 if sum(parsers[f](v) is not None for v in sample) >= len(sample) / 2),
+                TimeFormat.NUMERIC,
+            )
+        elif sum(parsers[fmt](v) is not None for v in sample) < len(sample) / 2:
+            raise TimeConfigError(
+                f"Time column '{raw_col_name}' does not match the forced format '{fmt.value}'."
+            )
+        if fmt is TimeFormat.DATETIME and tcfg.origin is not None:
+            raise TimeConfigError(
+                f"Time column '{raw_col_name}' holds date-times; an origin is only allowed for "
+                "clock or numeric time."
+            )
 
-        is_dt = False
-        if not is_hms:
-            dt_matches = sum(bool(self._parse_datetime(v)) for v in sample)
-            if dt_matches >= len(sample) / 2:
-                is_dt = True
+        parsed: list = []
+        for idx, raw in enumerate(vals):
+            if raw is None or str(raw).strip() == "":
+                parsed.append(None)
+                continue
+            v_str = str(raw).strip()
+            if v_str in self.sentinels or v_str.upper() in self.upper_sentinels:
+                audit_log.add(idx, col_name, raw, "sentinel_value", raw_column=raw_col_name)
+                parsed.append(None)
+                continue
+            value = parsers[fmt](v_str)
+            if value is None:
+                audit_log.add(idx, col_name, raw, "invalid_timestamp", raw_column=raw_col_name)
+            parsed.append(value)
 
-        rel_seconds_list: list[float | None] = []
-        base_seconds: float | None = None
+        if fmt is TimeFormat.DATETIME:
+            return self._datetime_axis(parsed, vals, col_name, raw_col_name, audit_log)
 
-        if is_hms:
-            day_offset = 0.0
-            prev_abs: float | None = None
-            for idx, raw in enumerate(vals):
-                if raw is None or str(raw).strip() == "":
-                    rel_seconds_list.append(None)
+        seconds = parsed
+        if fmt is TimeFormat.CLOCK:
+            # Time of day without date: a drop of more than 12 h is a midnight rollover
+            seconds, day_offset, prev = [], 0.0, None
+            for value in parsed:
+                if value is None:
+                    seconds.append(None)
                     continue
-                v_str = str(raw).strip()
-                if v_str in self.sentinels or v_str.upper() in self.upper_sentinels:
-                    audit_log.add(idx, col_name, raw, "sentinel_value", raw_column=raw_col_name)
-                    rel_seconds_list.append(None)
-                    continue
-                m = re.match(r"^(\d{1,2}):(\d{2}):(\d{2}(?:[.,]\d+)?)$", v_str)
-                if not m:
-                    audit_log.add(idx, col_name, raw, "invalid_timestamp", raw_column=raw_col_name)
-                    rel_seconds_list.append(None)
-                    continue
-                h = float(m.group(1))
-                mins = float(m.group(2))
-                secs = float(m.group(3).replace(",", "."))
-                abs_s = h * 3600.0 + mins * 60.0 + secs
-
-                if prev_abs is not None and (abs_s + day_offset) < prev_abs - 43200.0:
+                if prev is not None and value + day_offset < prev - 43200.0:
                     day_offset += 86400.0
+                prev = value + day_offset
+                seconds.append(prev)
+        base = next((s for s in seconds if s is not None), None)
+        rel = [None if s is None else s - base for s in seconds]
 
-                current_total = abs_s + day_offset
-                if base_seconds is None:
-                    base_seconds = current_total
-                rel_seconds_list.append(current_total - base_seconds)
-                prev_abs = current_total
+        origin = zone = None
+        if tcfg.origin is not None:
+            origin_us, zone = origin_epoch_us(tcfg.origin, tcfg.timezone)
+            origin = epoch_us_to_datetime(origin_us, zone)
+        return _TimeAxis(pl.Series(col_name, rel, dtype=pl.Float64), origin, zone, fmt)
 
-        elif is_dt:
-            for idx, raw in enumerate(vals):
-                if raw is None or str(raw).strip() == "":
-                    rel_seconds_list.append(None)
-                    continue
-                v_str = str(raw).strip()
-                if v_str in self.sentinels or v_str.upper() in self.upper_sentinels:
-                    audit_log.add(idx, col_name, raw, "sentinel_value", raw_column=raw_col_name)
-                    rel_seconds_list.append(None)
-                    continue
-                dt = self._parse_datetime(v_str)
-                if dt is None:
-                    audit_log.add(idx, col_name, raw, "invalid_timestamp", raw_column=raw_col_name)
-                    rel_seconds_list.append(None)
-                    continue
-                abs_s = dt.timestamp()
-                if base_seconds is None:
-                    base_seconds = abs_s
-                rel_seconds_list.append(abs_s - base_seconds)
+    def _datetime_axis(
+        self,
+        parsed: list[datetime | None],
+        vals: list,
+        col_name: str,
+        raw_col_name: str,
+        audit_log: AuditLog,
+    ) -> _TimeAxis:
+        """Epoch-based seconds for date-times; with offset -> UTC instants, else read in the zone."""
+        tz = self.config.time.timezone
+        n_aware = sum(d is not None and d.tzinfo is not None for d in parsed)
+        n_naive = sum(d is not None and d.tzinfo is None for d in parsed)
+        aware = n_aware >= n_naive and n_aware > 0
 
+        values: list[datetime | None] = []
+        for idx, d in enumerate(parsed):
+            if d is not None and (d.tzinfo is not None) != aware:
+                audit_log.add(idx, col_name, vals[idx], "mixed_timezone", raw_column=raw_col_name)
+                d = None
+            values.append(d)
+
+        if aware:
+            epoch = [None if d is None else aware_to_epoch_us(d) for d in values]
+            zone = tz or "UTC"
         else:
-            for idx, raw in enumerate(vals):
-                if raw is None or str(raw).strip() == "":
-                    rel_seconds_list.append(None)
-                    continue
-                v_str = str(raw).strip()
-                if v_str in self.sentinels or v_str.upper() in self.upper_sentinels:
-                    audit_log.add(idx, col_name, raw, "sentinel_value", raw_column=raw_col_name)
-                    rel_seconds_list.append(None)
-                    continue
-                try:
-                    num = float(v_str.replace(",", "."))
-                except ValueError:
-                    audit_log.add(idx, col_name, raw, "invalid_timestamp", raw_column=raw_col_name)
-                    rel_seconds_list.append(None)
-                    continue
-                if base_seconds is None:
-                    base_seconds = num
-                rel_seconds_list.append(num - base_seconds)
+            loc = localize(values, tz)
+            for idx in loc.ambiguous:
+                audit_log.add(idx, col_name, vals[idx], "ambiguous_local_time", raw_column=raw_col_name)
+            for idx in loc.nonexistent:
+                audit_log.add(idx, col_name, vals[idx], "nonexistent_local_time", raw_column=raw_col_name)
+            epoch, zone = loc.epoch_us, tz
 
-        return pl.Series(col_name, rel_seconds_list, dtype=pl.Float64)
-
-    @staticmethod
-    def _parse_datetime(s: str) -> datetime | None:
-        try:
-            return datetime.fromisoformat(s.replace("Z", "+00:00"))
-        except ValueError:
-            pass
-        for fmt in (
-            "%d.%m.%Y %H:%M:%S",
-            "%d.%m.%Y %H:%M:%S.%f",
-            "%Y/%m/%d %H:%M:%S",
-            "%Y/%m/%d %H:%M:%S.%f",
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d %H:%M:%S.%f",
-            "%d-%m-%Y %H:%M:%S",
-            "%d-%m-%Y %H:%M:%S.%f",
-        ):
-            try:
-                return datetime.strptime(s, fmt)
-            except ValueError:
-                pass
-        return None
+        base = next((e for e in epoch if e is not None), None)
+        rel = [None if e is None else (e - base) / 1e6 for e in epoch]
+        origin = None if base is None else epoch_us_to_datetime(base, zone)
+        return _TimeAxis(pl.Series(col_name, rel, dtype=pl.Float64), origin, zone, TimeFormat.DATETIME)
 
     def _harvest_and_cast_channel(
         self,

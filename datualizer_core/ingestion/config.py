@@ -7,6 +7,7 @@ After loading, `DualModeDataset.ingestion_spec` holds a fully resolved copy of t
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -216,12 +217,62 @@ class MergeConfig(BaseModel):
     )
 
 
+class TimeFormat(str, Enum):
+    AUTO = "auto"          # detected from the values
+    CLOCK = "clock"        # HH:MM:SS[.fff] without a date (elapsed time or time of day)
+    DATETIME = "datetime"  # date and time (ISO 8601 or one of `TimeConfig.datetime_formats`)
+    NUMERIC = "numeric"    # plain numbers in seconds
+
+
+DEFAULT_DATETIME_FORMATS = [
+    "%d.%m.%Y %H:%M:%S",
+    "%d.%m.%Y %H:%M:%S.%f",
+    "%Y/%m/%d %H:%M:%S",
+    "%Y/%m/%d %H:%M:%S.%f",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M:%S.%f",
+    "%d-%m-%Y %H:%M:%S",
+    "%d-%m-%Y %H:%M:%S.%f",
+]
+
+
+class TimeConfig(BaseModel):
+    """How the time column is read and placed on an absolute time axis (Etappe 2b).
+
+    `time_seconds` always counts from the first valid sample. The dataset keeps the absolute
+    time of that sample as `time_origin`, so sources of one campaign can share one time axis.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    format: TimeFormat = Field(TimeFormat.AUTO, description="Format of the time column. AUTO = detect.")
+    datetime_formats: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_DATETIME_FORMATS),
+        description="strptime formats tried after ISO 8601 for date-time values.",
+    )
+    timezone: str | None = Field(
+        None,
+        description=(
+            "IANA zone of date-times without offset, e.g. 'Europe/Zurich'. Gives true elapsed "
+            "seconds across daylight-saving changes. None = plain wall-clock time."
+        ),
+    )
+    origin: datetime | None = Field(
+        None,
+        description=(
+            "Absolute time of the first valid sample for CLOCK and NUMERIC sources (e.g. a logger "
+            "that only exports elapsed time). Not allowed for DATETIME sources."
+        ),
+    )
+
+
 class IngestionConfig(BaseModel):
     """Every decision the loader makes, as editable and JSON-serializable settings."""
 
     model_config = ConfigDict(extra="forbid")
 
     time_column: str | None = Field(None, description="Raw header of the time column. None = auto.")
+    time: TimeConfig = Field(default_factory=TimeConfig)
     clean_column_names: bool = True
     sentinels: list[str] = Field(default_factory=lambda: list(DEFAULT_SENTINELS))
     numeric_ratio_threshold: float = Field(

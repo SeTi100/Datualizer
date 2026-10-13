@@ -9,6 +9,15 @@ from datualizer_core.campaign.coverage import (
     SourceCoverage,
     coverage_intervals,
 )
+from datualizer_core.campaign.intervals import (
+    Interval,
+    IntervalConfigError,
+    IntervalMapping,
+    IntervalSet,
+    ResolvedInterval,
+    WindowRule,
+    master_datetime,
+)
 
 __all__ = [
     "Campaign",
@@ -17,6 +26,13 @@ __all__ = [
     "ClockAnchor",
     "ClockModel",
     "CoverageGap",
+    "Interval",
+    "IntervalConfigError",
+    "IntervalMapping",
+    "IntervalSet",
+    "ResolvedInterval",
+    "WindowRule",
+    "master_datetime",
     "NO_VALUES",
     "SourceCoverage",
     "TIME_GAP",

@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from datualizer_core.ingestion.config import IngestionConfig
 from datualizer_core.ingestion.readers.excel import ExcelOptions, _detect_header, _rows_xls, _rows_xlsx
 from datualizer_core.ingestion.readers.sqlite import SqliteOptions
+from datualizer_core.ingestion.steps import StepColumns
 
 PROFILE_DIR = Path(__file__).resolve().parents[1] / "profiles"
 SQLITE_MAGIC = b"SQLite format 3\x00"
@@ -57,6 +58,9 @@ class SourceProfile(BaseModel):
     origin_rule: OriginRule = Field(
         OriginRule.NONE,
         description="How to find the absolute start of sources with only relative time (if TimeConfig.origin is unset).",
+    )
+    intervals: StepColumns | None = Field(
+        None, description="Suggested column roles if the source lists measurement steps (lab journal)."
     )
 
 

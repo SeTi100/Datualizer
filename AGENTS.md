@@ -47,7 +47,7 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 ├── runs.py                       # Run-Übersicht, Kanalverfügbarkeit, Zeit pro Run
 ├── quality.py                    # Qualitäts-Flags als Ereignistabelle (markieren, nie ändern), inkl. Hampel-`spike`
 ├── timebase.py                   # Absolute Zeit: Datumsformate, Zeitzonen, Sommerzeit (über Polars, importzyklusfrei)
-├── campaign/                     # Messkampagne: Campaign (JSON), CampaignSession, ClockModel (Versatz, Drift, Anker), Track, Abdeckung (coverage.py)
+├── campaign/                     # Messkampagne: Campaign (JSON), CampaignSession, ClockModel (Versatz, Drift, Anker), Track, Abdeckung (coverage.py), Messschritte (intervals.py)
 ├── ingestion/
 │   ├── config.py                 # IngestionConfig, TimeConfig, Vocabulary, LongFormatConfig, RoleConfig, RunConfig, UnitConfig, QualityConfig, MergeConfig  ← alle Stellschrauben
 │   ├── pre_scanner.py            # Delimiter, Dezimal, BOM, Header, Footer
@@ -55,6 +55,7 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 │   ├── long_format.py            # Long erkennen + nach wide pivotieren
 │   ├── roles.py                  # Messwert vs. Parameter (konstant pro Run)
 │   ├── quality_rules.py          # QualityConfig auflösen: Namen übersetzen, Sprungschwellen vorschlagen
+│   ├── steps.py                  # StepColumns/EndRule: Spaltenrollen für Messschritte (auch im Profil)
 │   ├── units.py                  # Einheiten aus Header, Long-Attribut oder Config (P20)
 │   ├── loader.py                 # CSV → DualModeDataset (orchestriert alles, baut ingestion_spec)
 │   ├── sources.py                # Quelle lesen, SHA-256-Fingerabdruck
@@ -66,6 +67,7 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 └── profiles/*.json               # Geräteprofile (Daten, kein Code)
 datualizer_gui/                   # PySide6-App, Einstieg: python -m datualizer_gui.app
                                   # campaign_window.py: Kampagnenansicht (Quellen-Dock, Uhren-Editor, Plot auf Master-Zeit)
+                                  # components/interval_bands.py + intervals_panel.py: Schritt-Bänder, Marker ○ ○, Steps-Dock
                                   # components/coverage_strip.py: Abdeckungsspur (Lücken schraffiert, in Pixeln gezeichnet)
                                   # components/curves.py: schnelle Kurven (Peak-Downsampling, Clip-to-View, Cache) für alle Plots
 tests/fixtures/runs_export/       # 13 echte Pipeline-Exporte (unveränderlich!)
@@ -97,6 +99,8 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
 - **pyqtgraph ≥ 0.14** ist die getestete Version (`pyproject.toml`).
 - Kurven nie mit `p.plot(...)` bauen, sondern über `curves.add_curve` (`FastCurve`): eigenes Peak-Downsampling, das nie über eine Lücke hinweg verbindet (pyqtgraphs eigenes `setDownsampling` zog Linien über Logger-Aussetzer), Clip-to-View, 1-px-Stift, Pixmap-Cache. Gitter über `curves.light_grid`, Cache-Grösse über `curves.ensure_pixmap_cache` (Qt-Standard 10 MB reicht nur für wenige Subplots, danach wird jedes Bild komplett neu gezeichnet). `getData()` liefert die *angezeigten* Daten, alle Punkte gibt `getOriginalDataset()`. `add_curve` blendet pyqtgraphs Kontextmenü *Plot Options* aus (Alpha, FFT, Downsampling, Log rufen `PlotDataItem`-Methoden auf, die `FastCurve` nicht hat → `AttributeError`); das ViewBox-Menü bleibt.
 - Mit `setXLink` verlinkte Plots gleicht pyqtgraph in Bildschirm-Pixeln ab. Unterschiedlich breite linke Achsen ergeben deshalb unterschiedliche x-Bereiche. Im Kampagnenfenster bekommen alle linken Achsen dieselbe feste Breite (`coverage_strip.left_axis_width`).
+- Viele gleichartige Markierungen in Plots (Schritt-Bänder) nicht als je ein `LinearRegionItem` pro Plot bauen, sondern als ein `GraphicsObject`, das nur die sichtbaren in Pixeln zeichnet (`interval_bands.StepsItem`, Muster wie `coverage_strip.CoverageItem`). 38 Regionen × 7 Plots kosteten 64 statt 13 ms pro Frame.
+- Closures, die an pyqtgraph-Objekte gehängt werden (z. B. ersetztes `raiseContextMenu`), halten diese nur per `weakref`. Ein Zyklus hält den Python-Wrapper eines von Qt gelöschten Plots am Leben, verlinkte Views rufen dann hinein: Segfault unter Linux, unter Windows nur eine ausgegebene RuntimeError.
 - Wechselnde Anzeigetexte (Fadenkreuz-Werte) über `components/readout.ReadoutLabel`: Ein normales `QLabel` meldet seine Textbreite als Mindestbreite und zieht beim Hovern das ganze Fenster mit.
 - Nutzer-Einstellungen der GUI (Menü *Settings*) liegen in `datualizer_gui/settings.py` (`QSettings`, INI pro Nutzer). Tests leiten die Datei über `tests/conftest.py` in ein temporäres Verzeichnis um, damit sie nie die echten Einstellungen lesen oder ändern.
 - **PySide6 6.12.0** bricht die GUI-Tests mit einem Speicherfehler ab („deallocating None“). `pyproject.toml` begrenzt deshalb auf `<6.12`. Vor dem Anheben die GUI-Tests mit der neuen Version mehrfach laufen lassen.
@@ -142,11 +146,13 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
   - Schritt 3, Kampagne und Uhren: `Campaign`/`CampaignSession` (campaign.json mit relativen Pfaden, Spec, Hash), `ClockModel` (Versatz, Drift, Anker), Kampagnenfenster mit eigenem x-Array pro Spur und Datumsachse
   - Nachtrag: Blatt-/Tabellenwahl und Datum für Uhrzeiten beim Öffnen (`ReaderError.choice`/`options`, `with_choices`, `needs_clock_date`, `date_in_text`, Dialog `datualizer_gui/components/source_dialog.py`)
   - Schritt 4, Abdeckung: `session.coverage()` (`SourceCoverage`, `CoverageGap` mit `time_gap`/`no_values`), Abdeckungsspur im Kampagnenfenster (Menü *Settings → Tools → Coverage Info*, gespeichert über `datualizer_gui/settings.py`)
+  - Schritt 5, Messschritte: `IntervalMapping` (Spaltenrollen aus Profil oder Datenform, nie im Code), `session.intervals()` mit `problems`, manuelle Schritte (Rechtsklick „Marker ○ ○“), `WindowRule`, Bänder (Standard aus, *Settings → Tools → Interval Bands*) und Steps-Dock
+  - Schritt 6 recherchiert: [`docs/RESEARCH_FENSTER_STATISTIK.md`](docs/RESEARCH_FENSTER_STATISTIK.md) mit Arbeitspaketen A–D
   - Schritt 6, Paket C: zweiseitiges `spike`-Flag (Hampel, P31) in `quality.py`; `QualityConfig.spike_window_s` (Sekunden, ohne Vorgabe 21 Abtastschritte), `spike_k`, `spike_channels`, `spike_min_scale` (ohne Vorgabe die Auflösung), alles aufgelöst in der Spec; nicht Beurteilbares (MAD = 0) in `ds.quality_notes`
 
 **Nächste offene Punkte:**
 
-1. **Etappe 2b, Schritte 5–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md)): Journal-Intervalle, Fenster-Statistik (ohne `spike`, das ist fertig), Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
+1. **Etappe 2b, Schritte 6–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md)): Fenster-Statistik (Pakete A, B, D laut Recherche; `spike` ist fertig), Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
 2. **Wert und Einheit in einer Zelle (P6)** (`Konzentration = "20 °C"`) und widersprüchliche Metadaten anzeigen (P8).
 3. Danach: Block-Segmentation und Ragged-Healer (ursprünglicher Etappe-2-Plan), sobald Gerätedaten mit Kopfblöcken vorliegen.
 

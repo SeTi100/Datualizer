@@ -47,7 +47,7 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 ├── runs.py                       # Run-Übersicht, Kanalverfügbarkeit, Zeit pro Run
 ├── quality.py                    # Qualitäts-Flags als Ereignistabelle (markieren, nie ändern)
 ├── timebase.py                   # Absolute Zeit: Datumsformate, Zeitzonen, Sommerzeit (über Polars, importzyklusfrei)
-├── campaign/                     # Messkampagne: Campaign (JSON), CampaignSession, ClockModel (Versatz, Drift, Anker), Track, Abdeckung (coverage.py)
+├── campaign/                     # Messkampagne: Campaign (JSON), CampaignSession, ClockModel (Versatz, Drift, Anker), Track, Abdeckung (coverage.py), Messschritte (intervals.py)
 ├── ingestion/
 │   ├── config.py                 # IngestionConfig, TimeConfig, Vocabulary, LongFormatConfig, RoleConfig, RunConfig, UnitConfig, QualityConfig, MergeConfig  ← alle Stellschrauben
 │   ├── pre_scanner.py            # Delimiter, Dezimal, BOM, Header, Footer
@@ -55,6 +55,7 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 │   ├── long_format.py            # Long erkennen + nach wide pivotieren
 │   ├── roles.py                  # Messwert vs. Parameter (konstant pro Run)
 │   ├── quality_rules.py          # QualityConfig auflösen: Namen übersetzen, Sprungschwellen vorschlagen
+│   ├── steps.py                  # StepColumns/EndRule: Spaltenrollen für Messschritte (auch im Profil)
 │   ├── units.py                  # Einheiten aus Header, Long-Attribut oder Config (P20)
 │   ├── loader.py                 # CSV → DualModeDataset (orchestriert alles, baut ingestion_spec)
 │   ├── sources.py                # Quelle lesen, SHA-256-Fingerabdruck
@@ -66,6 +67,7 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 └── profiles/*.json               # Geräteprofile (Daten, kein Code)
 datualizer_gui/                   # PySide6-App, Einstieg: python -m datualizer_gui.app
                                   # campaign_window.py: Kampagnenansicht (Quellen-Dock, Uhren-Editor, Plot auf Master-Zeit)
+                                  # components/interval_bands.py + intervals_panel.py: Schritt-Bänder, Marker ○ ○, Steps-Dock
                                   # components/coverage_strip.py: Abdeckungsspur (Lücken schraffiert, in Pixeln gezeichnet)
                                   # components/curves.py: schnelle Kurven (Peak-Downsampling, Clip-to-View, Cache) für alle Plots
 tests/fixtures/runs_export/       # 13 echte Pipeline-Exporte (unveränderlich!)
@@ -142,10 +144,12 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
   - Schritt 3, Kampagne und Uhren: `Campaign`/`CampaignSession` (campaign.json mit relativen Pfaden, Spec, Hash), `ClockModel` (Versatz, Drift, Anker), Kampagnenfenster mit eigenem x-Array pro Spur und Datumsachse
   - Nachtrag: Blatt-/Tabellenwahl und Datum für Uhrzeiten beim Öffnen (`ReaderError.choice`/`options`, `with_choices`, `needs_clock_date`, `date_in_text`, Dialog `datualizer_gui/components/source_dialog.py`)
   - Schritt 4, Abdeckung: `session.coverage()` (`SourceCoverage`, `CoverageGap` mit `time_gap`/`no_values`), Abdeckungsspur im Kampagnenfenster (Menü *Settings → Tools → Coverage Info*, gespeichert über `datualizer_gui/settings.py`)
+  - Schritt 5, Messschritte: `IntervalMapping` (Spaltenrollen aus Profil oder Datenform, nie im Code), `session.intervals()` mit `problems`, manuelle Schritte (Rechtsklick „Marker ○ ○“), `WindowRule`, Bänder und Steps-Dock
+  - Schritt 6 recherchiert: [`docs/RESEARCH_FENSTER_STATISTIK.md`](docs/RESEARCH_FENSTER_STATISTIK.md) mit Arbeitspaketen A–D
 
 **Nächste offene Punkte:**
 
-1. **Etappe 2b, Schritte 5–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md)): Journal-Intervalle, Fenster-Statistik, Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
+1. **Etappe 2b, Schritte 6–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md)): Fenster-Statistik (Pakete A–D laut Recherche), Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
 2. **Wert und Einheit in einer Zelle (P6)** (`Konzentration = "20 °C"`) und widersprüchliche Metadaten anzeigen (P8).
 3. Danach: Block-Segmentation und Ragged-Healer (ursprünglicher Etappe-2-Plan), sobald Gerätedaten mit Kopfblöcken vorliegen.
 

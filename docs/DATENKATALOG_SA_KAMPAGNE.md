@@ -28,8 +28,8 @@ Katalytische Oxidation von Ethanol in einer Versuchsanlage. Pro Solltemperatur w
 | P27 | Gelöschte Experimente/Runs in der Datenbank | Fehlende IDs anzeigen | ✅ `source_meta["missing_ids"]` |
 | P28 | Ungültige OCR-Lesungen (`is_valid = 0`) | Als leer markieren, nicht als Messwert | ✅ Profil `instrument_reader_db` |
 | P29 | Gleiches Gerät, andere Anzeige-Skala an verschiedenen Tagen (Faktor 2.95 bei gleichem pA-Signal) | Rohsignal behalten, Skalen per Referenz-Fit vergleichen | ⏳ Schritt 8 |
-| P30 | Messschritte stehen nur im Labjournal | Intervalltabelle aus Journal, Fenster über allen Spuren | ⏳ Schritt 5 |
-| P31 | OCR-Fehllesungen in beide Richtungen | Zweiseitiges `spike`-Flag | ⏳ Schritt 6 |
+| P30 | Messschritte stehen nur im Labjournal | Intervalltabelle aus Journal, Fenster über allen Spuren | ✅ `IntervalMapping` (Start `Zeit_0`, Ende `Zeit_1`, Blockname aus Spalte A per `fill_down`, Sollwerte), Bänder, manuelle Schritte; „clearing“- und Vorlagezeilen ohne Start stehen in `problems` |
+| P31 | OCR-Fehllesungen in beide Richtungen | Zweiseitiges `spike`-Flag | ⏳ Schritt 6 (Hampel/MAD, siehe [Recherche](RESEARCH_FENSTER_STATISTIK.md)) |
 | P32 | Video ohne Frame-Zeitstempel (MP4) | Zeitachse über Anker (im Bild abgelesene Uhr) | ⏳ Schritt 9 |
 
 ## 3. Grundsatz

@@ -174,8 +174,14 @@ class FastCurve(pg.PlotCurveItem):
 
 
 def add_curve(plot: pg.PlotItem, x: np.ndarray, y: np.ndarray, gap_rows: np.ndarray, pen) -> FastCurve:
-    """Add a line curve that stays fast for millions of points."""
+    """Add a line curve that stays fast for millions of points.
+
+    Also hides pyqtgraph's "Plot Options" menu (alpha, FFT, downsampling, log mode): it calls
+    methods that only `PlotDataItem` has and raised an AttributeError on every change for a
+    `FastCurve`. The view box menu (View All, axes, export) stays.
+    """
     curve = FastCurve(x, y, gap_rows, pen)
+    plot.setMenuEnabled(False, enableViewBoxMenu=True)
     plot.addItem(curve)
     cache_static_parts(plot, curve)
     return curve

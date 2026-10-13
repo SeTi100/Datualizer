@@ -138,7 +138,7 @@ flowchart TD
      3. ✅ Anzeigename pro Kanal (`ChannelDisplay.alias`) für Achse, Baum und Infozeile.
      4. ✅ Zoom: Mausrad nur auf der Zeitachse (über einer Y-Achse zoomt es diese), Y passt sich dem sichtbaren Ausschnitt an (`TimeViewBox`, beides abschaltbar).
      5. ✅ Kanäle gruppieren (ein Subplot pro Kanal, nach Einheit, nach Quelle) mit Legende; Farben nach Kanal, nach Quelle (wie die Abdeckungsspur) oder manuell (`ChannelDisplay.color`). Y-Bereich einer Gruppe: Vereinigung der festen bzw. robusten Bereiche, sonst auto.
-     6. ⏳ Infozeile als Leiste, Tooltip oder Tabelle; Nachkommastellen.
+     6. ✅ Werte unter dem Mauszeiger als Leiste, Tooltip am Mauszeiger oder Tabelle im Dock *Values* (alles sichtbar, nichts abgeschnitten); Nachkommastellen fest oder automatisch (4 signifikante Stellen).
      7. ✅ Zeit: Zone der Kampagne wählbar (`session.set_timezone`), Achse automatisch, als Uhrzeit, Datum + Uhrzeit oder t − t0 (`Campaign.time_reference` in `campaign.json`); Mindesthöhe der Subplots, darunter scrollt die Ansicht und jeder Subplot zeigt seine Zeitachse.
      8. ⏳ Export als PNG, SVG, PDF mit hellem Theme für den Bericht.
      - Später mit Schritt 5/6: Qualitäts-Flags als Marker, Lücken-Schwelle, Standardauswahl der Kanäle.

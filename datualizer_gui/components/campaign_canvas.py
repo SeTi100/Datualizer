@@ -11,6 +11,8 @@ import pyqtgraph as pg
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from datualizer_core.campaign import Track
+from datualizer_gui.components import curves
+from datualizer_gui.components.curves import add_curve, rate_limited_mouse
 from datualizer_gui.components.plot_canvas import CHANNEL_COLORS
 
 
@@ -23,11 +25,7 @@ def utc_offset_s(epoch_s: float, zone: str) -> int:
 
 def connect_mask(values: np.ndarray, gap_rows: np.ndarray) -> np.ndarray:
     """Connect i to i+1 only if both are finite and no time gap starts at i+1."""
-    ok = np.isfinite(values)
-    mask = ok[:-1] & ok[1:] if len(values) > 1 else np.zeros(0, dtype=bool)
-    gaps = gap_rows[(gap_rows > 0) & (gap_rows < len(values))]
-    mask[gaps - 1] = False
-    return np.append(mask, False).astype(bool) if len(values) else np.zeros(0, dtype=bool)
+    return curves.connect_mask(values, gap_rows)
 
 
 class CampaignPlotCanvas(QWidget):
@@ -42,7 +40,8 @@ class CampaignPlotCanvas(QWidget):
         self._tracks: list[Track] = []
         self._plot_items: dict[str, pg.PlotItem] = {}
         self._curves: dict[str, pg.PlotDataItem] = {}
-        self._crosshair_lines: list[pg.InfiniteLine] = []
+        self._crosshair_lines: dict[str, pg.InfiniteLine] = {}
+        self._track_of: dict[str, Track] = {}  # track each kept subplot was drawn from
         self._zone = "UTC"
         self._utc_offset = 0
         self._user_range: tuple[float, float] | None = None  # set when the user zooms or pans
@@ -57,7 +56,7 @@ class CampaignPlotCanvas(QWidget):
         layout.addWidget(self.crosshair_label)
         self.graphics_layout = pg.GraphicsLayoutWidget()
         self.graphics_layout.setBackground("#18181c")
-        self.graphics_layout.scene().sigMouseMoved.connect(self._on_mouse_moved)
+        self._mouse_proxy = rate_limited_mouse(self.graphics_layout.scene(), self._on_mouse_moved)
         layout.addWidget(self.graphics_layout)
 
     @property
@@ -73,42 +72,55 @@ class CampaignPlotCanvas(QWidget):
         return self._curves
 
     def set_tracks(self, tracks: Sequence[Track], zone: str = "UTC") -> None:
-        """Replace all subplots; a range the user zoomed to is kept, otherwise all tracks are shown."""
+        """Show these tracks; a range the user zoomed to is kept, otherwise all tracks are shown.
+
+        Subplots of tracks that are still shown (the same Track object) are kept with their
+        drawn curve, so ticking one more channel does not redraw all the others.
+        """
         self._tracks = list(tracks)
-        self._zone = zone
         starts = [float(np.nanmin(t.x)) for t in self._tracks if np.isfinite(t.x).any()]
-        self._utc_offset = utc_offset_s(min(starts), zone) if starts else 0
-        self.graphics_layout.clear()
-        self._plot_items, self._curves, self._crosshair_lines = {}, {}, []
+        offset = utc_offset_s(min(starts), zone) if starts else 0
+        old_plots, old_curves, old_lines, old_tracks = self._plot_items, self._curves, self._crosshair_lines, self._track_of
+        if (offset, zone) != (self._utc_offset, self._zone):
+            old_tracks = {}  # date axis labels depend on the offset: build all subplots anew
+        self._zone, self._utc_offset = zone, offset
+        self.graphics_layout.clear()  # detaches the subplots, kept ones are added back below
+        self._plot_items, self._curves, self._crosshair_lines, self._track_of = {}, {}, {}, {}
 
         first: pg.PlotItem | None = None
+        last = len(self._tracks) - 1
         for i, tr in enumerate(self._tracks):
             key = f"{tr.source_id}/{tr.channel}"
-            # pyqtgraph's utcOffset is seconds west of UTC
-            axis = pg.DateAxisItem(orientation="bottom", utcOffset=-self._utc_offset)
-            p = self.graphics_layout.addPlot(row=i, col=0, axisItems={"bottom": axis})
-            p.showGrid(x=True, y=True, alpha=0.25)
-            p.setLabel("left", tr.channel, units=tr.unit or None)
-            p.setTitle(tr.label, size="9pt", color="#aaaaaa")
+            pen = pg.mkPen(CHANNEL_COLORS[i % len(CHANNEL_COLORS)], width=1.3)
+            if old_tracks.get(key) is tr:
+                p, curve, line = old_plots[key], old_curves[key], old_lines[key]
+                self.graphics_layout.addItem(p, row=i, col=0)
+                curve.setPen(pen)
+            else:
+                p, curve, line = self._new_plot(i, tr, pen)
+            p.setXLink(first)  # None for the first subplot
+            p.getAxis("bottom").setStyle(showValues=i == last)
             if first is None:
                 first = p
-            else:
-                p.setXLink(first)
-            if i < len(self._tracks) - 1:
-                p.getAxis("bottom").setStyle(showValues=False)
-            curve = p.plot(
-                tr.x, tr.y, pen=pg.mkPen(CHANNEL_COLORS[i % len(CHANNEL_COLORS)], width=1.3),
-                connect=connect_mask(tr.y, tr.gap_rows),
-            )
-            line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#888888", style=pg.QtCore.Qt.DashLine))
-            p.addItem(line, ignoreBounds=True)
-            self._plot_items[key], self._curves[key] = p, curve
-            self._crosshair_lines.append(line)
+            self._plot_items[key], self._curves[key], self._crosshair_lines[key] = p, curve, line
+            self._track_of[key] = tr
         if first is not None:
-            first.getViewBox().sigRangeChangedManually.connect(self._on_manual_range)
             self._apply_range()
         if not self._tracks:
             self.crosshair_label.setText("Add sources and select channels to plot them on one time axis.")
+
+    def _new_plot(self, row: int, tr: Track, pen) -> tuple[pg.PlotItem, pg.PlotDataItem, pg.InfiniteLine]:
+        # pyqtgraph's utcOffset is seconds west of UTC
+        axis = pg.DateAxisItem(orientation="bottom", utcOffset=-self._utc_offset)
+        p = self.graphics_layout.addPlot(row=row, col=0, axisItems={"bottom": axis})
+        p.showGrid(x=True, y=True, alpha=0.25)
+        p.setLabel("left", tr.channel, units=tr.unit or None)
+        p.setTitle(tr.label, size="9pt", color="#aaaaaa")
+        curve = add_curve(p, tr.x, tr.y, tr.gap_rows, pen)
+        line = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#888888", style=pg.QtCore.Qt.DashLine))
+        p.addItem(line, ignoreBounds=True)
+        p.getViewBox().sigRangeChangedManually.connect(self._on_manual_range)
+        return p, curve, line
 
     def full_range(self) -> tuple[float, float] | None:
         """Union of the time spans of all tracks (linked axes otherwise follow the first track only)."""
@@ -134,9 +146,14 @@ class CampaignPlotCanvas(QWidget):
         first = next(iter(self._plot_items.values()))
         rng = self._user_range or self.full_range()
         if rng is not None:
+            # x auto-range of a newly added subplot would pull all linked subplots to its own span
+            for p in self._plot_items.values():
+                p.enableAutoRange(axis="x", enable=False)
             first.setXRange(*rng, padding=0 if self._user_range else 0.01)
 
     def _on_manual_range(self, *_args) -> None:
+        if not self._plot_items:
+            return
         first = next(iter(self._plot_items.values()))
         lo, hi = first.getViewBox().viewRange()[0]
         self._user_range = (lo, hi)
@@ -147,7 +164,7 @@ class CampaignPlotCanvas(QWidget):
 
     def update_crosshair(self, x: float) -> str:
         """Move the crosshair to master time `x` and return the readout text."""
-        for line in self._crosshair_lines:
+        for line in self._crosshair_lines.values():
             line.setPos(x)
         parts = [self.format_time(x)]
         for tr in self._tracks:

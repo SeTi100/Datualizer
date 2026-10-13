@@ -16,11 +16,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from datualizer_core import DualModeDataset, load_csvs, load_source, pre_scan
+from datualizer_core import DualModeDataset, load_csvs, pre_scan
 from datualizer_gui.components.data_grid import DataGridWidget
 from datualizer_gui.components.inspector import InspectorPanel
 from datualizer_gui.components.plot_canvas import MultiChannelPlotCanvas
 from datualizer_gui.components.recipe_panel import RecipePanel
+from datualizer_gui.components.source_dialog import load_source_interactive
 
 logger = logging.getLogger(__name__)
 
@@ -246,9 +247,13 @@ class DatualizerMainWindow(QMainWindow):
             return
 
         try:
-            # 1. Ingest into DualModeDataset (one file: any supported format with its profile)
+            # 1. Ingest into DualModeDataset (one file: any supported format with its profile;
+            #    asks for the sheet or table if the file has several)
             if len(paths) == 1:
-                dataset = load_source(paths[0])
+                loaded = load_source_interactive(self, paths[0])
+                if loaded is None:  # user cancelled the sheet/table choice
+                    return
+                dataset = loaded[0]
                 meta = dataset.source_meta
                 delimiter = meta.get("delimiter", meta.get("reader", "-"))
                 decimal_sep = meta.get("decimal_separator", ".")

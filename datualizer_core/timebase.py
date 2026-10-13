@@ -12,7 +12,8 @@ This module has no imports from `ingestion/` so `dataset.py` can use it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+import re
 from typing import Sequence
 
 import polars as pl
@@ -45,6 +46,26 @@ def parse_datetime(text: str, formats: Sequence[str]) -> datetime | None:
             return datetime.strptime(text, fmt)
         except ValueError:
             pass
+    return None
+
+
+_DATE_PATTERNS = [
+    (re.compile(r"(?<!\d)(\d{4})[-_./](\d{1,2})[-_./](\d{1,2})(?!\d)"), (1, 2, 3)),  # 2026-10-12
+    (re.compile(r"(?<!\d)(\d{1,2})[-_./](\d{1,2})[-_./](\d{4})(?!\d)"), (3, 2, 1)),  # 12.10.2026
+]
+
+
+def date_in_text(text: str) -> date | None:
+    """First calendar date written in a text (sheet or file name), e.g. '12.10.2026' or '2026-10-12'.
+
+    Only a suggestion for `TimeConfig.clock_date`; the user confirms it. Day-first for dotted dates.
+    """
+    for pattern, (y, m, d) in _DATE_PATTERNS:
+        for match in pattern.finditer(text):
+            try:
+                return date(int(match.group(y)), int(match.group(m)), int(match.group(d)))
+            except ValueError:
+                continue
     return None
 
 

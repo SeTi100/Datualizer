@@ -70,12 +70,20 @@ def read_sqlite(path: str | Path, options: SqliteOptions | None = None) -> RawTa
             sql = opts.query
         elif opts.table is not None:
             if opts.table not in tables:
-                raise ReaderError(f"{path.name} has no table {opts.table!r}; tables: {user_tables}")
+                raise ReaderError(
+                    f"{path.name} has no table {opts.table!r}; tables: {user_tables}",
+                    choice="sqlite.table",
+                    options=user_tables,
+                )
             sql = f'SELECT * FROM "{opts.table}"'
         elif len(user_tables) == 1:
             sql = f'SELECT * FROM "{user_tables[0]}"'
         else:
-            raise ReaderError(f"{path.name} has several tables, choose one or give a query: {user_tables}")
+            raise ReaderError(
+                f"{path.name} has several tables, choose one or give a query: {user_tables}",
+                choice="sqlite.table",
+                options=user_tables,
+            )
         try:
             cur = con.execute(sql)
         except sqlite3.Error as exc:

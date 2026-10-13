@@ -121,16 +121,22 @@ def read_excel(path: str | Path, options: ExcelOptions | None = None) -> RawTabl
 
     if opts.sheet is None:
         if len(names) != 1:
-            raise ReaderError(f"{path.name} has several sheets, choose one of: {names}")
+            raise ReaderError(
+                f"{path.name} has several sheets, choose one of: {names}", choice="excel.sheet", options=names
+            )
         sheet = names[0]
     elif isinstance(opts.sheet, int):
         if not 0 <= opts.sheet < len(names):
-            raise ReaderError(f"{path.name} has no sheet #{opts.sheet}; sheets: {names}")
+            raise ReaderError(
+                f"{path.name} has no sheet #{opts.sheet}; sheets: {names}", choice="excel.sheet", options=names
+            )
         sheet = names[opts.sheet]
     elif opts.sheet in sheets:
         sheet = opts.sheet
     else:
-        raise ReaderError(f"{path.name} has no sheet {opts.sheet!r}; sheets: {names}")
+        raise ReaderError(
+            f"{path.name} has no sheet {opts.sheet!r}; sheets: {names}", choice="excel.sheet", options=names
+        )
 
     rows = sheets[sheet]
     width = _used_width(rows)

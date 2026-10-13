@@ -27,12 +27,12 @@ from datualizer_core.ingestion.profiles import (
     load_profile,
 )
 from datualizer_core.ingestion.readers import ExcelOptions, RawTable, ReaderError, SqliteOptions
-from datualizer_core.ingestion.source_loader import load_source
+from datualizer_core.ingestion.source_loader import load_source, needs_clock_date, with_choices
 from datualizer_core.ingestion.quality_rules import QualityConfigError
 from datualizer_core.ingestion.units import UnitConfigError
 from datualizer_core.ingestion.pre_scanner import PreScanResult, PreScanner, pre_scan
 from datualizer_core.schema import ColumnKind
-from datualizer_core.timebase import TimeConfigError
+from datualizer_core.timebase import TimeConfigError, date_in_text
 from datualizer_core.pipeline.operators import clean_column_name, clean_names, drop_footer, unpivot
 
 __all__ = [
@@ -60,6 +60,9 @@ __all__ = [
     "load_csv",
     "load_csvs",
     "load_source",
+    "needs_clock_date",
+    "with_choices",
+    "date_in_text",
     "load_profile",
     "get_profile",
     "builtin_profiles",

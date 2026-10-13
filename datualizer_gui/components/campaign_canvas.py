@@ -31,7 +31,7 @@ from datualizer_gui.components.coverage_strip import (
     lane_label,
     left_axis_width,
 )
-from datualizer_gui.components.interval_bands import PENDING_PEN, StepBand, marker_icon, marker_text
+from datualizer_gui.components.interval_bands import PENDING_PEN, StepBand, StepsItem, marker_icon, marker_text
 from datualizer_gui.components.plot_canvas import CHANNEL_COLORS
 from datualizer_gui.components.readout import ReadoutLabel, format_value
 
@@ -78,7 +78,8 @@ class CampaignPlotCanvas(QWidget):
         self._utc_offset = 0
         self._user_range: tuple[float, float] | None = None  # set when the user zooms or pans
         self._intervals = IntervalSet()
-        self._bands: list[StepBand] = []
+        self._steps_items: list[tuple[pg.PlotItem, StepsItem]] = []  # one per subplot
+        self._bands: list[StepBand] = []  # draggable regions of manual steps only
         self._marker_start: float | None = None  # master time of a started, unfinished marker
         self._pending_lines: list[tuple[pg.PlotItem, pg.InfiniteLine]] = []
         self._menu_x: float | None = None  # master time of the last right click
@@ -207,7 +208,13 @@ class CampaignPlotCanvas(QWidget):
 
     @property
     def bands(self) -> list[StepBand]:
+        """Draggable regions of the steps set by hand (one per step and subplot)."""
         return list(self._bands)
+
+    @property
+    def steps_items(self) -> list[StepsItem]:
+        """The items painting all steps, one per subplot."""
+        return [item for _, item in self._steps_items]
 
     @property
     def marker_state(self) -> int:
@@ -300,11 +307,18 @@ class CampaignPlotCanvas(QWidget):
     def _draw_bands(self) -> None:
         for band in self._bands:
             band.remove()
-        self._bands = []
+        for p, item in self._steps_items:
+            p.removeItem(item)
+        self._bands, self._steps_items = [], []
+        if not self._intervals.intervals:
+            return
         master = self._master_plot()
+        manual = [iv for iv in self._intervals.intervals if iv.manual]
         for p in self._all_plots():
-            for iv in self._intervals.intervals:
-                self._bands.append(StepBand(p, iv, self.interval_moved.emit, with_label=p is master))
+            item = StepsItem(self._intervals.intervals, with_labels=p is master)
+            p.addItem(item, ignoreBounds=True)
+            self._steps_items.append((p, item))
+            self._bands += [StepBand(p, iv, self.interval_moved.emit) for iv in manual]
 
     def _draw_pending(self) -> None:
         for p, line in self._pending_lines:

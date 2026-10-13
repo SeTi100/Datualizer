@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from pathlib import Path
 
+import pyqtgraph as pg
 import pytest
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication
@@ -48,6 +49,7 @@ def window(qapp: QApplication, monkeypatch: pytest.MonkeyPatch) -> CampaignWindo
     monkeypatch.setattr(campaign_window, "load_source_interactive", load)
     win = CampaignWindow()
     win.add_sources([DB, JOURNAL])
+    win.set_bands_visible(True)  # off by default
     qapp.processEvents()
     return win
 
@@ -69,8 +71,10 @@ def test_bands_over_all_subplots(window: CampaignWindow) -> None:
     canvas = window.canvas
     plots = list(canvas.plot_items.values())
     assert len(plots) == 2  # first channel of the scale and of the journal
-    assert len(canvas.bands) == 38 * len(plots)
-    assert all(not b.region.movable for b in canvas.bands)  # derived from the journal: fixed
+    # one painting item per subplot (not one region per step and subplot: that lagged)
+    assert len(canvas.steps_items) == len(plots) + (canvas.coverage_plot is not None)
+    assert all(len(item.intervals) == 38 for item in canvas.steps_items)
+    assert canvas.bands == []  # draggable regions only for steps set by hand
     text = canvas.update_crosshair(zurich(2026, 10, 12, 15, 47))
     assert text.endswith("step: T Einstellung 155")
 
@@ -159,7 +163,7 @@ def test_window_rule_from_the_panel(window: CampaignWindow) -> None:
     assert window.session.campaign.window_rule.length_s == 120
     iv = window.session.intervals().intervals[1]
     assert iv.window == (iv.end - 120, iv.end)
-    assert any(len(b.items) == 3 for b in window.canvas.bands)  # band, window, label
+    assert window.canvas.steps_items[0].intervals[1].window == iv.window  # drawn darker inside the band
 
 
 def test_mapping_dialog_prefilled_and_changeable(window: CampaignWindow) -> None:
@@ -174,10 +178,43 @@ def test_mapping_dialog_prefilled_and_changeable(window: CampaignWindow) -> None
     assert window.session.intervals().intervals[0].duration_s == 60
 
 
+def test_bands_are_off_by_default(qapp: QApplication) -> None:
+    win = CampaignWindow()
+    assert not win.bands_visible and not win.action_bands.isChecked()
+    win.close()
+
+
+def test_steps_item_paints_bands_and_window(qapp: QApplication, window: CampaignWindow) -> None:
+    """Zoomed onto one step: band colour inside the step, lighter window, background outside."""
+    window.session.set_window_rule(window.session.campaign.window_rule.model_copy(update={"length_s": 120}))
+    window.refresh_steps()
+    window.resize(1200, 700)
+    window.show()
+    steps = window.session.intervals().intervals
+    # a step longer than twice the window, with a pause before it
+    i = next(k for k in range(1, len(steps)) if steps[k].duration_s >= 240 and steps[k].start - steps[k - 1].end >= 20)
+    prev, iv = steps[i - 1], steps[i]
+    window.canvas.set_view_range(prev.end - 5, iv.end + 5)
+    qapp.processEvents()
+    plot = next(iter(window.canvas.plot_items.values()))
+    gl = window.canvas.graphics_layout
+    image = gl.grab().toImage()
+    vb = plot.getViewBox()
+    y = vb.viewRange()[1][0] + 0.25 * (vb.viewRange()[1][1] - vb.viewRange()[1][0])
+
+    def color(t: float) -> int:
+        pt = gl.mapFromScene(vb.mapViewToScene(pg.QtCore.QPointF(t, y)))
+        return image.pixel(pt.x(), pt.y())
+
+    outside, band, win = color((prev.end + iv.start) / 2), color(iv.start + 10), color(iv.end - 10)
+    assert len({outside, band, win}) == 3
+    window.close()
+
+
 def test_bands_toggle_in_settings(window: CampaignWindow) -> None:
-    assert window.bands_visible and window.canvas.bands
+    assert window.bands_visible and window.canvas.steps_items
     window.action_bands.trigger()
-    assert window.canvas.bands == [] and window.intervals_panel.table.rowCount() == 38
+    assert window.canvas.steps_items == [] and window.intervals_panel.table.rowCount() == 38
     assert not get_bool(INTERVAL_BANDS)  # remembered (no throwaway window: see test_campaign_gui)
     window.action_bands.trigger()
-    assert window.canvas.bands
+    assert window.canvas.steps_items

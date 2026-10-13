@@ -7,7 +7,7 @@ from PySide6.QtCore import QSettings
 COVERAGE_INFO = "tools/coverage_info"  # show the coverage strip in the campaign window
 INTERVAL_BANDS = "tools/interval_bands"  # draw measurement steps as bands in the campaign plots
 
-DEFAULTS = {COVERAGE_INFO: False, INTERVAL_BANDS: True}
+DEFAULTS = {COVERAGE_INFO: False, INTERVAL_BANDS: False}
 
 
 def app_settings() -> QSettings:

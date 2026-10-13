@@ -3,7 +3,7 @@
 Optional (Settings → Tools → Coverage Info): a coverage strip on top shows when each source has
 values; gaps are hatched (step 4). Measurement steps (step 5) come from a step table (lab journal)
 or a right click → Marker ○ ○, are listed in the Steps dock and drawn as bands
-(Settings → Tools → Interval Bands).
+(Settings → Tools → Interval Bands, off by default).
 """
 
 from __future__ import annotations

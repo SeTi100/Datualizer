@@ -7,7 +7,7 @@ the loaded datasets and computes master times. The JSON is the seed of the recip
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import os
@@ -19,10 +19,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from datualizer_core.campaign.clock import ClockModel, epoch_seconds
 from datualizer_core.campaign.coverage import SourceCoverage, coverage_intervals, value_rows
+from datualizer_core.campaign.display import ChannelDisplay, YScale
 from datualizer_core.dataset import DualModeDataset
 from datualizer_core.ingestion.config import IngestionConfig
 from datualizer_core.ingestion.profiles import SourceProfile, detect_profile
 from datualizer_core.ingestion.source_loader import load_source
+from datualizer_core.schema import PlotStyle
 from datualizer_core.timebase import check_zone
 
 
@@ -39,6 +41,20 @@ class CampaignSource(BaseModel):
     sha256: str | None = Field(None, description="Content hash when added; a changed file is reported.")
     clock: ClockModel = Field(default_factory=ClockModel)
     enabled: bool = True
+    display: dict[str, ChannelDisplay] = Field(
+        default_factory=dict, description="Display settings per channel (style, y scale, alias); display only."
+    )
+
+    def channel_display(self, channel: str) -> ChannelDisplay:
+        """Stored display settings of a channel, or the defaults."""
+        return self.display.get(channel) or ChannelDisplay()
+
+    def plot_style(self, channel: str) -> PlotStyle:
+        """Style of a channel: its own setting, else the profile default, else a line."""
+        own = self.channel_display(channel).style
+        if own is not None:
+            return own
+        return self.profile.plot_style if self.profile is not None else PlotStyle.LINE
 
 
 class Campaign(BaseModel):
@@ -76,6 +92,13 @@ class Track:
     x: np.ndarray  # master epoch seconds
     y: np.ndarray
     gap_rows: np.ndarray  # rows where a time gap starts (no line drawn into them)
+    name: str = ""  # display name: alias, else the channel name
+    style: PlotStyle = PlotStyle.LINE
+    y_scale: YScale = field(default_factory=YScale)
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            object.__setattr__(self, "name", self.channel)
 
 
 def _sha256(path: Path) -> str:
@@ -159,6 +182,21 @@ class CampaignSession:
         self.campaign.source(source_id).clock = clock
         self._forget(source_id)
 
+    def set_display(self, source_id: str, channel: str, display: ChannelDisplay) -> None:
+        """Change how one channel is drawn (display only; the dataset stays as loaded).
+
+        Defaults are not stored, so campaign.json lists only what the user changed.
+        """
+        src = self.campaign.source(source_id)
+        ds = self.datasets.get(source_id)
+        if ds is not None and channel not in ds.channels:
+            raise KeyError(f"Source {source_id!r} has no channel {channel!r}.")
+        if display.is_default():
+            src.display.pop(channel, None)
+        else:
+            src.display[channel] = display.model_copy(deep=True)
+        self._track_cache.pop((source_id, channel), None)
+
     def _forget(self, source_id: str) -> None:
         """Drop cached master times and tracks of a source (after its data or clock changed)."""
         self._master_cache.pop(source_id, None)
@@ -212,7 +250,12 @@ class CampaignSession:
         gap = np.flatnonzero(ds.flag_mask(["gap"]).to_numpy())
         src = self.campaign.source(source_id)
         y.setflags(write=False)
-        tr = Track(source_id, channel, f"{src.label or src.id}: {channel}", ds.units.get(channel, ""), x, y, gap)
+        display = src.channel_display(channel)
+        name = display.alias or channel
+        tr = Track(
+            source_id, channel, f"{src.label or src.id}: {name}", ds.units.get(channel, ""), x, y, gap,
+            name=name, style=src.plot_style(channel), y_scale=display.y_scale,
+        )
         self._track_cache[(source_id, channel)] = tr
         return tr
 

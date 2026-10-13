@@ -1,15 +1,18 @@
-"""Source list of a campaign: channels to plot and the clock model of each source."""
+"""Source list of a campaign: channels to plot, their display settings and the clock model of each source."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
+    QDialog,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -17,7 +20,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from datualizer_core.campaign import CampaignSession, ClockModel
+from datualizer_core.campaign import ChannelDisplay, CampaignSession, ClockModel
+from datualizer_core.schema import PlotStyle
+from datualizer_gui.components.channel_display_dialog import STYLE_NAMES, ChannelDisplayDialog
 
 ROLE_SOURCE = Qt.ItemDataRole.UserRole
 ROLE_CHANNEL = Qt.ItemDataRole.UserRole + 1
@@ -35,6 +40,7 @@ class SourcesPanel(QWidget):
 
     selection_changed = Signal()      # checked channels changed
     clock_changed = Signal(str)       # source id whose clock model was edited
+    display_changed = Signal(str, str)  # source id, channel whose display settings were edited
     add_requested = Signal()
     remove_requested = Signal(str)
 
@@ -55,6 +61,9 @@ class SourcesPanel(QWidget):
         self.tree.setHeaderLabels(["Source / Channel", "Profile", "Time span (master)", "Clock"])
         self.tree.itemChanged.connect(self._on_item_changed)
         self.tree.currentItemChanged.connect(lambda *_: self._show_clock())
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_context_menu)
+        self.tree.itemDoubleClicked.connect(self._on_double_click)
         layout.addWidget(self.tree, stretch=1)
 
         self.warning_label = QLabel()
@@ -111,7 +120,9 @@ class SourcesPanel(QWidget):
                 item.setData(0, ROLE_SOURCE, src.id)
                 self.tree.addTopLevelItem(item)
                 for ch in (ds.channels if ds is not None else []):
-                    child = QTreeWidgetItem([ch, ds.units.get(ch, ""), "", ""])
+                    alias = src.channel_display(ch).alias
+                    child = QTreeWidgetItem([f"{alias} ({ch})" if alias else ch, ds.units.get(ch, ""), "", ""])
+                    child.setToolTip(0, f"Channel in the data: {ch}. Right-click or double-click for display settings.")
                     child.setData(0, ROLE_SOURCE, src.id)
                     child.setData(0, ROLE_CHANNEL, ch)
                     child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -153,6 +164,71 @@ class SourcesPanel(QWidget):
     def current_source(self) -> str | None:
         item = self.tree.currentItem()
         return item.data(0, ROLE_SOURCE) if item is not None else None
+
+    def current_channel(self) -> tuple[str, str] | None:
+        """(source id, channel) of the selected channel row, None for a source row."""
+        item = self.tree.currentItem()
+        if item is None or item.data(0, ROLE_CHANNEL) is None:
+            return None
+        return item.data(0, ROLE_SOURCE), item.data(0, ROLE_CHANNEL)
+
+    def display_dialog(self, source_id: str, channel: str) -> ChannelDisplayDialog:
+        """Dialog pre-filled with the channel's current display settings (not shown yet)."""
+        assert self._session is not None
+        src = self._session.campaign.source(source_id)
+        ds = self._session.datasets.get(source_id)
+        values = ds.df[channel].cast(float).to_numpy() if ds is not None else None
+        default = src.profile.plot_style if src.profile is not None else PlotStyle.LINE
+        return ChannelDisplayDialog(channel, src.channel_display(channel), default, values, self)
+
+    def edit_display(self, source_id: str, channel: str) -> bool:
+        """Open the display dialog for a channel; True if settings were applied."""
+        dialog = self.display_dialog(source_id, channel)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        self.apply_display(source_id, channel, dialog.display())
+        return True
+
+    def apply_display(self, source_id: str, channel: str, display: ChannelDisplay) -> None:
+        if self._session is None:
+            return
+        self._session.set_display(source_id, channel, display)
+        self.display_changed.emit(source_id, channel)
+
+    def channel_menu(self, source_id: str, channel: str) -> QMenu:
+        """Context menu of a channel row: display settings and a quick plot style choice."""
+        assert self._session is not None
+        src = self._session.campaign.source(source_id)
+        menu = QMenu(self)
+        menu.addAction("Display Settings...", lambda: self.edit_display(source_id, channel))
+        styles = menu.addMenu("Plot Style")
+        group = QActionGroup(styles)
+        current = src.plot_style(channel)
+        for style, name in STYLE_NAMES.items():
+            action = QAction(name, styles)
+            action.setCheckable(True)
+            action.setChecked(style is current)
+            action.setData(style.value)  # Qt returns str enums as plain str
+            group.addAction(action)
+            styles.addAction(action)
+        group.triggered.connect(
+            lambda action: self.apply_display(
+                source_id, channel, src.channel_display(channel).model_copy(update={"style": PlotStyle(action.data())})
+            )
+        )
+        return menu
+
+    def _on_context_menu(self, pos: QPoint) -> None:
+        item = self.tree.itemAt(pos)
+        if item is None or item.data(0, ROLE_CHANNEL) is None or self._session is None:
+            return
+        self.channel_menu(item.data(0, ROLE_SOURCE), item.data(0, ROLE_CHANNEL)).exec(
+            self.tree.viewport().mapToGlobal(pos)
+        )
+
+    def _on_double_click(self, item: QTreeWidgetItem, column: int) -> None:
+        if item.data(0, ROLE_CHANNEL) is not None and self._session is not None:
+            self.edit_display(item.data(0, ROLE_SOURCE), item.data(0, ROLE_CHANNEL))
 
     # -------------------------------------------------------------- handlers
     def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:

@@ -16,5 +16,6 @@
     "time": {
       "timezone": "Europe/Zurich"
     }
-  }
+  },
+  "plot_style": "step"
 }

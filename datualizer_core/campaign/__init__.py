@@ -9,11 +9,13 @@ from datualizer_core.campaign.coverage import (
     SourceCoverage,
     coverage_intervals,
 )
+from datualizer_core.campaign.display import ChannelDisplay, YScale, YScaleMode
 
 __all__ = [
     "Campaign",
     "CampaignSession",
     "CampaignSource",
+    "ChannelDisplay",
     "ClockAnchor",
     "ClockModel",
     "CoverageGap",
@@ -21,6 +23,8 @@ __all__ = [
     "SourceCoverage",
     "TIME_GAP",
     "Track",
+    "YScale",
+    "YScaleMode",
     "coverage_intervals",
     "epoch_seconds",
     "to_epoch_s",

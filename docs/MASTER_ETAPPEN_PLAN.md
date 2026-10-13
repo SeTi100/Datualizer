@@ -132,6 +132,16 @@ flowchart TD
 2. ✅ **Reader + Profile:** `load_source`; Excel (`.xlsx`, `.xls` inkl. Metadaten-Blätter), SQLite (ganze `.db` oder Abfrage, fehlende IDs), `.dat`; sechs Profile als JSON; Realdaten-Ausschnitte in `tests/fixtures/sa_12_10/`, Probleme in [`DATENKATALOG_SA_KAMPAGNE.md`](DATENKATALOG_SA_KAMPAGNE.md). Offen: Zeitzone pro Spalte.
 3. ✅ **Kampagne + Uhrenmodelle:** `Campaign` (`campaign.json`), `ClockModel` (Versatz, Drift, Anker), Master-Zeit; Kampagnenfenster mit eigenem x-Array pro Spur und Datumsachse, Quellen-Dock mit Uhren-Editor. Nachtrag: Mehrblatt-Excel und SQLite mit mehreren Tabellen fragen beim Öffnen nach Blatt bzw. Tabelle und dem Datum für Uhrzeiten (`ReaderError.choice/options`, `with_choices`); die Wahl replayt über `campaign.json`.
 4. ✅ **Abdeckungsansicht:** `session.coverage()` (Spanne, Abschnitte mit Werten, Lücken als `time_gap` oder `no_values`), Abdeckungsspur über den Subplots im Kampagnenfenster, einschaltbar unter *Settings → Tools → Coverage Info* (eine Zeile pro Quelle, Lücken schraffiert, x-verlinkt, Lücke in der Infozeile).
+   - **Einstellungen des Kampagnenfensters** (eingeschoben nach einem Blick auf die echten SA-Daten, ein PR pro Punkt oder kleiner Gruppe). Zwei Ebenen: Was pro Kanal oder Quelle gilt, steht in `campaign.json`; persönliche Vorlieben stehen in QSettings (`datualizer_gui/settings.py`). Alles betrifft nur die Darstellung.
+     1. ✅ Darstellung pro Kanal: Linie, Punkte, Treppe, Linie + Punkte (`ChannelDisplay.style`, Standard aus `SourceProfile.plot_style`, Labjournal = Treppe).
+     2. ✅ Y-Skalierung pro Kanal: Auto, robust (Perzentile), fest; Werte ausserhalb am Rand markiert (`YScale`, `OutOfRangeMarkers`).
+     3. ✅ Anzeigename pro Kanal (`ChannelDisplay.alias`) für Achse, Baum und Infozeile.
+     4. ⏳ Zoom: Mausrad nur auf der Zeitachse, Y passt sich dem sichtbaren Ausschnitt an.
+     5. ⏳ Kanäle gruppieren (pro Kanal, nach Einheit, nach Quelle) mit Legende; Farbschema.
+     6. ⏳ Infozeile als Leiste, Tooltip oder Tabelle; Nachkommastellen.
+     7. ⏳ Zeit: Zone der Kampagne, Achse als Uhrzeit, Datum + Uhrzeit oder t − t0; Mindesthöhe der Subplots.
+     8. ⏳ Export als PNG, SVG, PDF mit hellem Theme für den Bericht.
+     - Später mit Schritt 5/6: Qualitäts-Flags als Marker, Lücken-Schwelle, Standardauswahl der Kanäle.
 5. ⏳ **Intervalle** aus dem Labjournal, Bänder im Plot, Teilfenster-Regeln.
 6. ⏳ **Fenster-Statistik + Fenster-Inspektor** (Steigung mit Standardfehler, 2-Punkt, Drift, Integral) und zweiseitiges `spike`-Flag.
 7. ⏳ **Abgleich-Werkzeuge:** Kreuzkorrelation, Ankerereignisse, Dialog.

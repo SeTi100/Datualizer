@@ -133,7 +133,7 @@ flowchart TD
 3. ✅ **Kampagne + Uhrenmodelle:** `Campaign` (`campaign.json`), `ClockModel` (Versatz, Drift, Anker), Master-Zeit; Kampagnenfenster mit eigenem x-Array pro Spur und Datumsachse, Quellen-Dock mit Uhren-Editor. Nachtrag: Mehrblatt-Excel und SQLite mit mehreren Tabellen fragen beim Öffnen nach Blatt bzw. Tabelle und dem Datum für Uhrzeiten (`ReaderError.choice/options`, `with_choices`); die Wahl replayt über `campaign.json`.
 4. ✅ **Abdeckungsansicht:** `session.coverage()` (Spanne, Abschnitte mit Werten, Lücken als `time_gap` oder `no_values`), Abdeckungsspur über den Subplots im Kampagnenfenster, einschaltbar unter *Settings → Tools → Coverage Info* (eine Zeile pro Quelle, Lücken schraffiert, x-verlinkt, Lücke in der Infozeile).
 5. ⏳ **Intervalle** aus dem Labjournal, Bänder im Plot, Teilfenster-Regeln.
-6. ⏳ **Fenster-Statistik + Fenster-Inspektor** (Steigung mit Standardfehler, 2-Punkt, Drift, Integral) und zweiseitiges `spike`-Flag.
+6. ⏳ **Fenster-Statistik + Fenster-Inspektor** (Steigung mit Standardfehler, 2-Punkt, Drift, Integral); ✅ zweiseitiges `spike`-Flag (Hampel, P31, Paket C): `QualityConfig.spike_window_s`, `spike_k`, `spike_channels`, `spike_min_scale`, `ds.quality_notes`.
 7. ⏳ **Abgleich-Werkzeuge:** Kreuzkorrelation, Ankerereignisse, Dialog.
 8. ⏳ **Rechengrössen, Referenz-Fits, Szenarien:** sicherer Formel-Parser, Kalibrier- und XY-Ergebnisansicht, Fenstertabelle mit Export.
 9. ⏳ **Video-Spur:** Frame-Ansicht synchron zur Kampagnenuhr, Anker aus im Bild abgelesener Uhrzeit.

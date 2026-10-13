@@ -1,4 +1,7 @@
-"""Campaign window: all sources of a measurement campaign on one master time axis (Etappe 2b)."""
+"""Campaign window: all sources of a measurement campaign on one master time axis (Etappe 2b).
+
+A coverage strip on top shows when each source has values; gaps are hatched (step 4).
+"""
 
 from __future__ import annotations
 
@@ -97,7 +100,8 @@ class CampaignWindow(QMainWindow):
         for sid, ch in self.sources_panel.checked_channels():
             if self._session.master_time(sid) is not None:
                 tracks.append(self._session.track(sid, ch))
-        self.canvas.set_tracks(tracks, self._session.campaign.timezone)
+        coverage = [self._session.coverage(src.id) for src in self._session.campaign.sources]
+        self.canvas.set_tracks(tracks, self._session.campaign.timezone, coverage)
 
     # ----------------------------------------------------------------- internals
     def _refresh_all(self) -> None:

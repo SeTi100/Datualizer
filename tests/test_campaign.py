@@ -1,4 +1,4 @@
-"""Campaign model and clock models (Etappe 2b, step 3): several sources on one master time axis."""
+"""Campaign model, clock models and coverage (Etappe 2b, steps 3–4): several sources on one master time axis."""
 
 from __future__ import annotations
 
@@ -15,7 +15,10 @@ from datualizer_core.campaign import (
     Campaign,
     CampaignSession,
     ClockAnchor,
+    NO_VALUES,
+    TIME_GAP,
     ClockModel,
+    coverage_intervals,
     epoch_seconds,
     to_epoch_s,
 )
@@ -153,3 +156,65 @@ class TestCampaignSession:
     def test_unknown_zone_fails_loudly(self) -> None:
         with pytest.raises(TimeConfigError):
             CampaignSession(Campaign(timezone="Mars/Olympus"))
+
+
+class TestCoverage:
+    """Step 4: when each source has values on master time, and where it has gaps."""
+
+    def test_intervals_from_values_and_time_gaps(self) -> None:
+        t = np.array([0.0, 1, 2, 10, 11, 12, 13, np.nan, 14, 15])
+        has = np.array([0, 1, 1, 1, 0, 0, 1, 1, 1, 0], dtype=bool)
+        segments, gaps = coverage_intervals(t, has, gap_rows=[3])
+        assert segments == [(1.0, 2.0), (10.0, 10.0), (13.0, 14.0)]
+        assert [(g.start, g.end, g.reason, g.rows) for g in gaps] == [
+            (0.0, 1.0, NO_VALUES, (0, 1)),       # empty rows at the start
+            (2.0, 10.0, TIME_GAP, (2, 3)),       # flagged time step
+            (10.0, 13.0, NO_VALUES, (3, 6)),     # time runs on, values empty
+            (14.0, 15.0, NO_VALUES, (8, 9)),     # empty row at the end; the NaN-time row is skipped
+        ]
+
+    def test_no_values_at_all_is_one_gap(self) -> None:
+        segments, gaps = coverage_intervals(np.array([5.0, 6.0]), np.array([False, False]))
+        assert segments == [] and [(g.start, g.end) for g in gaps] == [(5.0, 6.0)]
+        assert coverage_intervals(np.array([np.nan]), np.array([True])) == ([], [])
+
+    def test_fid_time_gap(self) -> None:
+        s = CampaignSession()
+        src = s.add_source(FID_DAT)
+        cov = s.coverage(src.id)
+        assert cov.span == s.span(src.id)
+        assert [(g.reason, g.duration_s, g.rows) for g in cov.gaps] == [(TIME_GAP, 11.0, (123, 124))]
+        assert len(cov.segments) == 2 and cov.covered_s == cov.span[1] - cov.span[0] - 11.0
+        assert cov.gap_at(cov.gaps[0].start + 5) is cov.gaps[0]
+        assert cov.gap_at(cov.span[0]) is None
+
+    def test_logger_outage_p24(self, pico_copy: Path) -> None:
+        """PicoLog extract starts inside a logger outage: time runs on, all channels empty."""
+        s = CampaignSession()
+        src = s.add_source(pico_copy)
+        cov = s.coverage(src.id)
+        assert [(g.reason, g.rows) for g in cov.gaps] == [(NO_VALUES, (0, 76))]
+        assert cov.segments[0][0] == s.master_time(src.id)[76]
+
+    def test_invalid_ocr_readings_p28_and_channel_choice(self) -> None:
+        s = CampaignSession()
+        src = s.add_source(DB)
+        assert [(g.reason, g.rows) for g in s.coverage(src.id).gaps] == [(NO_VALUES, (91, 99))]
+        # Only the mass channel: it is empty far more often than the flow channel
+        assert len(s.coverage(src.id, ["masse"]).gaps) > 1
+
+    def test_source_without_absolute_time(self) -> None:
+        s = CampaignSession()
+        src = s.add_source(SA / "labjournal_12_10_extract.xlsx")
+        cov = s.coverage(src.id)
+        assert cov.span is None and cov.segments == [] and cov.gaps == []
+
+    def test_follows_the_clock_and_is_cached(self) -> None:
+        s = CampaignSession()
+        src = s.add_source(FID_DAT)
+        before = s.coverage(src.id)
+        assert s.coverage(src.id) is before
+        s.set_clock(src.id, ClockModel(offset_s=970))
+        after = s.coverage(src.id)
+        assert after is not before
+        assert after.gaps[0].start == before.gaps[0].start + 970

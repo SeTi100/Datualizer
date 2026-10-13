@@ -47,7 +47,7 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 ├── runs.py                       # Run-Übersicht, Kanalverfügbarkeit, Zeit pro Run
 ├── quality.py                    # Qualitäts-Flags als Ereignistabelle (markieren, nie ändern)
 ├── timebase.py                   # Absolute Zeit: Datumsformate, Zeitzonen, Sommerzeit (über Polars, importzyklusfrei)
-├── campaign/                     # Messkampagne: Campaign (JSON), CampaignSession, ClockModel (Versatz, Drift, Anker), Track
+├── campaign/                     # Messkampagne: Campaign (JSON), CampaignSession, ClockModel (Versatz, Drift, Anker), Track, Abdeckung (coverage.py)
 ├── ingestion/
 │   ├── config.py                 # IngestionConfig, TimeConfig, Vocabulary, LongFormatConfig, RoleConfig, RunConfig, UnitConfig, QualityConfig, MergeConfig  ← alle Stellschrauben
 │   ├── pre_scanner.py            # Delimiter, Dezimal, BOM, Header, Footer
@@ -66,6 +66,7 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 └── profiles/*.json               # Geräteprofile (Daten, kein Code)
 datualizer_gui/                   # PySide6-App, Einstieg: python -m datualizer_gui.app
                                   # campaign_window.py: Kampagnenansicht (Quellen-Dock, Uhren-Editor, Plot auf Master-Zeit)
+                                  # components/coverage_strip.py: Abdeckungsspur (Lücken schraffiert, in Pixeln gezeichnet)
                                   # components/curves.py: schnelle Kurven (Peak-Downsampling, Clip-to-View, Cache) für alle Plots
 tests/fixtures/runs_export/       # 13 echte Pipeline-Exporte (unveränderlich!)
 tests/fixtures/sa_12_10/          # Ausschnitte einer echten Mehrgeräte-Messkampagne (unveränderlich!)
@@ -95,6 +96,7 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
 - CI (`.github/workflows/pytest.yml`, Ubuntu, Python 3.11) installiert per `pip install -e ".[dev]"` und testet damit auch die Paket-Metadaten.
 - **pyqtgraph ≥ 0.14** ist die getestete Version (`pyproject.toml`).
 - Kurven nie mit `p.plot(...)` bauen, sondern über `curves.add_curve` (`FastCurve`): eigenes Peak-Downsampling, das nie über eine Lücke hinweg verbindet (pyqtgraphs eigenes `setDownsampling` zog Linien über Logger-Aussetzer), Clip-to-View, 1-px-Stift, Pixmap-Cache. Gitter über `curves.light_grid`, Cache-Grösse über `curves.ensure_pixmap_cache` (Qt-Standard 10 MB reicht nur für wenige Subplots, danach wird jedes Bild komplett neu gezeichnet). `getData()` liefert die *angezeigten* Daten, alle Punkte gibt `getOriginalDataset()`.
+- Mit `setXLink` verlinkte Plots gleicht pyqtgraph in Bildschirm-Pixeln ab. Unterschiedlich breite linke Achsen ergeben deshalb unterschiedliche x-Bereiche. Im Kampagnenfenster bekommen alle linken Achsen dieselbe feste Breite (`coverage_strip.left_axis_width`).
 - Wechselnde Anzeigetexte (Fadenkreuz-Werte) über `components/readout.ReadoutLabel`: Ein normales `QLabel` meldet seine Textbreite als Mindestbreite und zieht beim Hovern das ganze Fenster mit.
 - **PySide6 6.12.0** bricht die GUI-Tests mit einem Speicherfehler ab („deallocating None“). `pyproject.toml` begrenzt deshalb auf `<6.12`. Vor dem Anheben die GUI-Tests mit der neuen Version mehrfach laufen lassen.
 - Änderungen an `.github/workflows/` brauchen beim Push den OAuth-Scope `workflow` (`gh auth refresh -s workflow`).
@@ -138,10 +140,11 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
   - Schritt 2, Reader und Profile (P21–P28, siehe [Datenkatalog SA](docs/DATENKATALOG_SA_KAMPAGNE.md)): `load_source`, Excel- und SQLite-Reader, `source_meta`, `SourceProfile` mit sechs mitgelieferten Profilen, `TimeConfig.clock_date`, Tabellenfehler als Sentinels, GUI öffnet alle Formate
   - Schritt 3, Kampagne und Uhren: `Campaign`/`CampaignSession` (campaign.json mit relativen Pfaden, Spec, Hash), `ClockModel` (Versatz, Drift, Anker), Kampagnenfenster mit eigenem x-Array pro Spur und Datumsachse
   - Nachtrag: Blatt-/Tabellenwahl und Datum für Uhrzeiten beim Öffnen (`ReaderError.choice`/`options`, `with_choices`, `needs_clock_date`, `date_in_text`, Dialog `datualizer_gui/components/source_dialog.py`)
+  - Schritt 4, Abdeckung: `session.coverage()` (`SourceCoverage`, `CoverageGap` mit `time_gap`/`no_values`), Abdeckungsspur im Kampagnenfenster
 
 **Nächste offene Punkte:**
 
-1. **Etappe 2b, Schritte 4–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md)): Abdeckungsansicht, Journal-Intervalle, Fenster-Statistik, Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
+1. **Etappe 2b, Schritte 5–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md)): Journal-Intervalle, Fenster-Statistik, Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
 2. **Wert und Einheit in einer Zelle (P6)** (`Konzentration = "20 °C"`) und widersprüchliche Metadaten anzeigen (P8).
 3. Danach: Block-Segmentation und Ragged-Healer (ursprünglicher Etappe-2-Plan), sobald Gerätedaten mit Kopfblöcken vorliegen.
 

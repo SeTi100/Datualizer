@@ -10,7 +10,7 @@ import polars as pl
 import pyqtgraph as pg
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from datualizer_core.campaign import Track
+from datualizer_core.campaign import SourceCoverage, Track
 from datualizer_gui.components import curves
 from datualizer_gui.components.curves import (
     FastCurve,
@@ -19,6 +19,14 @@ from datualizer_gui.components.curves import (
     ensure_pixmap_cache,
     light_grid,
     rate_limited_mouse,
+)
+from datualizer_gui.components.coverage_strip import (
+    LEFT_AXIS_MIN_PX,
+    CoverageItem,
+    build_coverage_plot,
+    describe_gap,
+    lane_label,
+    left_axis_width,
 )
 from datualizer_gui.components.plot_canvas import CHANNEL_COLORS
 from datualizer_gui.components.readout import ReadoutLabel, format_value
@@ -37,7 +45,7 @@ def connect_mask(values: np.ndarray, gap_rows: np.ndarray) -> np.ndarray:
 
 
 class CampaignPlotCanvas(QWidget):
-    """Stacked subplots with linked x axes on absolute master time.
+    """Coverage strip on top, stacked subplots below, all with linked x axes on master time.
 
     Unlike the dataset canvas, every track keeps its own x array, so sources with different
     sampling and clocks share one time axis without resampling.
@@ -50,6 +58,10 @@ class CampaignPlotCanvas(QWidget):
         self._curves: dict[str, FastCurve] = {}
         self._crosshair_lines: dict[str, pg.InfiniteLine] = {}
         self._track_of: dict[str, Track] = {}  # track each kept subplot was drawn from
+        self._coverage: list[SourceCoverage] = []
+        self.coverage_plot: pg.PlotItem | None = None
+        self.coverage_item: CoverageItem | None = None
+        self._coverage_line: pg.InfiniteLine | None = None
         self._zone = "UTC"
         self._utc_offset = 0
         self._user_range: tuple[float, float] | None = None  # set when the user zooms or pans
@@ -76,14 +88,23 @@ class CampaignPlotCanvas(QWidget):
     def curves(self) -> dict[str, FastCurve]:
         return self._curves
 
-    def set_tracks(self, tracks: Sequence[Track], zone: str = "UTC") -> None:
-        """Show these tracks; a range the user zoomed to is kept, otherwise all tracks are shown.
+    @property
+    def coverage(self) -> list[SourceCoverage]:
+        return list(self._coverage)
 
-        Subplots of tracks that are still shown (the same Track object) are kept with their
-        drawn curve, so ticking one more channel does not redraw all the others.
+    def set_tracks(
+        self, tracks: Sequence[Track], zone: str = "UTC", coverage: Sequence[SourceCoverage] = ()
+    ) -> None:
+        """Show the coverage of these sources and these tracks on one time axis.
+
+        A range the user zoomed to is kept, otherwise everything is shown. Subplots of tracks
+        that are still shown (the same Track object) are kept with their drawn curve, so ticking
+        one more channel does not redraw all the others.
         """
         self._tracks = list(tracks)
+        self._coverage = list(coverage)
         starts = [float(np.nanmin(t.x)) for t in self._tracks if np.isfinite(t.x).any()]
+        starts += [c.span[0] for c in self._coverage if c.span is not None]
         offset = utc_offset_s(min(starts), zone) if starts else 0
         old_plots, old_curves, old_lines, old_tracks = self._plot_items, self._curves, self._crosshair_lines, self._track_of
         if (offset, zone) != (self._utc_offset, self._zone):
@@ -91,28 +112,55 @@ class CampaignPlotCanvas(QWidget):
         self._zone, self._utc_offset = zone, offset
         self.graphics_layout.clear()  # detaches the subplots, kept ones are added back below
         self._plot_items, self._curves, self._crosshair_lines, self._track_of = {}, {}, {}, {}
+        self.coverage_plot = self.coverage_item = self._coverage_line = None
 
         first: pg.PlotItem | None = None
+        if self._coverage:  # rebuilt every time: cheap, and the lanes follow the source list
+            first, self.coverage_item = build_coverage_plot(
+                self.graphics_layout, self._coverage, CHANNEL_COLORS, self._utc_offset
+            )
+            first.getAxis("bottom").setStyle(showValues=not self._tracks)
+            first.getViewBox().sigRangeChangedManually.connect(self._on_manual_range)
+            self._coverage_line = pg.InfiniteLine(
+                angle=90, movable=False, pen=pg.mkPen("#888888", style=pg.QtCore.Qt.DashLine)
+            )
+            first.addItem(self._coverage_line, ignoreBounds=True)
+            self.coverage_plot = first
         last = len(self._tracks) - 1
         for i, tr in enumerate(self._tracks):
             key = f"{tr.source_id}/{tr.channel}"
             pen = curve_pen(CHANNEL_COLORS[i % len(CHANNEL_COLORS)])
+            row = i + 1  # row 0 belongs to the coverage strip
             if old_tracks.get(key) is tr:
                 p, curve, line = old_plots[key], old_curves[key], old_lines[key]
-                self.graphics_layout.addItem(p, row=i, col=0)
+                self.graphics_layout.addItem(p, row=row, col=0)
                 curve.setPen(pen)
             else:
-                p, curve, line = self._new_plot(i, tr, pen)
+                p, curve, line = self._new_plot(row, tr, pen)
             p.setXLink(first)  # None for the first subplot
             p.getAxis("bottom").setStyle(showValues=i == last)
             if first is None:
                 first = p
             self._plot_items[key], self._curves[key], self._crosshair_lines[key] = p, curve, line
             self._track_of[key] = tr
+        width = LEFT_AXIS_MIN_PX
+        if self.coverage_plot is not None:
+            width = left_axis_width(self.coverage_plot, [lane_label(c) for c in self._coverage])
+        for p in self._all_plots():
+            p.getAxis("left").setWidth(width)
         if first is not None:
             self._apply_range()
-        if not self._tracks:
+        if not self._tracks and not self._coverage:
             self.crosshair_label.setText("Add sources and select channels to plot them on one time axis.")
+
+    def _master_plot(self) -> pg.PlotItem | None:
+        """The subplot all others are x-linked to (the coverage strip if shown)."""
+        if self.coverage_plot is not None:
+            return self.coverage_plot
+        return next(iter(self._plot_items.values()), None)
+
+    def _all_plots(self) -> list[pg.PlotItem]:
+        return ([self.coverage_plot] if self.coverage_plot is not None else []) + list(self._plot_items.values())
 
     def _new_plot(self, row: int, tr: Track, pen) -> tuple[pg.PlotItem, FastCurve, pg.InfiniteLine]:
         # pyqtgraph's utcOffset is seconds west of UTC
@@ -128,8 +176,9 @@ class CampaignPlotCanvas(QWidget):
         return p, curve, line
 
     def full_range(self) -> tuple[float, float] | None:
-        """Union of the time spans of all tracks (linked axes otherwise follow the first track only)."""
+        """Union of the spans of all tracks and sources (linked axes otherwise follow the first plot only)."""
         spans = [(np.nanmin(t.x), np.nanmax(t.x)) for t in self._tracks if np.isfinite(t.x).any()]
+        spans += [c.span for c in self._coverage if c.span is not None]
         if not spans:
             return None
         return float(min(a for a, _ in spans)), float(max(b for _, b in spans))
@@ -146,20 +195,20 @@ class CampaignPlotCanvas(QWidget):
             p.enableAutoRange(axis="y")
 
     def _apply_range(self) -> None:
-        if not self._plot_items:
+        first = self._master_plot()
+        if first is None:
             return
-        first = next(iter(self._plot_items.values()))
         rng = self._user_range or self.full_range()
         if rng is not None:
             # x auto-range of a newly added subplot would pull all linked subplots to its own span
-            for p in self._plot_items.values():
+            for p in self._all_plots():
                 p.enableAutoRange(axis="x", enable=False)
             first.setXRange(*rng, padding=0 if self._user_range else 0.01)
 
     def _on_manual_range(self, *_args) -> None:
-        if not self._plot_items:
+        first = self._master_plot()
+        if first is None:
             return
-        first = next(iter(self._plot_items.values()))
         lo, hi = first.getViewBox().viewRange()[0]
         self._user_range = (lo, hi)
 
@@ -171,6 +220,8 @@ class CampaignPlotCanvas(QWidget):
         """Move the crosshair to master time `x` and return the readout text."""
         for line in self._crosshair_lines.values():
             line.setPos(x)
+        if self._coverage_line is not None:
+            self._coverage_line.setPos(x)
         parts = [self.format_time(x)]
         for tr in self._tracks:
             if not len(tr.x):
@@ -179,12 +230,13 @@ class CampaignPlotCanvas(QWidget):
             j = idx - 1 if abs(tr.x[idx - 1] - x) <= abs(tr.x[idx] - x) else idx
             val = tr.y[j]
             parts.append(f"{tr.label} = {format_value(val)} {tr.unit}".rstrip())
+        parts += [g for g in (describe_gap(c, x) for c in self._coverage) if g]
         text = " | ".join(parts)
         self.crosshair_label.setText(text)
         return text
 
     def _on_mouse_moved(self, pos) -> None:
-        for p in self._plot_items.values():
+        for p in self._all_plots():
             if p.sceneBoundingRect().contains(pos):
                 self.update_crosshair(p.getViewBox().mapSceneToView(pos).x())
                 return

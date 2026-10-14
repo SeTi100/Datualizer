@@ -7,7 +7,7 @@ the loaded datasets and computes master times. The JSON is the seed of the recip
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Sequence
 
 import numpy as np
+import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 
 from datualizer_core.campaign.clock import ClockModel, epoch_seconds, to_epoch_s
@@ -36,6 +37,7 @@ from datualizer_core.ingestion.config import IngestionConfig
 from datualizer_core.ingestion.profiles import SourceProfile, detect_profile
 from datualizer_core.ingestion.source_loader import load_source
 from datualizer_core.schema import PlotStyle
+from datualizer_core.stats.window import StatsConfig, WindowResult, WindowSpec, window_stats
 from datualizer_core.timebase import check_zone
 
 
@@ -84,6 +86,7 @@ class Campaign(BaseModel):
     )
     intervals: list[Interval] = Field(default_factory=list, description="Measurement steps set by hand.")
     window_rule: WindowRule = Field(default_factory=WindowRule, description="Evaluated part of each step.")
+    stats: StatsConfig = Field(default_factory=StatsConfig, description="Settings of the window statistics.")
     notes: str = ""
 
     def source(self, source_id: str) -> CampaignSource:
@@ -119,6 +122,32 @@ class Track:
     def __post_init__(self) -> None:
         if not self.name:
             object.__setattr__(self, "name", self.channel)
+
+
+def _result_columns() -> list[str]:
+    out = []
+    for f in fields(WindowResult):
+        if f.name == "quantiles":
+            out += ["q05", "q95"]
+        elif f.name == "slope_ts_ci":
+            out += ["ts_ci_low", "ts_ci_high"]
+        else:
+            out.append(f.name)
+    return out
+
+
+def _result_row(r: WindowResult) -> dict:
+    row = {}
+    for f in fields(WindowResult):
+        v = getattr(r, f.name)
+        if f.name in ("quantiles", "slope_ts_ci"):
+            lo, hi = ("q05", "q95") if f.name == "quantiles" else ("ts_ci_low", "ts_ci_high")
+            row[lo], row[hi] = (None, None) if v is None else v
+        elif f.name in ("checks", "assumptions"):
+            row[f.name] = "; ".join(v)
+        else:
+            row[f.name] = v
+    return row
 
 
 def _sha256(path: Path) -> str:
@@ -412,6 +441,86 @@ class CampaignSession:
         clock = self.campaign.source(m.clock_source or m.source_id).clock
         formats = src.spec.time.datetime_formats if src.spec is not None else ()
         return derive_intervals(ds, m, self.campaign.timezone, clock, self.campaign.window_rule, formats)
+
+    # ---------------------------------------------------------- window statistics
+    def set_stats_config(self, config: StatsConfig) -> None:
+        self.campaign.stats = config.model_copy(deep=True)
+
+    def window_table(
+        self, channels: Sequence[tuple[str, str]], config: StatsConfig | None = None
+    ) -> pl.DataFrame:
+        """Statistics of every step's window for every channel: one row per step × channel.
+
+        `channels`: (source id, channel) pairs. `config`: default the campaign's `stats`.
+        Columns: step id, label, start/end and window on master time (campaign zone), the step's
+        parameters, source, channel, unit, then the fields of `WindowResult` (`quantiles` as
+        `q05`/`q95`, `slope_ts_ci` as `ts_ci_low`/`ts_ci_high`, `checks` and `assumptions` joined
+        with "; "). A step without window or a source without data gets a row with the reason in
+        `checks`. An unknown source or channel raises KeyError.
+        """
+        cfg = config if config is not None else self.campaign.stats
+        zone = self.campaign.timezone
+        steps = self.intervals().intervals
+        inputs = [self._stats_input(sid, ch, cfg) for sid, ch in channels]
+
+        fixed = ["step_id", "step_label", "step_start", "step_end", "window_start", "window_end"]
+        result_cols = _result_columns()
+        taken = set(fixed) | {"source", "channel", "unit"} | set(result_cols)
+        param_names: dict[str, str] = {}
+        for iv in steps:
+            for k in iv.params:
+                param_names.setdefault(k, f"param_{k}" if k in taken else k)
+
+        rows = []
+        for iv in steps:
+            for sid, ch, unit, data, reading_u, clock_u in inputs:
+                row = {
+                    "step_id": iv.id, "step_label": iv.label, "step_start": iv.start, "step_end": iv.end,
+                    "window_start": iv.window[0] if iv.window else None,
+                    "window_end": iv.window[1] if iv.window else None,
+                    **{param_names[k]: iv.params.get(k) for k in param_names},
+                    "source": sid, "channel": ch, "unit": unit,
+                    **dict.fromkeys(result_cols),
+                }
+                if iv.window is None:
+                    row["checks"] = "window rule leaves nothing"
+                elif isinstance(data, str):
+                    row["checks"] = data
+                else:
+                    x, y, gap, flags = data
+                    r = window_stats(x, y, gap, WindowSpec(*iv.window), flags, cfg,
+                                     reading_u=reading_u, clock_u_s=clock_u)
+                    row.update(_result_row(r))
+                rows.append(row)
+        if not rows:
+            return pl.DataFrame()
+        df = pl.DataFrame(rows, infer_schema_length=None)
+        return df.with_columns(
+            (pl.col(c) * 1e6).round().cast(pl.Int64).cast(pl.Datetime("us", "UTC")).dt.convert_time_zone(zone)
+            for c in fixed[2:]
+        )
+
+    def _stats_input(self, source_id: str, channel: str, cfg: StatsConfig):
+        """(source, channel, unit, (x, y, gap_rows, excluded) or a reason, reading_u, clock_u)."""
+        src = self.campaign.source(source_id)
+        reading_u = cfg.reading_u.get(f"{source_id}/{channel}", 0.0)
+        ds = self.datasets.get(source_id)
+        if ds is None:
+            return source_id, channel, "", "source not loaded", reading_u, None
+        if channel not in ds.channels:
+            raise KeyError(f"Source {source_id!r} has no channel {channel!r}.")
+        unit = ds.units.get(channel, "")
+        if self.master_time(source_id) is None:
+            return source_id, channel, unit, "source has no absolute time", reading_u, None
+        tr = self.track(source_id, channel)
+        excluded = np.zeros(len(tr.x), dtype=bool)
+        if cfg.exclude_flags:
+            ev = ds.quality_flags.filter(
+                pl.col("flag").is_in(cfg.exclude_flags)
+                & (pl.col("channel").is_null() | (pl.col("channel") == channel))
+            )
+            excluded[ev["row"].unique().to_numpy()] = True
+        return source_id, channel, unit, (tr.x, tr.y, tr.gap_rows, excluded), reading_u, src.clock.uncertainty_s
 
     # ------------------------------------------------------------- persistence
     def save(self, path: str | Path) -> None:

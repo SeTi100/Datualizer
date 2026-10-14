@@ -163,6 +163,15 @@ for step in s.intervals().intervals:
     print(step.label, step.window, step.params)
 ```
 
+**Fenster-Statistik** (Etappe 2b, Schritt 6, Paket A): `session.window_table([(quelle, kanal), …])` liefert pro Schritt × Kanal eine Zeile mit Schritt, Fenster, Sollwerten und den Kennwerten aus `datualizer_core.stats.window_stats`: Anzahl Punkte, ausgeschlossene (`StatsConfig.exclude_flags`, Standard `spike`, `dropout`) und leere Werte, Abdeckungsgrad, Mittelwert, Median, SD, SEM, Min/Max, 5-/95-%-Quantil, OLS-Steigung pro Sekunde mit klassischem Standardfehler, R² und Residuen-SD, 2-Punkt-Differenz Δy/Δt mit Unsicherheit nach GUM (Ablesung aus `StatsConfig.reading_u`, Uhr aus `ClockModel.uncertainty_s`) und das Trapez-Integral. Lücken, leere und ausgeschlossene Werte werden nie überbrückt: Die nicht abgedeckte Zeit steht in `integral_gap_s`. `checks` nennt, was auffällt (zu wenige Punkte, geringe Abdeckung, 2-Punkt weicht von der Steigung ab), `assumptions`, worauf die Werte beruhen. SEM und klassischer Steigungs-SE setzen unabhängige Werte voraus und sind bei dicht abgetasteten Sensoren zu klein. Deshalb gibt es zusätzlich (Paket B): `rho1`, `n_eff` und `sem_eff` (AR(1)-Näherung), `slope_se_hac` (Newey-West, Lag `StatsConfig.hac_lag`, sonst ⌊4·(n/100)^(2/9)⌋), `slope_se_ar1`, `durbin_watson`, die robuste Theil-Sen-Steigung `slope_theil_sen` mit 95-%-Intervall `ts_ci_low`/`ts_ci_high` (Kendall, bei Autokorrelation verbreitert; ab 1000 Punkten aus einer festen Stichprobe von Paaren), `integral_u` und die Ampel `stationary` (Steigungstest und Hälftenvergleich `halves_diff`, Begründung in `checks`). Weichen OLS und Theil-Sen um mehr als 2 SE ab, steht das in `checks` (Ausreisser oder Knick). Die Einstellungen stehen als `stats` in `campaign.json`.
+
+```python
+from datualizer_core.stats import StatsConfig
+s.set_stats_config(StatsConfig(reading_u={"instrument_reader/masse": 0.01 / 12**0.5}))  # Auflösung 0,01 g
+t = s.window_table([("instrument_reader", "masse")])
+t.select("step_label", "v_mfc", "n", "coverage", (t["slope"] * 3600).alias("g_h"), "slope_se", "checks")
+```
+
 Im Kampagnenfenster zeigt das Dock *Steps* die Schritte (Doppelklick zoomt), die Probleme und die Fenster-Regel; *Steps from Source…* öffnet die Zuordnung mit Vorschau. Als Bänder über allen Plots erscheinen die Schritte, wenn *Settings → Tools → Interval Bands* eingeschaltet ist (Standard: aus, die Wahl wird gemerkt). Eigene Schritte: Rechtsklick → *Marker ○ ○*; der erste Klick setzt den Start (erster Kreis grün, gestrichelte Linie), der zweite das Ende. Eigene Bänder lassen sich ziehen, umbenennen und löschen; Esc verwirft einen offenen Marker.
 
 In der GUI öffnet *Campaign → Open Campaign Window…* (Ctrl+K) die Kampagnenansicht: links die Quellen mit Profil, Zeitspanne und Uhr, darunter der Uhren-Editor; rechts oben, falls unter *Settings → Tools → Coverage Info* eingeschaltet (Standard: aus, die Wahl wird gemerkt), die Abdeckungsspur (eine Zeile pro Quelle, Abschnitte mit Werten gefüllt, Lücken schraffiert, die Infozeile nennt Dauer und Art der Lücke unter dem Fadenkreuz), darunter ein Subplot pro gewähltem Kanal, jeder mit eigenem x-Array auf einer gemeinsamen Datumsachse (verlinkt, ohne Resampling). Die Ansicht zeigt immer alle Spuren; eigenes Zoomen bleibt bis *Reset Zoom* erhalten. Beim Hinzufügen fragt das Fenster nach Blatt bzw. Tabelle und, bei reinen Uhrzeiten, nach dem Datum (Vorschlag aus dem Blattnamen); die Wahl steht im Profil und in der Spec der Quelle in `campaign.json` und wird beim Öffnen ohne Rückfrage wieder angewendet.
@@ -230,6 +239,7 @@ Datualizer/
 ├── datualizer_core/            # Engine, ohne GUI-Abhängigkeiten
 │   ├── dataset.py              # DualModeDataset, AuditLog
 │   ├── quality.py              # Qualitäts-Flags (Lücken, Dropout, Sprünge, Spikes, …)
+│   ├── stats/window.py         # Fenster-Statistik eines Messschritts (Unsicherheit mit Autokorrelation, Theil-Sen, Ampel)
 │   ├── ingestion/
 │   │   ├── pre_scanner.py      # Format-Sniffing
 │   │   ├── loader.py           # CSV → DualModeDataset

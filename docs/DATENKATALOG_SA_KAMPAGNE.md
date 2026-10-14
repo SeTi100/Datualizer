@@ -29,7 +29,7 @@ Katalytische Oxidation von Ethanol in einer Versuchsanlage. Pro Solltemperatur w
 | P28 | Ungültige OCR-Lesungen (`is_valid = 0`) | Als leer markieren, nicht als Messwert | ✅ Profil `instrument_reader_db` |
 | P29 | Gleiches Gerät, andere Anzeige-Skala an verschiedenen Tagen (Faktor 2.95 bei gleichem pA-Signal) | Rohsignal behalten, Skalen per Referenz-Fit vergleichen | ⏳ Schritt 8 |
 | P30 | Messschritte stehen nur im Labjournal | Intervalltabelle aus Journal, Fenster über allen Spuren | ✅ `IntervalMapping` (Start `Zeit_0`, Ende `Zeit_1`, Blockname aus Spalte A per `fill_down`, Sollwerte), Bänder, manuelle Schritte; „clearing“- und Vorlagezeilen ohne Start stehen in `problems` |
-| P31 | OCR-Fehllesungen in beide Richtungen | Zweiseitiges `spike`-Flag; in der Anzeige zusätzlich robuste Y-Skala mit Randmarkern (`YScale`) | ✅ Hampel-Detektor (`spike`): Zeitfenster in Sekunden, Schwelle k · 1,4826 · MAD, Auflösung als Untergrenze, alles in `QualityConfig` und Spec; im Video-OCR-Auszug genau die 33 Fehllesungen markiert (28 mit `is_valid = 0`, 5 vom Leser für gültig gehalten, z. B. 9628 statt 9672,8 g) |
+| P31 | OCR-Fehllesungen in beide Richtungen | Zweiseitiges `spike`-Flag; in der Anzeige zusätzlich robuste Y-Skala mit Randmarkern (`YScale`) | ✅ Hampel-Detektor (`spike`): Zeitfenster in Sekunden, Schwelle k · 1,4826 · MAD, Auflösung als Untergrenze, alles in `QualityConfig` und Spec; im Video-OCR-Auszug genau die 33 Fehllesungen markiert (28 mit `is_valid = 0`, 5 vom Leser für gültig gehalten, z. B. 9628 statt 9672,8 g); die Fenster-Statistik lässt markierte Werte aus, zählt sie und zeigt sie im Fenster-Inspektor als Kreuze |
 | P32 | Video ohne Frame-Zeitstempel (MP4) | Zeitachse über Anker (im Bild abgelesene Uhr) | ⏳ Schritt 9 |
 
 ## 3. Grundsatz

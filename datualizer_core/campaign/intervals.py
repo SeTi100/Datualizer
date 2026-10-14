@@ -91,6 +91,27 @@ class WindowRule(BaseModel):
         return (lo, hi) if hi > lo else None
 
 
+class WindowOverride(BaseModel):
+    """Evaluated window of one step set by hand (dragged in the window inspector).
+
+    Replaces what the `WindowRule` gives for this step only. Times are master wall-clock times in
+    the campaign zone, like manual steps. `label` is the step's name when the override was set:
+    if a corrected step table gives the step id another name, this is reported, not ignored.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: datetime
+    end: datetime
+    label: str = ""
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "WindowOverride":
+        if self.end <= self.start:
+            raise ValueError(f"Window override: end {self.end} is not after start {self.start}.")
+        return self
+
+
 @dataclass(frozen=True)
 class ResolvedInterval:
     """A step on master time (epoch seconds), ready to draw and evaluate."""
@@ -104,6 +125,7 @@ class ResolvedInterval:
     origin: str = "manual"  # "manual" or "<source>:row <n>"
     manual: bool = True
     note: str = ""
+    window_override: bool = False  # window set by hand for this step (WindowOverride)
 
     @property
     def duration_s(self) -> float:

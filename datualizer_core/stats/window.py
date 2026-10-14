@@ -60,6 +60,21 @@ class StatsConfig(BaseModel):
     )
 
 
+class Check(str):
+    """One finding in `WindowResult.checks`: plain text with a traffic-light `level`.
+
+    A `str`, so joined tables and text searches keep working; `level` is "fail" when the window
+    cannot be evaluated (no or too few points), otherwise "warn".
+    """
+
+    level: str
+
+    def __new__(cls, text: str, level: str = "warn") -> "Check":
+        obj = super().__new__(cls, text)
+        obj.level = level
+        return obj
+
+
 @dataclass(frozen=True)
 class WindowSpec:
     """Evaluated time span in master epoch seconds (e.g. `ResolvedInterval.window`)."""
@@ -122,8 +137,27 @@ class WindowResult:
     integral_u: float | None = None  # sem_eff · covered time (approximation)
     halves_diff: float | None = None  # mean of the second half minus mean of the first half
     stationary: bool | None = None  # light: no significant slope and no significant halves difference
-    checks: list[str] = field(default_factory=list)  # what failed or needs a look
+    checks: list[Check] = field(default_factory=list)  # what failed or needs a look (with a level)
     assumptions: list[str] = field(default_factory=list)  # what the values rest on
+    # for drawing (window inspector); not table columns
+    intercept_theil_sen: float | None = None  # Theil-Sen line at the window start: median(y − b·t)
+    used_rows: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64), metadata={"table": False})
+    excluded_rows: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64), metadata={"table": False})
+    two_point_points: tuple[tuple[float, float], tuple[float, float]] | None = field(
+        default=None, metadata={"table": False}
+    )  # (time, value) of both support points
+
+    @property
+    def level(self) -> str:
+        """Traffic light of the whole window: "fail", "warn" (any finding) or "ok"."""
+        levels = {getattr(c, "level", "warn") for c in self.checks}
+        return "fail" if "fail" in levels else "warn" if levels else "ok"
+
+    @property
+    def slope_se_eff(self) -> float | None:
+        """Larger of `slope_se_hac` and `slope_se_ar1` (what the stationarity light uses)."""
+        ses = [v for v in (self.slope_se_hac, self.slope_se_ar1) if v is not None]
+        return max(ses) if ses else None
 
 
 def window_stats(
@@ -164,6 +198,8 @@ def window_stats(
     n_missing = int(np.sum(inside & ~np.isfinite(v)))
     tw, yw = t[inside & usable], v[inside & usable]
     n = len(yw)
+    used_rows = rows[inside & usable]
+    excluded_rows = rows[inside & np.isfinite(v) & ex]
 
     checks: list[str] = []
     assumptions = [
@@ -175,9 +211,9 @@ def window_stats(
     covered, integral = _covered_and_integral(t, v, usable, br, a, b)
     coverage = covered / window.length_s
     if n == 0:
-        checks.append("no data in the window")
+        checks.append(Check("no data in the window", "fail"))
     elif n < config.min_points:
-        checks.append(f"only {n} points (min {config.min_points})")
+        checks.append(Check(f"only {n} points (min {config.min_points})", "fail"))
     if n and coverage < config.min_coverage:
         checks.append(f"coverage {coverage:.0%} below {config.min_coverage:.0%}")
     if n_excluded:
@@ -216,9 +252,11 @@ def window_stats(
         coverage=coverage, covered_s=covered, **loc, **fit,
         two_point=None if tp is None else tp[0], two_point_u=None if tp is None else tp[1],
         two_point_dt=None if tp is None else tp[2], two_point_offset_s=None if tp is None else tp[3],
+        two_point_points=None if tp is None else tp[4],
         integral=integral, integral_gap_s=window.length_s - covered,
         **auto, **ts, **st, integral_u=integral_u,
-        checks=checks, assumptions=assumptions,
+        checks=[c if isinstance(c, Check) else Check(c) for c in checks], assumptions=assumptions,
+        used_rows=used_rows, excluded_rows=excluded_rows,
     )
 
 
@@ -314,7 +352,7 @@ def _two_point(
     t: np.ndarray, v: np.ndarray, usable: np.ndarray, w: WindowSpec, h: float,
     reading_u: float, clock_u_s: float | None,
 ) -> tuple[float, float, float, float] | None:
-    """(Δy/Δt, u, Δt, largest edge distance); u² = (u1² + u2²)/Δt² + (Δy/Δt²)²·u²(Δt)."""
+    """(Δy/Δt, u, Δt, largest edge distance, ((t1, y1), (t2, y2))); u² = (u1² + u2²)/Δt² + (Δy/Δt²)²·u²(Δt)."""
     p1 = _edge_value(t, v, usable, w, w.start, h, reading_u)
     p2 = _edge_value(t, v, usable, w, w.end, h, reading_u)
     if p1 is None or p2 is None:
@@ -325,7 +363,7 @@ def _two_point(
     dy = p2[0] - p1[0]
     u_dt2 = 2 * (clock_u_s or 0.0) ** 2
     u2 = (p1[1] ** 2 + p2[1] ** 2) / dt**2 + (dy / dt**2) ** 2 * u_dt2
-    return dy / dt, math.sqrt(u2), dt, max(p1[3], p2[3])
+    return dy / dt, math.sqrt(u2), dt, max(p1[3], p2[3]), ((p1[2], p1[0]), (p2[2], p2[0]))
 
 
 # ------------------------------------------------------------------ package B
@@ -476,7 +514,7 @@ def _theil_sen(t: np.ndarray, y: np.ndarray, fit: dict, checks: list[str], assum
     se_ts = (ci[1] - ci[0]) / (2 * float(_sps.norm.ppf(0.5 + CONFIDENCE / 2)))
     if fit["slope"] is not None and abs(fit["slope"] - b) > 2 * se_ts:
         checks.append("OLS and Theil-Sen slope differ by more than 2 SE (outliers or a kink in the window?)")
-    return dict(slope_theil_sen=b, slope_ts_ci=ci)
+    return dict(slope_theil_sen=b, slope_ts_ci=ci, intercept_theil_sen=float(np.median(res)))
 
 
 def _significant(diff: float, u: float) -> tuple[bool, float]:

@@ -7,7 +7,7 @@ the loaded datasets and computes master times. The JSON is the seed of the recip
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -27,8 +27,11 @@ from datualizer_core.campaign.intervals import (
     IntervalConfigError,
     IntervalMapping,
     IntervalSet,
+    ResolvedInterval,
+    WindowOverride,
     WindowRule,
     derive_intervals,
+    master_datetime,
     resolve_manual,
     suggest_mapping,
 )
@@ -37,7 +40,7 @@ from datualizer_core.ingestion.config import IngestionConfig
 from datualizer_core.ingestion.profiles import SourceProfile, detect_profile
 from datualizer_core.ingestion.source_loader import load_source
 from datualizer_core.schema import PlotStyle
-from datualizer_core.stats.window import StatsConfig, WindowResult, WindowSpec, window_stats
+from datualizer_core.stats.window import Check, StatsConfig, WindowResult, WindowSpec, window_stats
 from datualizer_core.timebase import check_zone
 
 
@@ -86,6 +89,9 @@ class Campaign(BaseModel):
     )
     intervals: list[Interval] = Field(default_factory=list, description="Measurement steps set by hand.")
     window_rule: WindowRule = Field(default_factory=WindowRule, description="Evaluated part of each step.")
+    window_overrides: dict[str, WindowOverride] = Field(
+        default_factory=dict, description="Evaluated window set by hand, per step id (replaces the window rule there)."
+    )
     stats: StatsConfig = Field(default_factory=StatsConfig, description="Settings of the window statistics.")
     notes: str = ""
 
@@ -124,9 +130,14 @@ class Track:
             object.__setattr__(self, "name", self.channel)
 
 
+def _table_fields():
+    """Fields of WindowResult that are table columns (not the arrays kept for drawing)."""
+    return [f for f in fields(WindowResult) if f.metadata.get("table", True)]
+
+
 def _result_columns() -> list[str]:
     out = []
-    for f in fields(WindowResult):
+    for f in _table_fields():
         if f.name == "quantiles":
             out += ["q05", "q95"]
         elif f.name == "slope_ts_ci":
@@ -138,7 +149,7 @@ def _result_columns() -> list[str]:
 
 def _result_row(r: WindowResult) -> dict:
     row = {}
-    for f in fields(WindowResult):
+    for f in _table_fields():
         v = getattr(r, f.name)
         if f.name in ("quantiles", "slope_ts_ci"):
             lo, hi = ("q05", "q95") if f.name == "quantiles" else ("ts_ci_low", "ts_ci_high")
@@ -414,7 +425,7 @@ class CampaignSession:
         c = self.campaign
         key = (
             c.timezone,
-            c.model_dump_json(include={"interval_mappings", "intervals", "window_rule"}),
+            c.model_dump_json(include={"interval_mappings", "intervals", "window_rule", "window_overrides"}),
             tuple((s.id, s.clock.model_dump_json(), id(self.datasets.get(s.id))) for s in c.sources),
         )
         if self._interval_cache is not None and self._interval_cache[0] == key:
@@ -428,9 +439,46 @@ class CampaignSession:
             out += ivs
             problems += probs
         out += [resolve_manual(iv, c.timezone, c.window_rule) for iv in c.intervals if iv.enabled]
+        out, problems = self._apply_overrides(out, problems)
         result = IntervalSet(sorted(out, key=lambda iv: iv.start), problems)
         self._interval_cache = (key, result)
         return result
+
+    def _apply_overrides(
+        self, steps: list[ResolvedInterval], problems: list[str]
+    ) -> tuple[list[ResolvedInterval], list[str]]:
+        """Replace the rule's window by the one set by hand; report overrides that no longer fit."""
+        overrides = self.campaign.window_overrides
+        if not overrides:
+            return steps, problems
+        zone = self.campaign.timezone
+        problems = list(problems)
+        out, seen = [], set()
+        for iv in steps:
+            ov = overrides.get(iv.id)
+            if ov is None:
+                out.append(iv)
+                continue
+            seen.add(iv.id)
+            if ov.label and ov.label != iv.label:
+                problems.append(f"{iv.id}: window set by hand on step '{ov.label}', the step is now '{iv.label}'.")
+            out.append(replace(iv, window=(to_epoch_s(ov.start, zone), to_epoch_s(ov.end, zone)), window_override=True))
+        for sid in sorted(set(overrides) - seen):
+            problems.append(f"{sid}: window set by hand, but there is no such step (kept in the campaign).")
+        return out, problems
+
+    def set_window_override(self, step_id: str, start: float, end: float) -> WindowOverride:
+        """Evaluated window of one step set by hand (master epoch seconds; may be swapped)."""
+        step = self.intervals().get(step_id)
+        start, end = sorted((start, end))
+        zone = self.campaign.timezone
+        ov = WindowOverride(start=master_datetime(start, zone), end=master_datetime(end, zone), label=step.label)
+        self.campaign.window_overrides[step_id] = ov
+        return ov
+
+    def clear_window_override(self, step_id: str) -> None:
+        """Back to the window rule for this step."""
+        self.campaign.window_overrides.pop(step_id, None)
 
     def preview_steps(self, m: IntervalMapping):
         """Steps a mapping would give (without storing it); unknown columns raise IntervalConfigError."""
@@ -445,6 +493,27 @@ class CampaignSession:
     # ---------------------------------------------------------- window statistics
     def set_stats_config(self, config: StatsConfig) -> None:
         self.campaign.stats = config.model_copy(deep=True)
+
+    def window_stats(
+        self, step: str | ResolvedInterval, source_id: str, channel: str, config: StatsConfig | None = None
+    ) -> WindowResult:
+        """Statistics of one channel in the evaluated window of one step (what `window_table` gives per row).
+
+        A step whose window rule leaves nothing is evaluated over the whole step; a finding says so.
+        Raises ValueError if the source is not loaded or has no absolute time, KeyError for an
+        unknown step, source or channel.
+        """
+        cfg = config if config is not None else self.campaign.stats
+        iv = self.intervals().get(step) if isinstance(step, str) else step
+        sid, ch, _unit, data, reading_u, clock_u = self._stats_input(source_id, channel, cfg)
+        if isinstance(data, str):
+            raise ValueError(f"{source_id}: {data}")
+        x, y, gap, flags = data
+        lo, hi = iv.window if iv.window is not None else (iv.start, iv.end)
+        r = window_stats(x, y, gap, WindowSpec(lo, hi), flags, cfg, reading_u=reading_u, clock_u_s=clock_u)
+        if iv.window is None:
+            r.checks.append(Check("window rule leaves nothing: whole step evaluated"))
+        return r
 
     def window_table(
         self, channels: Sequence[tuple[str, str]], config: StatsConfig | None = None
@@ -465,7 +534,7 @@ class CampaignSession:
 
         fixed = ["step_id", "step_label", "step_start", "step_end", "window_start", "window_end"]
         result_cols = _result_columns()
-        taken = set(fixed) | {"source", "channel", "unit"} | set(result_cols)
+        taken = set(fixed) | {"window_override", "source", "channel", "unit"} | set(result_cols)
         param_names: dict[str, str] = {}
         for iv in steps:
             for k in iv.params:
@@ -478,6 +547,7 @@ class CampaignSession:
                     "step_id": iv.id, "step_label": iv.label, "step_start": iv.start, "step_end": iv.end,
                     "window_start": iv.window[0] if iv.window else None,
                     "window_end": iv.window[1] if iv.window else None,
+                    "window_override": iv.window_override,
                     **{param_names[k]: iv.params.get(k) for k in param_names},
                     "source": sid, "channel": ch, "unit": unit,
                     **dict.fromkeys(result_cols),

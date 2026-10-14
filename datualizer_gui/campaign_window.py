@@ -37,6 +37,7 @@ from datualizer_gui.components.plot_export import ExportFormat, ExportOptions, e
 from datualizer_gui.components.plot_groups import ColorBy, GroupBy
 from datualizer_gui.components.readout import AUTO_DECIMALS, ReadoutMode
 from datualizer_gui.components.time_axis import TimeAxisMode
+from datualizer_gui.components.window_inspector import WindowInspector
 from datualizer_gui.settings import (
     COLOR_BY,
     COVERAGE_INFO,
@@ -112,6 +113,12 @@ class CampaignWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.dock_steps)
         self.tabifyDockWidget(self.dock_sources, self.dock_steps)
         self.dock_sources.raise_()
+        self.window_inspector = WindowInspector()
+        self.dock_window = QDockWidget("Window", self)
+        self.dock_window.setObjectName("dock_window")
+        self.dock_window.setWidget(self.window_inspector)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.dock_window)
+        self.dock_window.hide()
 
         self.sources_panel.selection_changed.connect(self.refresh_plot)
         self.sources_panel.clock_changed.connect(self._on_clock_changed)
@@ -120,6 +127,11 @@ class CampaignWindow(QMainWindow):
         self.sources_panel.remove_requested.connect(self.remove_source)
         self.intervals_panel.changed.connect(self.refresh_steps)
         self.intervals_panel.zoom_requested.connect(self.zoom_to_step)
+        self.intervals_panel.inspect_requested.connect(self.inspect_step)
+        self.canvas.interval_inspect_requested.connect(self.inspect_step)
+        self.window_inspector.override_changed.connect(self.set_step_window)
+        self.window_inspector.override_cleared.connect(self.reset_step_window)
+        self.window_inspector.step_changed.connect(self.intervals_panel.select_step)
         self.canvas.interval_marked.connect(self.add_step)
         self.canvas.interval_moved.connect(self.move_step)
         self.canvas.interval_rename_requested.connect(self._on_rename_step)
@@ -407,12 +419,15 @@ class CampaignWindow(QMainWindow):
             tracks, self._session.campaign.timezone, coverage,
             source_order=[s.id for s in sources], source_labels={s.id: s.label or s.id for s in sources},
         )
+        self.window_inspector.set_channels(self.sources_panel.checked_channels())
         self.refresh_steps()
 
     def refresh_steps(self) -> None:
         """Steps changed (mapping, window rule, manual step, clock): update the table and the bands."""
         self.intervals_panel.refresh()
         self.canvas.set_intervals(self._session.intervals() if self.bands_visible else IntervalSet())
+        if self.window_inspector.step_id is not None:
+            self.window_inspector.refresh()
 
     # ------------------------------------------------------------------ steps
     def add_step(self, start: float, end: float) -> None:
@@ -440,6 +455,29 @@ class CampaignWindow(QMainWindow):
         self._session.remove_interval(interval_id)
         self.refresh_steps()
 
+    def inspect_step(self, interval_id: str) -> None:
+        """Open the Window dock on a step: statistics of the selected channels in its window."""
+        self.window_inspector.set_channels(self.sources_panel.checked_channels())
+        self.dock_window.show()
+        self.dock_window.raise_()
+        self.window_inspector.show_step(interval_id)
+        self.window_inspector.setFocus()
+
+    def set_step_window(self, interval_id: str, start: float, end: float) -> None:
+        """Window of one step set by hand (master epoch seconds); saved with the campaign."""
+        try:
+            self._session.set_window_override(interval_id, start, end)
+        except (KeyError, ValueError) as exc:
+            self.status_bar.showMessage(f"Window not changed: {exc}")
+            return
+        self.refresh_steps()
+        self.status_bar.showMessage(f"Window of the step set by hand ({end - start:.0f} s, saved with the campaign)")
+
+    def reset_step_window(self, interval_id: str) -> None:
+        self._session.clear_window_override(interval_id)
+        self.refresh_steps()
+        self.status_bar.showMessage("Window of the step follows the window rule again")
+
     def zoom_to_step(self, interval_id: str) -> None:
         try:
             self.canvas.zoom_to_step(self._session.intervals().get(interval_id))
@@ -450,6 +488,7 @@ class CampaignWindow(QMainWindow):
     def _refresh_all(self) -> None:
         self.sources_panel.set_session(self._session)
         self.intervals_panel.set_session(self._session)
+        self.window_inspector.set_session(self._session)
         self.refresh_plot()
         name = self._session.campaign.name
         self.setWindowTitle(f"Datualizer – Campaign: {name}" + (f" ({self._path.name})" if self._path else ""))

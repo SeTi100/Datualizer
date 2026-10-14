@@ -75,6 +75,7 @@ class CampaignPlotCanvas(QWidget):
     interval_moved = Signal(str, float, float)  # manual step dragged to a new start, end
     interval_rename_requested = Signal(str)
     interval_delete_requested = Signal(str)
+    interval_inspect_requested = Signal(str)  # open the window inspector on this step
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -118,6 +119,11 @@ class CampaignPlotCanvas(QWidget):
         self.action_marker.triggered.connect(self._on_marker)
         self.action_marker_cancel = QAction("Discard marker", self)
         self.action_marker_cancel.triggered.connect(self.cancel_marker)
+        self.action_inspect_step = QAction("Inspect step", self)
+        self.action_inspect_step.setToolTip("Statistics of the step's window in the Window dock")
+        self.action_inspect_step.triggered.connect(
+            lambda: self._menu_step and self.interval_inspect_requested.emit(self._menu_step.id)
+        )
         self.action_zoom_step = QAction("Zoom to step", self)
         self.action_zoom_step.triggered.connect(lambda: self._menu_step and self.zoom_to_step(self._menu_step))
         self.action_rename_step = QAction("Rename step...", self)
@@ -129,7 +135,7 @@ class CampaignPlotCanvas(QWidget):
             lambda: self._menu_step and self.interval_delete_requested.emit(self._menu_step.id)
         )
         self._step_actions = [
-            self.action_marker, self.action_marker_cancel, self.action_zoom_step,
+            self.action_marker, self.action_marker_cancel, self.action_inspect_step, self.action_zoom_step,
             self.action_rename_step, self.action_delete_step,
         ]
         esc = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
@@ -457,11 +463,13 @@ class CampaignPlotCanvas(QWidget):
         self.action_marker_cancel.setVisible(self._marker_start is not None)
         on_step = self._menu_step is not None
         self.action_zoom_step.setVisible(on_step)
+        self.action_inspect_step.setVisible(on_step)
         manual = on_step and self._menu_step.manual
         self.action_rename_step.setVisible(manual)
         self.action_delete_step.setVisible(manual)
         if on_step:
             self.action_zoom_step.setText(f"Zoom to step '{self._menu_step.label}'")
+            self.action_inspect_step.setText(f"Inspect step '{self._menu_step.label}'")
 
     def _install_step_menu(self, plot: pg.PlotItem) -> None:
         vb = plot.getViewBox()

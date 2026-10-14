@@ -16,6 +16,7 @@ from datualizer_core.campaign.intervals import (
     IntervalMapping,
     IntervalSet,
     ResolvedInterval,
+    WindowOverride,
     WindowRule,
     master_datetime,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "IntervalMapping",
     "IntervalSet",
     "ResolvedInterval",
+    "WindowOverride",
     "WindowRule",
     "master_datetime",
     "NO_VALUES",

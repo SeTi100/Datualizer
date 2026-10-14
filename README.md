@@ -172,7 +172,17 @@ t = s.window_table([("instrument_reader", "masse")])
 t.select("step_label", "v_mfc", "n", "coverage", (t["slope"] * 3600).alias("g_h"), "slope_se", "checks")
 ```
 
-Im Kampagnenfenster zeigt das Dock *Steps* die Schritte (Doppelklick zoomt), die Probleme und die Fenster-Regel; *Steps from Source…* öffnet die Zuordnung mit Vorschau. Als Bänder über allen Plots erscheinen die Schritte, wenn *Settings → Tools → Interval Bands* eingeschaltet ist (Standard: aus, die Wahl wird gemerkt). Eigene Schritte: Rechtsklick → *Marker ○ ○*; der erste Klick setzt den Start (erster Kreis grün, gestrichelte Linie), der zweite das Ende. Eigene Bänder lassen sich ziehen, umbenennen und löschen; Esc verwirft einen offenen Marker.
+Einen einzelnen Schritt liefert `s.window_stats(schritt, quelle, kanal)` als `WindowResult`. Jeder Eintrag in `checks` hat zusätzlich eine Stufe (`check.level`: `fail` bei keinen oder zu wenigen Punkten, sonst `warn`); `result.level` fasst sie zur Ampel zusammen (`ok` ohne Befund). Das Fenster eines einzelnen Schritts lässt sich von Hand setzen: `s.set_window_override(schritt_id, start, ende)` ersetzt dort die Fenster-Regel, `clear_window_override` hebt das wieder auf. Overrides stehen in `campaign.json` (`window_overrides`), in `window_table` zeigt die Spalte `window_override` sie an. Bekommt ein Journal-Schritt später einen anderen Namen oder fehlt er, steht das in `intervals().problems`.
+
+Im Kampagnenfenster zeigt das Dock *Steps* die Schritte (Doppelklick zoomt und öffnet den Fenster-Inspektor, Rechtsklick bietet beides einzeln), die Probleme und die Fenster-Regel; *Steps from Source…* öffnet die Zuordnung mit Vorschau. Als Bänder über allen Plots erscheinen die Schritte, wenn *Settings → Tools → Interval Bands* eingeschaltet ist (Standard: aus, die Wahl wird gemerkt). Eigene Schritte: Rechtsklick → *Marker ○ ○*; der erste Klick setzt den Start (erster Kreis grün, gestrichelte Linie), der zweite das Ende. Eigene Bänder lassen sich ziehen, umbenennen und löschen; Esc verwirft einen offenen Marker.
+
+Der **Fenster-Inspektor** (Dock *Window*, auch per Rechtsklick im Plot → *Inspect step*) zeigt die gewählten Kanäle rund um einen Schritt:
+- das ausgewertete Fenster hell hinterlegt,
+- die OLS-Gerade (durchgezogen) und die Theil-Sen-Gerade (gestrichelt),
+- ausgelassene Samples als rote Kreuze,
+- die Stützstellen der 2-Punkt-Differenz als grüne Kreise.
+
+Darunter stehen die Kennwerte mit Unsicherheit (auf zwei Stellen der Unsicherheit gerundet), die Befunde mit Ampel pro Kanal und die Annahmen. Die Fensterränder lassen sich ziehen. Das gilt nur für diesen Schritt und wird in `campaign.json` gespeichert: Die Kante wird orange, im Steps-Dock steht „window ✎“. *Reset Window* überlässt den Schritt wieder der Fenster-Regel. Bild ab / Bild auf schaltet zum nächsten bzw. vorigen Schritt.
 
 In der GUI öffnet *Campaign → Open Campaign Window…* (Ctrl+K) die Kampagnenansicht: links die Quellen mit Profil, Zeitspanne und Uhr, darunter der Uhren-Editor; rechts oben, falls unter *Settings → Tools → Coverage Info* eingeschaltet (Standard: aus, die Wahl wird gemerkt), die Abdeckungsspur (eine Zeile pro Quelle, Abschnitte mit Werten gefüllt, Lücken schraffiert, die Infozeile nennt Dauer und Art der Lücke unter dem Fadenkreuz), darunter ein Subplot pro gewähltem Kanal, jeder mit eigenem x-Array auf einer gemeinsamen Datumsachse (verlinkt, ohne Resampling). Die Ansicht zeigt immer alle Spuren; eigenes Zoomen bleibt bis *Reset Zoom* erhalten. Beim Hinzufügen fragt das Fenster nach Blatt bzw. Tabelle und, bei reinen Uhrzeiten, nach dem Datum (Vorschlag aus dem Blattnamen); die Wahl steht im Profil und in der Spec der Quelle in `campaign.json` und wird beim Öffnen ohne Rückfrage wieder angewendet.
 

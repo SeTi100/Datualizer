@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -56,6 +57,7 @@ class IntervalsPanel(QWidget):
 
     changed = Signal()  # a mapping, the window rule or a manual step changed
     zoom_requested = Signal(str)  # step id
+    inspect_requested = Signal(str)  # step id: open the window inspector
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -82,6 +84,13 @@ class IntervalsPanel(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
         self.table.cellDoubleClicked.connect(self._on_double_click)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+        self.action_inspect = QAction("Inspect Step", self.table)
+        self.action_inspect.setToolTip("Statistics of the step's window in the Window dock")
+        self.action_inspect.triggered.connect(lambda: self._emit_selected(self.inspect_requested))
+        self.action_zoom = QAction("Zoom to Step", self.table)
+        self.action_zoom.triggered.connect(lambda: self._emit_selected(self.zoom_requested))
+        self.table.addActions([self.action_inspect, self.action_zoom])
         layout.addWidget(self.table, stretch=1)
 
         self.problem_label = QLabel()
@@ -138,7 +147,7 @@ class IntervalsPanel(QWidget):
                     master_datetime(iv.start, zone).strftime("%d.%m. %H:%M:%S"),
                     master_datetime(iv.end, zone).strftime("%H:%M:%S"),
                     _duration(iv.duration_s),
-                    "manual" if iv.manual else iv.origin,
+                    ("manual" if iv.manual else iv.origin) + (" · window ✎" if iv.window_override else ""),
                     params,
                 ]
                 for col, text in enumerate(cells):
@@ -163,9 +172,27 @@ class IntervalsPanel(QWidget):
 
     # -------------------------------------------------------------- handlers
     def _on_double_click(self, row: int, _col: int) -> None:
+        """Zoom the plots to the step and open it in the window inspector."""
         item = self.table.item(row, 0)
         if item is not None:
             self.zoom_requested.emit(item.data(ROLE_ID))
+            self.inspect_requested.emit(item.data(ROLE_ID))
+
+    def _emit_selected(self, signal) -> None:
+        sid = self.selected_id()
+        if sid is not None:
+            signal.emit(sid)
+
+    def select_step(self, step_id: str) -> None:
+        """Select the row of a step (e.g. when the inspector moves on)."""
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item is not None and item.data(ROLE_ID) == step_id:
+                self.table.blockSignals(True)
+                self.table.selectRow(row)
+                self.table.blockSignals(False)
+                self.table.scrollToItem(item)
+                return
 
     def _delete_selected(self) -> None:
         sid = self.selected_id()

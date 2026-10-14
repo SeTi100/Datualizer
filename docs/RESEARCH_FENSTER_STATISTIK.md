@@ -120,7 +120,7 @@ def window_stats(x: np.ndarray, y: np.ndarray, gap_rows: np.ndarray, window: Win
 | **A. Kern-Statistik** ✅ erledigt | `stats/window.py`: Lage/Streuung, OLS, 2-Punkt, Integral mit Lücken, Abdeckung, `WindowResult`, `window_table` | Tests mit synthetischen Daten bekannter Lösung, Waagen-Fixture (`instrument_reader_12_10_extract.db`) im Schritt „T Einstellung 155“ |
 | **B. Unsicherheit + Autokorrelation** ✅ erledigt (Abschnitt 7) | n_eff, SEM_eff, Newey-West, AR(1)-Korrektur, Durbin-Watson, Theil-Sen + CI, Stationaritäts-Ampel | Simulierte AR(1)-Reihen: Abdeckung der Intervalle nahe Sollwert (Monte-Carlo-Test mit festem Seed) |
 | **C. `spike`-Flag** ✅ erledigt (PR #19) | Hampel in `quality.py`, Einstellungen in `QualityConfig` und Spec, Abgrenzung zu `dropout` | OCR-Fixture (`ocr_recording_105012_extract.csv`, Fehllesungen bis 9620 g), Replay-Test grün |
-| **D. Fenster-Inspektor** | Dock, Plot-Ausschnitt mit Fits, Kennwerttabelle, Ampel, Override pro Schritt | GUI-Tests offscreen, Screenshot im PR |
+| **D. Fenster-Inspektor** ✅ erledigt (Abschnitt 8) | Dock, Plot-Ausschnitt mit Fits, Kennwerttabelle, Ampel, Override pro Schritt | GUI-Tests offscreen, Screenshot im PR |
 
 Reihenfolge: A → B → D; C unabhängig.
 
@@ -156,3 +156,18 @@ Stand nach der Umsetzung (`datualizer_core/stats/window.py`, Tests in `tests/tes
 | 0,8 | 0,91 | 0,92 | 0,93 | 0,75 | 0,53 | 0,12 |
 
   Bei φ = 0,95 (separat gemessen, 400 Reihen) fallen Mittelwert, AR(1)-SE und Theil-Sen auf 0,80–0,87, Newey-West auf 0,45, und der Fehlalarm steigt auf ≈ 0,18; dort ist n_eff < 10 und die Warnung in `checks` steht. Newey-West mit der Faustregel deckt bei starker Autokorrelation deutlich zu wenig ab. Wer sich auf `slope_se_hac` stützt, sollte bei Durbin-Watson ≪ 2 `hac_lag` grösser setzen oder `slope_se_ar1` nehmen.
+
+## 8. Umsetzung Paket D: Fenster-Inspektor
+
+- **Dock „Window“** (`datualizer_gui/components/window_inspector.py`). Öffnet per Doppelklick im Steps-Dock (zoomt weiterhin), über das Kontextmenü der Steps-Tabelle oder per Rechtsklick im Plot → „Inspect step“. Zeigt die im Quellen-Dock gewählten Kanäle, höchstens 8 als Plot, weitere nur in der Tabelle. Zeitachse in Sekunden ab Schrittbeginn.
+- **Kern-Ergänzungen** für die Darstellung, ohne die Rechnung zu ändern:
+  - `WindowResult.used_rows`/`excluded_rows`: Zeilen der Eingabe, für die Kreuze
+  - `intercept_theil_sen`: Theil-Sen-Gerade am Fensterbeginn
+  - `two_point_points`: Stützstellen der 2-Punkt-Differenz
+  - `slope_se_eff`: der grössere korrigierte SE, wie in der Ampel
+  - `Check(str)` mit `level` und `WindowResult.level`
+
+  Die Felder zum Zeichnen erscheinen nicht in `window_table`.
+- **Override pro Schritt.** `Campaign.window_overrides` (Schritt-ID → Start, Ende, Name des Schritts beim Setzen) ersetzt die `WindowRule` nur für diesen Schritt. Im Inspektor lässt sich der Bereich nur innerhalb des Schritts ziehen. Bekommt die ID später einen anderen Namen (Zeilen im Journal eingefügt) oder fehlt sie, steht das in `intervals().problems`. Das Override wird dann weder still angewendet noch still verworfen.
+- **Werte in der Tabelle** sind auf zwei signifikante Stellen der Unsicherheit gerundet.
+- **Absturz.** Die Szene des Inspektors läuft ohne BSP-Index. Mit Index stürzte das Zeichnen nach dem Neuaufbau ab (Segfault im BSP-Baum von Qt, Linux offscreen, sobald vorher ein anderer Inspektor existierte). Die genaue Ursache ist nicht geklärt.

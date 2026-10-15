@@ -121,6 +121,33 @@ class TestPeakLod:
         xo, _, _ = peak_lod(x, x, np.ones(3, dtype=bool), (0.0, 1.0), 1, x_sorted=False)
         assert xo.tolist() == x.tolist()
 
+    def test_columns_follow_the_view_not_a_far_neighbour(self) -> None:
+        # A sample long before the data (as in the instrument reader DB) is kept as the left
+        # neighbour while the view starts in the gap. The columns must still be one screen
+        # column wide: spanning them over the neighbour made a sawtooth of a few wide columns.
+        x = np.concatenate([[0.0], np.arange(100_000.0, 110_000.0)])
+        y = np.sin(x / 30.0)
+        c = np.ones(len(x), dtype=bool)
+        x_range, columns = (99_000.0, 110_000.0), 500
+        xo, yo, _ = peak_lod(x, y, c, x_range, columns)
+        width = (x_range[1] - x_range[0]) / columns
+        inside = np.unique(xo[(xo >= 100_000.0)])
+        assert np.diff(inside).max() <= 1.01 * width
+        assert yo.max() == y[1:].max() and yo.min() == y[1:].min()
+
+    def test_panning_by_whole_columns_keeps_the_columns(self) -> None:
+        # Columns are fixed on the time axis, so the curve does not jitter while panning.
+        x = np.concatenate([[0.0], np.arange(100_000.0, 110_000.0)])
+        y = np.sin(x / 7.0)
+        c = np.ones(len(x), dtype=bool)
+        columns = 400
+        width = 8_000.0 / columns
+        a = peak_lod(x, y, c, (101_000.0, 109_000.0), columns)
+        b = peak_lod(x, y, c, (101_000.0 + 3 * width, 109_000.0 + 3 * width), columns)
+        overlap = (101_500.0, 108_500.0)
+        pick = [np.column_stack(r[:2])[(r[0] >= overlap[0]) & (r[0] <= overlap[1])] for r in (a, b)]
+        assert len(pick[0]) > 100 and np.array_equal(pick[0], pick[1])
+
 
 class TestFastCurve:
     def test_thin_pen_and_large_pixmap_cache(self, qapp: QApplication) -> None:

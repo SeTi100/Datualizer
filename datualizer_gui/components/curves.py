@@ -119,6 +119,26 @@ def step_arrays(x: np.ndarray, y: np.ndarray, connect: np.ndarray) -> tuple[np.n
     return xs, ys, cs
 
 
+def value_at(x: np.ndarray, y: np.ndarray, connect: np.ndarray, t: float, style: PlotStyle) -> float:
+    """The value drawn at `t` (for the crosshair readout), NaN where nothing is drawn.
+
+    (x, y, connect) as from `plot_arrays`, x sorted. Steps hold a value until the next sample
+    it is joined to, so they show the last sample at or before `t`; the other styles show the
+    nearest sample. In a break, before the first and after the last sample there is no value.
+    """
+    n = len(x)
+    if n == 0:
+        return float("nan")
+    j = int(np.searchsorted(x, t, side="right")) - 1  # last sample at or before t
+    if j >= 0 and x[j] == t:
+        return float(y[j])
+    if j < 0 or j == n - 1 or not connect[j]:
+        return float("nan")
+    if PlotStyle(style) is PlotStyle.STEP or t - x[j] <= x[j + 1] - t:
+        return float(y[j])
+    return float(y[j + 1])
+
+
 def peak_lod(
     x: np.ndarray,
     y: np.ndarray,
@@ -210,6 +230,13 @@ class FastCurve(pg.PlotCurveItem):
     def getOriginalDataset(self) -> tuple[np.ndarray, np.ndarray]:
         """All finite samples (the drawn data is reduced to the screen, steps add risers)."""
         return self._samples[0], self._samples[1]
+
+    def value_at(self, t: float) -> float:
+        """The value this curve draws at `t` (NaN where it draws nothing), see `value_at`."""
+        xs, ys, cs, x_sorted = self._samples
+        if not x_sorted:
+            return float("nan")
+        return value_at(xs, ys, cs, t, self.style)
 
     def set_pen(self, pen) -> None:
         """New colour for line and markers."""

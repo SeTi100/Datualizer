@@ -651,11 +651,11 @@ class CampaignPlotCanvas(QWidget):
         """(time text, rows of (track label, value, unit), notes: gaps and the current step) at master time `x`."""
         rows = []
         for tr in self._tracks:
-            if not len(tr.x):
+            curve = self._curves.get(track_key(tr))
+            if not len(tr.x) or curve is None:
                 continue
-            idx = int(np.clip(np.searchsorted(tr.x, x), 1, len(tr.x) - 1))
-            j = idx - 1 if abs(tr.x[idx - 1] - x) <= abs(tr.x[idx] - x) else idx
-            rows.append((tr.label, format_value(tr.y[j], self._decimals).strip(), tr.unit))
+            # what the curve draws there: steps hold their value, nothing in a break ("—")
+            rows.append((tr.label, format_value(curve.value_at(x), self._decimals).strip(), tr.unit))
         notes = [g for g in (describe_gap(c, x) for c in self._coverage) if g]
         step = self.step_at(x)
         if step is not None:

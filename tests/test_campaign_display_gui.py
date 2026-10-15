@@ -14,7 +14,7 @@ from datualizer_core.campaign import ChannelDisplay, YScale, YScaleMode
 from datualizer_core.ingestion.profiles import get_profile
 from datualizer_core.schema import PlotStyle
 from datualizer_gui.campaign_window import CampaignWindow
-from datualizer_gui.components.curves import FastCurve, peak_lod, plot_arrays, step_arrays
+from datualizer_gui.components.curves import FastCurve, peak_lod, plot_arrays, step_arrays, value_at
 
 SA = Path(__file__).parent / "fixtures" / "sa_12_10"
 FID_DAT = SA / "fid_ifid_12_10_extract.dat"
@@ -85,6 +85,30 @@ def test_journal_is_drawn_as_steps_by_profile(window: CampaignWindow) -> None:
     horizontal = drawn & (xs[1:] > xs[:-1])
     assert horizontal.any()
     assert np.all(ys[1:][horizontal] == ys[:-1][horizontal])  # no slanted segment: flat or vertical
+
+
+def test_value_at_reads_what_is_drawn() -> None:
+    x = np.array([0.0, 10.0, 20.0, 30.0])
+    y = np.array([1.0, 2.0, 3.0, 4.0])
+    connect = np.array([True, False, True, False])  # a break between 10 and 20
+    # steps hold the value until the next sample, also past the middle
+    assert [value_at(x, y, connect, t, PlotStyle.STEP) for t in (0.0, 9.0, 21.0, 29.9, 30.0)] == [1, 1, 3, 3, 4]
+    # lines: the nearest sample
+    assert [value_at(x, y, connect, t, PlotStyle.LINE) for t in (4.0, 6.0, 26.0)] == [1, 2, 4]
+    # nothing drawn: in the break, before the first and after the last sample
+    for style in PlotStyle:
+        for t in (15.0, -1.0, 31.0):
+            assert np.isnan(value_at(x, y, connect, t, style)), (style, t)
+
+
+def test_readout_of_a_step_holds_until_the_next_sample(window: CampaignWindow) -> None:
+    """Past the middle between two journal entries the readout still shows the drawn value."""
+    curve = window.canvas.curves[f"{JOURNAL.stem}/v_mfc"]
+    xs, ys, connect, _ = curve._samples
+    i = int(np.flatnonzero((np.diff(ys) != 0) & connect[:-1])[0])  # a drawn step to a new value
+    t = xs[i] + 0.8 * (xs[i + 1] - xs[i])
+    row = next(r for r in window.canvas.readout_rows(t)[1] if r[0].endswith("v_mfc"))
+    assert float(row[1]) == pytest.approx(ys[i], rel=1e-3)
 
 
 @pytest.mark.parametrize("style", list(PlotStyle))

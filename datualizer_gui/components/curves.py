@@ -134,6 +134,11 @@ def peak_lod(
     stroke). Two columns are joined only if the last sample of one is joined to the first sample
     of the next, so a dropout or time gap wider than a column is never bridged by a line.
     Unsorted x is returned unchanged (neither clipping nor columns are defined then).
+
+    Columns are one screen column of the view wide and fixed on the x axis (counted from the
+    first sample of the series). Spanning them over the clipped samples made them far too wide
+    when the neighbour outside the view lay before a long gap (a sawtooth instead of the curve),
+    and a grid that moved with the clipped samples made the curve jitter while panning.
     """
     n = len(x)
     if n == 0 or not x_sorted:
@@ -149,8 +154,9 @@ def peak_lod(
     columns = max(int(columns), 1)
     if m <= 4 * columns:
         return xs, ys, cs
-    span = float(xs[-1] - xs[0]) or 1.0
-    col = ((xs - xs[0]) * (columns / span)).astype(np.int64)
+    lo, hi = x_range if x_range is not None else (x[0], x[-1])
+    width = float(hi - lo) / columns or float(xs[-1] - xs[0]) / columns or 1.0
+    col = np.floor((xs - x[0]) / width).astype(np.int64)
     starts = np.concatenate(([0], np.flatnonzero(np.diff(col) != 0) + 1))
     y_max = np.maximum.reduceat(ys, starts)
     y_min = np.minimum.reduceat(ys, starts)

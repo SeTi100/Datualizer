@@ -96,7 +96,8 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
 | Ausgabe mit `°`, `³`, Umlauten | `PYTHONIOENCODING=utf-8` setzen, sonst `UnicodeEncodeError` auf der Konsole |
 
 **Fallstricke:**
-- Das lokale `.venv` wurde mit uv erstellt; `uv` ist nicht im PATH. pip wurde mit Zustimmung des Nutzers per `python -m ensurepip` nachgerüstet. Keine Pakete ungefragt installieren.
+- Das lokale `.venv` wurde mit uv erstellt; `uv` ist nicht im PATH. Ein uv-venv hat kein pip, es wurde mit Zustimmung des Nutzers per `.venv\Scripts\python.exe -m ensurepip` nachgerüstet. Keine Pakete ungefragt installieren.
+- **Immer `python -m pip`, nie `pip`.** Fehlt `pip.exe` in `.venv\Scripts`, startet `pip` auch bei aktivem venv das pip der globalen Store-Python und installiert in deren Nutzerordner. Die App bricht dann mit `ModuleNotFoundError` ab (so geschehen mit scipy). Abhängigkeiten nach neuen Einträgen in `pyproject.toml` mit `.venv\Scripts\python.exe -m pip install -e ".[dev]"` nachziehen. Anleitungen für den Nutzer (README, Antworten) nennen ebenfalls `python -m pip`.
 - `python -m datualizer_gui.main_window` startet **nichts**. Der Einstieg ist `datualizer_gui.app`.
 - CI (`.github/workflows/pytest.yml`, Ubuntu, Python 3.11) installiert per `pip install -e ".[dev]"` und testet damit auch die Paket-Metadaten.
 - **pyqtgraph ≥ 0.14** ist die getestete Version (`pyproject.toml`).

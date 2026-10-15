@@ -76,14 +76,22 @@ Oder klassisch mit pip:
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 ```
+
+Unter Linux und macOS heißt der zweite Schritt `source .venv/bin/activate`.
+
+Danach die Umgebung in jedem neuen Terminal aktivieren (`.venv\Scripts\activate`), bevor du die App oder die Tests startest. Pakete nachinstallieren oder nach einem `git pull` die Abhängigkeiten aktualisieren immer mit demselben Befehl wie oben (`uv pip install -e ".[dev]"` bzw. `python -m pip install -e ".[dev]"`).
+
+> **Nicht einfach `pip install` tippen.** Ein mit uv angelegtes `.venv` enthält kein pip. `pip` startet dann das pip einer anderen Python-Installation und installiert dorthin, auch wenn das `.venv` aktiv ist. Die App findet die Pakete anschließend nicht (`ModuleNotFoundError`). `python -m pip` bzw. `uv pip` installiert immer in die gerade aktive Umgebung.
 
 ### GUI starten
 
 ```bash
 python -m datualizer_gui.app
 ```
+
+Ohne aktivierte Umgebung geht es mit `uv run python -m datualizer_gui.app` oder `.venv\Scripts\python.exe -m datualizer_gui.app`.
 
 Liegt `SA_testmessung_1.csv` im Arbeitsverzeichnis, wird sie automatisch geladen (4.931 Zeilen, 8 Kanäle). Alles andere geht über *File → Open CSV…* (`Ctrl+O`).
 

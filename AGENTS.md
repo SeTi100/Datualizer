@@ -164,7 +164,7 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
   - Einstellungen des Kampagnenfensters, Teil 1: Darstellung pro Kanal (`ChannelDisplay`: Alias, `PlotStyle`, `YScale` auto/robust/fest) in `campaign.json`, Standardstil aus `SourceProfile.plot_style`, Dialog `components/channel_display_dialog.py`, Randmarker für Werte ausserhalb des Bereichs
   - Einstellungen des Kampagnenfensters, Teil 2: Zoom nur auf der Zeitachse und Y passend zum sichtbaren Ausschnitt (`components/time_axis.TimeViewBox`), Zeitachse als Uhrzeit, Datum + Uhrzeit oder t − t0 (`Campaign.time_reference`), Zone der Kampagne (`session.set_timezone`), Mindesthöhe der Subplots mit Scrollen
   - Einstellungen des Kampagnenfensters, Teil 3: Subplots pro Kanal, nach Einheit oder nach Quelle mit Legende, Farben nach Kanal, Quelle oder manuell (`components/plot_groups.py`, `ChannelDisplay.color`). `canvas.plot_items` ist nach Subplot geschlüsselt (bei „pro Kanal“ gleich dem Spur-Schlüssel `quelle/kanal`), `canvas.curves` und `edge_markers` immer nach Spur
-  - Einstellungen des Kampagnenfensters, Teil 4: Werte unter dem Mauszeiger als Leiste, Tooltip oder Tabelle im Dock (`readout.ReadoutMode`, `ReadoutTable`), Nachkommastellen
+  - Einstellungen des Kampagnenfensters, Teil 4: Werte unter dem Mauszeiger als Leiste, Tooltip oder Tabelle im Dock (`readout.ReadoutMode`, `ReadoutTable`), Nachkommastellen. Angezeigt wird, was die Kurve zeichnet (`FastCurve.value_at`): Treppen halten ihren Wert bis zum nächsten Punkt, sonst der nächste Messpunkt, in einer Unterbrechung „—“
   - Einstellungen des Kampagnenfensters, Teil 5: Export als PNG, SVG, PDF (`components/plot_export.py`, `canvas.export_copy()`, Dialog `components/export_dialog.py`)
 
 **Nächste offene Punkte:**

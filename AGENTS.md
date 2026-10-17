@@ -73,6 +73,7 @@ datualizer_gui/                   # PySide6-App, Einstieg: python -m datualizer_
                                   # components/coverage_strip.py: Abdeckungsspur (Lücken schraffiert, in Pixeln gezeichnet)
                                   # components/time_axis.py: Zeitachsen (Uhrzeit, Datum + Uhrzeit, t − t0), Mausrad nur auf der Zeit
                                   # components/curves.py: schnelle Kurven (Peak-Downsampling, Clip-to-View, Cache) für alle Plots
+tools/readme_screenshots.py       # rendert die README-Bilder (docs/img/) aus den Fixtures
 tests/fixtures/runs_export/       # 13 echte Pipeline-Exporte (unveränderlich!)
 tests/fixtures/sa_12_10/          # Ausschnitte einer echten Mehrgeräte-Messkampagne (unveränderlich!)
 ```
@@ -125,7 +126,8 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
 4. **Docs im selben PR nachziehen:**
    - Status im Datenkatalog (✅/offen)
    - Master-Plan
-   - README, falls sich die API ändert
+   - README, falls sich die API ändert (Details mit Code-Beispielen stehen in `docs/BENUTZUNG.md`, das README bleibt ein Überblick mit Bildern)
+   - README-Bilder neu rendern, wenn sich die GUI sichtbar ändert: `.venv\Scripts\python.exe tools\readme_screenshots.py`
    - diese Datei, falls sich Prinzipien ändern
 5. **PR nach `main`**, CI muss grün sein. Die PR-Beschreibung erklärt *was*, *warum* und was Reviewer wissen müssen (Verhaltensänderungen, Heuristik-Grenzen, offene Punkte).
 

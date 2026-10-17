@@ -10,7 +10,11 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Engine](https://img.shields.io/badge/engine-Polars%20%2B%20Arrow-cd792c)
 ![GUI](https://img.shields.io/badge/GUI-PySide6%20%2B%20PyQtGraph-41cd52)
-![Tests](https://img.shields.io/badge/tests-62%20passed-brightgreen)
+[![Tests](https://github.com/SeTi100/Datualizer/actions/workflows/pytest.yml/badge.svg)](https://github.com/SeTi100/Datualizer/actions/workflows/pytest.yml)
+
+<img src="docs/img/kampagne_schritte.png" alt="Kampagnenfenster: Waage und Labjournal auf einer gemeinsamen Zeitachse, Messschritte als Bänder" width="100%">
+
+<sub>Eine echte Messkampagne: OCR-Waage (SQLite) und Labjournal (Excel) auf einer Zeitachse, Messschritte aus dem Journal als Bänder, oben die Abdeckung jeder Quelle.</sub>
 
 </div>
 
@@ -18,38 +22,82 @@
 
 ## Worum geht's?
 
-Jeder, der schon mal an einem Prüfstand stand, kennt das: Der Datenlogger exportiert *irgendwas*. Mal mit Semikolon, mal mit deutschem Dezimalkomma, mal mit einem Footer voller Statistiken. Mal bricht der Export mitten in der Zeile ab, und mal steht in der Spalte `Konzentration` plötzlich `20 °C`. Die übliche Antwort darauf sind 400 Zeilen Einweg-Pandas-Skript pro Gerät, die nach dem nächsten Firmware-Update keiner mehr versteht.
+Jeder, der schon mal an einem Prüfstand stand, kennt das: Der Datenlogger exportiert *irgendwas*. Mal mit Semikolon, mal mit deutschem Dezimalkomma, mal mit einem Footer voller Statistiken. Der FID hat seine eigene Uhr, die Waage schreibt in eine SQLite-Datenbank, die Sollwerte stehen im Labjournal in Excel. Die übliche Antwort darauf sind 400 Zeilen Einweg-Pandas-Skript pro Gerät, die nach dem nächsten Firmware-Update keiner mehr versteht.
 
 **Datualizer** will das ändern:
 
-1. **Robuste Ingestion:** Chaotische CSV-Exporte werden erkannt, eingelesen und *ehrlich* auditiert. Kaputte Werte werden protokolliert statt still verschluckt.
-2. **Deklarative Transformationen:** Jeder Bereinigungsschritt ist ein serialisierbarer Rezept-Knoten (JSON-AST). Damit gibt es Undo/Redo, Replay auf die nächste Messung und Code-Export nach Python, SQL und R.
-3. **Schnelle Visualisierung:** Native Desktop-Plots mit PyQtGraph, verlinkten Zeitachsen und Fadenkreuz, ohne Browser dazwischen.
+1. **Robuste Ingestion:** Chaotische Exporte (CSV, Excel, SQLite) werden erkannt, eingelesen und *ehrlich* auditiert. Kaputte Werte werden protokolliert statt still verschluckt.
+2. **Mehrere Geräte, eine Zeitachse:** Jede Quelle behält ihre Daten, nur die Uhr wird korrigiert (Versatz, Drift, Ankerpunkte). Messschritte kommen aus dem Labjournal.
+3. **Auswertung mit ehrlicher Unsicherheit:** Mittelwert, Steigung und Integral pro Messschritt, mit Autokorrelation, robuster Steigung und einer Ampel, die sagt, wann einem Wert nicht zu trauen ist.
+4. **Schnelle Visualisierung:** Native Desktop-Plots mit PyQtGraph, verlinkten Zeitachsen und Fadenkreuz, ohne Browser dazwischen.
 
 Kurz gesagt: **PowerQuery-Ergonomie für Ingenieursdaten**, mit der Reproduzierbarkeit, die eine wissenschaftliche Auswertung braucht.
 
 > [!NOTE]
-> Datualizer ist ein Studierendenprojekt im frühen Stadium (Etappe 1 von 7). Die Architektur steht, die Grundlagen sind getestet, vieles ist noch Plan. Wer Feedback, Testdaten oder Meinungen hat: [Issue aufmachen](https://github.com/SeTi100/Datualizer/issues), ausdrücklich erwünscht.
+> Datualizer ist ein Studierendenprojekt im frühen Stadium (Etappe 2 von 7). Einlesen, Messkampagnen und Fenster-Statistik laufen und sind getestet, Rezepte und Code-Export sind noch Plan. Wer Feedback, Testdaten oder Meinungen hat: [Issue aufmachen](https://github.com/SeTi100/Datualizer/issues), ausdrücklich erwünscht.
+
+---
+
+## Ein Rundgang
+
+Alle Bilder stammen aus der App selbst, gerendert aus den Testdaten im Repo ([`tools/readme_screenshots.py`](tools/readme_screenshots.py)).
+
+### 1. Einen chaotischen Export laden und verstehen
+
+<img src="docs/img/hauptfenster.png" alt="Hauptfenster mit Inspector, Run-Tabelle, Plots und Datentabelle" width="100%">
+
+Ein Pipeline-Export mit allem, was schiefgehen kann: abgebrochene Runs, Sensor-Dropouts, Leerfelder, 306 unlesbare Zellen. Datualizer erkennt Trennzeichen, Dezimalkomma und Zeitspalte selbst. Links steht, was die Automatik entschieden hat, die Runs mit Dauer und Sollwerten (der abgebrochene Mini-Run ist rot), rechts die Schritte bis zur Tabelle, unten die Daten. Ein Klick auf einen Run plottet nur diesen, mit Zeit ab Run-Start. Jede Entscheidung lässt sich über eine `IngestionConfig` überschreiben, und die ausgeschriebene Spec lädt dieselbe Tabelle beim nächsten Mal wieder exakt gleich.
+
+### 2. Mehrere Geräte auf eine Zeitachse legen
+
+<img src="docs/img/kampagne_uebersicht.png" alt="Kampagnenfenster mit vier Quellen und Abdeckungsspur" width="100%">
+
+Eine Messkampagne mit vier Quellen in vier Formaten: Waage per OCR in SQLite, Labjournal in Excel, OCR eines Videos als CSV, FID als Text-Export. Geräteprofile wissen, wie jedes Gerät exportiert; fehlt etwas (Blatt, Datum zu reinen Uhrzeiten), fragt die App nach. Pro Quelle korrigiert ein Uhrenmodell Versatz und Drift. Die Abdeckungsspur oben zeigt auf einen Blick, wann welches Gerät Daten hat, Lücken sind schraffiert. Gespeichert wird alles als `campaign.json`, mit relativen Pfaden und Hash pro Datei.
+
+### 3. Messschritte aus dem Labjournal
+
+Im Bild ganz oben sind die Schritte aus dem Labjournal als Bänder über allen Plots eingeblendet, links steht die Liste mit Problemen (Journalzeilen ohne Startzeit) und der Regel, welcher Teil jedes Schritts ausgewertet wird (z. B. „die letzten 2 Minuten“). Welche Spalten Start, Ende, Name und Sollwerte sind, kommt aus dem Profil oder wird aus der Datenform erraten, nie aus dem Code. Eigene Schritte setzt man per Rechtsklick → *Marker ○ ○*.
+
+### 4. Jeden Schritt ehrlich auswerten
+
+<img src="docs/img/fenster_inspektor.png" alt="Fenster-Inspektor mit OLS- und Theil-Sen-Gerade, Kennwerttabelle und Ampel" width="100%">
+
+Der Fenster-Inspektor zeigt einen Schritt im Detail: das ausgewertete Fenster, die OLS-Gerade (durchgezogen), die robuste Theil-Sen-Gerade (gestrichelt) und die Stützstellen der 2-Punkt-Differenz. Darunter die Kennwerte mit Unsicherheit. Weil dicht abgetastete Sensoren stark autokorreliert sind, gibt es neben dem klassischen SEM auch `n_eff`, `SEM_eff` und Newey-West-Fehler. Die Ampel rechts sagt in Klartext, was auffällt: hier ein signifikanter Drift und nur 3 effektiv unabhängige Punkte von 120. Die Fensterränder lassen sich ziehen, Bild ab/auf springt zum nächsten Schritt.
+
+### 5. Für den Bericht exportieren
+
+<table>
+<tr>
+<td width="45%"><img src="docs/img/export_bericht.png" alt="Exportierter Plot im hellen Theme" width="100%"></td>
+<td>
+
+*Campaign → Export Plot…* schreibt genau den gezeigten Ausschnitt als **PNG, SVG oder PDF**: Breite in mm (Standard: A4-Textbreite), Schrift und Linienbreite in pt, helles oder dunkles Theme. Am Bildschirm bleiben die Linien 1 px dünn und schnell, im Bericht sind sie so dick, wie sie sein sollen.
+
+Dazu pro Kanal: Anzeigename, Stil (Linie, Punkte, Treppe), Farbe und Y-Skalierung (*auto*, *robust* gegen OCR-Ausreisser, *fest*). Werte ausserhalb des Bereichs werden am Rand markiert, nicht weggelassen.
+
+</td>
+</tr>
+</table>
 
 ---
 
 ## Features
 
-### ✅ Schon da (Etappe 1)
-
 | Bereich | Was es kann |
 |---|---|
-| **PreScanner** | Erkennt Trennzeichen (`,` `;` `\t`), deutsches Dezimalkomma (`24,109`), Tausendertrenner, UTF-8-BOM, leeren Spalte-0-Header und Footer-Leerzeilen |
-| **CSVLoader** | Polars-Ingestion ohne strikte Typprüfung, Zeitstempel (`HH:MM:SS`, ISO, deutsch, mit Zeitzone) → relative `time_seconds` plus absoluter Ursprung `time_origin`, Sentinel-Erkennung (`ERR`, `-999`, `#N/A`, …) mit `AuditLog` |
-| **DualModeDataset** | Wide-Format als Primär-Engine, Zero-Copy-NumPy-Views für das Plotting, Tidy-Long-Format per `to_long()` auf Abruf |
-| **Operatoren** | `clean_names` (Umlaut-Transliteration, Kanalnummern bleiben erhalten), `drop_footer`, `unpivot` |
-| **Desktop-GUI** | Virtuelle Tabelle (`PolarsTableModel`), Multi-Kanal-Plot mit verlinkten X-Achsen und synchronem Fadenkreuz, Inspector mit Audit-Badge, 3-Panel-Docking-Layout |
+| **Einlesen** | Trennzeichen, Dezimalkomma, Tausendertrenner, BOM, Footer, Sentinels (`ERR`, `-999`, `#DIV/0!` …) mit Audit; Typ-Inferenz pro Spalte; Long-Format erkennen und nach wide pivotieren |
+| **Formate & Profile** | Text (`.csv`, `.dat`, `.txt`), Excel (`.xlsx`, `.xls`), SQLite; Geräteprofile als JSON (Testa iFID, PicoLog, instrument_reader, Labjournal) |
+| **Struktur** | Messwert vs. Parameter (Sollwerte), Runs mit abgebrochenen Mini-Runs, leere Spalten, Einheiten aus dem Header |
+| **Mehrere Dateien** | `load_csvs` mit Dedupe über SHA-256 und Schlüssel, Konflikte im Audit |
+| **Qualität** | Flags statt Löschen: Lücke, Dropout, Sprung, eingefrorener Sensor, Bereich, Hampel-Spike |
+| **Zeit** | Absolute Zeit mit Zeitzone und Sommerzeit, Startzeit für Logger mit verstrichener Zeit, Datum für reine Uhrzeiten |
+| **Messkampagne** | Mehrere Quellen auf Master-Zeit, Uhrenmodell (Versatz, Drift, Anker), Abdeckung, Messschritte, `campaign.json` |
+| **Fenster-Statistik** | Mittelwert, Median, SD, SEM, OLS- und Theil-Sen-Steigung, 2-Punkt-Differenz nach GUM, Integral; AR(1)-`n_eff`, Newey-West, Durbin-Watson, Stationaritäts-Ampel |
+| **Plots** | Eigenes Peak-Downsampling ohne Linien über Lücken, verlinkte Zeitachsen, Fadenkreuz-Werte, Subplots nach Kanal/Einheit/Quelle, Export PNG/SVG/PDF |
 
-### 🚧 Geplant
+Alles mit Code-Beispielen: **[ausführliche Anleitung](docs/BENUTZUNG.md)**.
 
-Block-Segmentation für Metadaten-Köpfe und Multi-Row-Header · Typ- und Rollen-Inferenz · Pydantic-Recipe-AST mit 10 Kern-Operatoren · `join_asof` für asynchrone Sensoren · Tidy-Axiom-Validierung · LTTB-Downsampling für > 1 Mio. Punkte · Multi-Y-Achsen · visueller Recipe-Editor · Code-Export (Polars / DuckDB-SQL / R Tidyverse) · portable Windows-`.exe`.
-
-Details: [Roadmap](#roadmap) und [`docs/MASTER_ETAPPEN_PLAN.md`](docs/MASTER_ETAPPEN_PLAN.md).
+**Geplant:** Pydantic-Recipe-AST mit Undo/Redo und Replay · `join_asof` für asynchrone Sensoren · Abgleich-Werkzeuge und Rechengrössen für Kampagnen · Video-Spur · visueller Recipe-Editor · Code-Export (Polars / DuckDB-SQL / R Tidyverse) · portable Windows-`.exe`. Details in der [Roadmap](#roadmap).
 
 ---
 
@@ -93,7 +141,7 @@ python -m datualizer_gui.app
 
 Ohne aktivierte Umgebung geht es mit `uv run python -m datualizer_gui.app` oder `.venv\Scripts\python.exe -m datualizer_gui.app`.
 
-Liegt `SA_testmessung_1.csv` im Arbeitsverzeichnis, wird sie automatisch geladen (4.931 Zeilen, 8 Kanäle). Alles andere geht über *File → Open CSV…* (`Ctrl+O`).
+Liegt `SA_testmessung_1.csv` im Arbeitsverzeichnis, wird sie automatisch geladen. Alles andere geht über *File → Open CSV…* (`Ctrl+O`, öffnet auch Excel und SQLite). Die Kampagnenansicht öffnet *Campaign → Open Campaign Window…* (`Ctrl+K`). Zum Ausprobieren eignen sich die Dateien in [`tests/fixtures/sa_12_10/`](tests/fixtures/sa_12_10/).
 
 ### Als Bibliothek nutzen
 
@@ -101,129 +149,30 @@ Liegt `SA_testmessung_1.csv` im Arbeitsverzeichnis, wird sie automatisch geladen
 from datualizer_core import load_csv
 
 ds = load_csv("SA_testmessung_1.csv")      # PreScan + Laden + Audit in einem Rutsch
-
-ds.shape                                   # (4931, 9)
-ds.columns                                 # ['time_seconds', 'kanal_1', 'kanal_2', ...]
-
-t = ds.to_numpy("time_seconds", allow_copy=False)   # Zero-Copy-View für Plots
-long = ds.to_long()                                  # [time_seconds, channel, value]
-
-if ds.audit_log.has_errors():
-    print(ds.audit_log.to_dataframe())     # Welche Zelle war kaputt, und warum?
+ds.channels                                # Messkanäle (ohne Parameter und Metadaten)
+ds.ingestion_spec                          # was die Automatik entschieden hat, replaybar
+ds.audit_log.to_dataframe()                # welche Zelle war kaputt, und warum?
 ```
-
-### Automatik schlägt vor, du entscheidest
-
-Jede Heuristik (Zeitspalte, Spaltentypen, Long-Format, Messwert vs. Parameter, Namens-Vokabulare, Schwellen) ist über eine `IngestionConfig` überschreibbar. Und jedes geladene Dataset verrät, was die Automatik entschieden hat:
-
-```python
-from datualizer_core import ColumnKind, IngestionConfig, LongFormatConfig, load_csv
-
-ds = load_csv("export.csv")
-spec = ds.ingestion_spec                     # alle Entscheidungen, ausgeschrieben
-print(spec.model_dump_json(indent=2))        # → speichern, prüfen, korrigieren …
-
-cfg = IngestionConfig(
-    column_kinds={"Versuch": ColumnKind.IDENTIFIER,           # Spaltentyp erzwingen
-                  "Temperatur": ColumnKind.NUMERIC},          # konstanter Sensor bleibt Messkanal
-    long_format=LongFormatConfig(variable_col="Groesse",      # Long-Rollen selbst festlegen
-                                 value_col="Betrag",
-                                 channel_attr_cols=["Masseinheit"]),
-)
-ds = load_csv("export.csv", config=cfg)      # … und reproduzierbar neu laden
-```
-
-**Messwert oder Parameter?** Eine numerische Spalte, die in jedem Run konstant ist (Sollwerte wie `Rotameter` oder `target_temperature`), wird als `ColumnKind.PARAMETER` eingestuft. Sie bleibt in `ds.df`, steht in `ds.parameters` und wird nicht als Kanal geplottet (`ds.channels`). Runs erkennt der Loader an Spalten wie `run_id` (`Vocabulary.run_tokens`), oder du gibst sie vor: `IngestionConfig(roles=RoleConfig(run_columns=["Charge"]))`. Ein Sensor, der zufällig konstant misst, sieht genauso aus wie ein Sollwert. Den stufst du per `column_kinds` zurück auf `NUMERIC`.
-
-**Leere Spalten** werden markiert, nicht gelöscht: `ds.fill_ratio` liefert den Füllgrad pro Spalte, `ds.empty_columns` die Spalten ohne jeden Wert. Der Inspector zeigt leere Kanäle grau und abgewählt an.
-
-**Runs** sind eine eigene Dimension: `ds.runs` zeigt pro Run Samples, Dauer, Median-Δt, Parameterwerte und ein `aborted`-Flag für Mini-Runs (Schwelle über `IngestionConfig(runs=RunConfig(aborted_fraction=0.1))`). `ds.channel_availability` liefert den Füllgrad je Run und Kanal, `ds.select_run((2,))` ein neues Dataset nur mit Run 2 und run-relativer Zeit. In der GUI plottet ein Klick in die Run-Tabelle nur diesen Run.
-
-**Mehrere Dateien zusammenführen:** `load_csvs([alt, neu])` lädt mehrere Exporte als ein Dataset. Byte-identische Dateien erkennt der Loader am SHA-256 und lädt sie nur einmal (Audit: `duplicate_file`). Überlappende Snapshots werden über den Schlüssel dedupliziert (Zeit, bei Long-Tabellen Zeit und Variable): Die später angegebene Datei gewinnt, abweichende Werte der früheren Datei stehen als `merge_conflict` im Audit. Mit `IngestionConfig(merge=MergeConfig(conflict=MergeConflictMode.ERROR))` schlägt jeder Konflikt laut fehl, `MergeConfig(key_columns=[...])` setzt den Schlüssel selbst. `ds.sources` zeigt pro Datei Hash, übernommene, ersetzte und widersprüchliche Zeilen. Wide und Long oder verschiedene Dezimaltrenner werden nicht gemischt (`MergeError`). In der GUI: Mehrfachauswahl unter *Open CSV…* oder *File → Add CSV (merge)…*.
-
-**Qualitäts-Flags** markieren verdächtige Samples, ohne die Daten anzufassen: `ds.quality_flags` ist eine Ereignistabelle (`row`, `channel`, `flag`) mit `gap` (Session-Lücke), `missing` bzw. `missing_calculated` (Leerfeld in einem Kanal, der im Run sonst Werte hat; Rechenkanäle getrennt), `stuck` (eingefrorener Sensor), `jump` (z. B. Nachfüllen), `dropout` (kurzer Ausreißer, der aufs alte Niveau zurückkehrt, z. B. Waage meldet 0.0), `out_of_range` und `spike` (Hampel-Ausreißer in beide Richtungen, z. B. OCR liest 9628 statt 9672,8 g). Dazu gibt es `ds.quality_summary`, `ds.flag_mask(["dropout"], channel="masse")` und `ds.with_flag_columns()` (neue Tabelle mit einer Flag-Spalte pro Kanal). Schwellen stehen in `IngestionConfig(quality=QualityConfig(...))`; Sprungschwellen werden pro Kanal aus den Daten vorgeschlagen und landen ausgeschrieben in der Spec. Plausible Bereiche kennt nur der Nutzer: `QualityConfig(ranges={"Massenstrom Waage (g/s)": (0.0, None)})`. Der `spike`-Detektor vergleicht jeden Wert mit dem Median eines zentrierten Zeitfensters (`spike_window_s`, ohne Vorgabe 21 typische Abtastschritte) und markiert ihn, wenn er mehr als `spike_k` · 1,4826 · MAD (Start k = 3) davon abweicht; `spike_channels` schränkt die Kanäle ein, `spike_window_s=0` schaltet ab. Als Untergrenze der Streuung dient `spike_min_scale` (ohne Vorgabe die kleinste Stufe zwischen den Werten, also die Auflösung, z. B. 0,01 g), sonst würde bei quantisierten Werten schon eine Ziffer zum Spike. Mit Untergrenze 0 bleiben Fenster mit MAD = 0 unbeurteilt und stehen in `ds.quality_notes` (`spike_mad_zero`). Der Plot verbindet keine Linien über Lücken, der Inspector zählt die Flags pro Kanal.
-
-**Einheiten** gehen nicht verloren: `Massenstrom Waage (g/s)` wird zur Spalte `massenstrom_waage`, und `ds.units["massenstrom_waage"]` ist `"g/s"`. Bei Long-Exporten kommt die Einheit aus der Einheiten-Spalte. `ds.unitless_columns` zeigt Kanäle und Parameter ohne Einheit. Eigene Einheiten oder andere Schreibweisen im Header: `IngestionConfig(units=UnitConfig(units={"snad2": "°C"}, header_patterns=[r"/\s*(?P<unit>\S+)\s*$"]))`. Die Plot-Achsen zeigen die Einheit an.
-
-**Andere Formate und Geräteprofile:** `load_source(pfad)` lädt Text (`.csv`, `.tsv`, `.txt`, `.dat`), Excel (`.xlsx`, `.xls`) und SQLite-Datenbanken (`.db`). Ein Profil beschreibt pro Gerät Reader, Optionen und `IngestionConfig` als JSON (`datualizer_core/profiles/`). `detect_profile` wählt es anhand von Dateimuster und Hinweisen (Kopfzeile, Blatt- oder Tabellennamen). Mitgeliefert sind Profile für Testa iFID (`.dat`, `.xls`), PicoLog-CSV, instrument_reader (`.db` und OCR-CSV) und ein Labjournal. Ohne passendes Profil verhält sich `load_source` wie `load_csv`. Was der Reader zusätzlich findet, steht in `ds.source_meta`: Excel-Nebenblätter mit Geräteeinstellungen und Kalibrierung, gelöschte IDs in der Datenbank, die Annahme hinter einer berechneten Startzeit. Eigene Profile: `load_source(pfad, load_profile("mein_geraet.json"))`. Hat eine Excel-Datei mehrere Blätter oder eine Datenbank ohne Profil mehrere Tabellen, nennt der `ReaderError` die Auswahl maschinenlesbar (`exc.choice` = `"excel.sheet"` bzw. `"sqlite.table"`, `exc.options`). `with_choices(pfad, profil, sheet=…, table=…, clock_date=…)` legt die Wahl in einer Profilkopie ab, `needs_clock_date(ds)` sagt, ob reine Uhrzeiten noch ein Datum brauchen, `date_in_text("12.10.2026")` liefert einen Datumsvorschlag aus Blatt- oder Dateinamen. In der GUI öffnet *Open…* alle diese Formate und fragt bei Bedarf nach Blatt bzw. Tabelle und dem Datum für Uhrzeiten.
-
-**Messkampagne: mehrere Geräte auf einer Zeitachse.** `CampaignSession` lädt mehrere Quellen (jede mit ihrem Profil) und legt sie auf eine gemeinsame Master-Zeit in der Zone der Kampagne. Pro Quelle korrigiert ein `ClockModel` die Geräteuhr: Versatz (`offset_s`), Drift (`drift_ppm`) oder stückweise linear über Ankerpunkte (`ClockAnchor`, z. B. eine im Video abgelesene Uhrzeit), mit Methode, Unsicherheit und Notiz zur Annahme. `session.track(quelle, kanal)` liefert einen Kanal auf Master-Zeit. Die Kampagne wird als `campaign.json` gespeichert, mit relativen Pfaden, Profil, aufgelöster Spec und Hash pro Datei; beim Öffnen werden geänderte oder fehlende Dateien gemeldet (`session.warnings`).
 
 ```python
 from datualizer_core.campaign import CampaignSession, ClockModel
+
 s = CampaignSession()
 fid = s.add_source("data-10-32-50.dat")                 # Profil testa_ifid_dat erkannt
-pico = s.add_source("SA_Messung_Picolog.csv")           # Start aus Speicherzeit (Annahme)
-s.set_clock(fid.id, ClockModel(offset_s=970, method="cross_correlation", note="FID-Uhr 16:10 hinter PC"))
-cov = s.coverage(pico.id)                                # wann die Quelle Werte hat, wo Lücken sind
-[(g.reason, g.duration_s) for g in cov.gaps]             # Logger-Aussetzer als "no_values"
+waage = s.add_source("instrument_reader.db")
+journal = s.add_source("labjournal.xlsx")
+s.set_clock(fid.id, ClockModel(offset_s=970, note="FID-Uhr 16:10 hinter PC"))
+s.set_mapping(s.suggest_mapping(journal.id))            # Messschritte aus dem Labjournal
+s.window_table([(waage.id, "masse")])                   # Kennwerte pro Schritt
 s.save("campaign.json")
 ```
 
-**Abdeckung:** `session.coverage(quelle)` liefert pro Quelle die Zeitspanne (`span`), die Abschnitte mit Werten (`segments`) und die Lücken (`gaps`) auf Master-Zeit. Eine Lücke ist entweder ein als `gap` markierter Zeitsprung (`time_gap`, Schwelle `QualityConfig.gap_factor`) oder eine Strecke, in der die Zeit weiterläuft, aber kein Kanal einen Wert hat (`no_values`, z. B. Logger-Aussetzer oder ungültige OCR-Lesungen), auch am Anfang oder Ende. `coverage(quelle, ["kanal"])` zählt nur die genannten Kanäle. Quellen ohne absolute Zeit haben keine Spanne. Die Daten selbst bleiben unverändert.
-
-**Messschritte:** Welche Spalten einer Quelle (z. B. des Labjournals) Start, Ende, Name und Sollwerte eines Schritts sind, beschreibt eine `IntervalMapping` (Ende als Zeitspalte, Dauerspalte, „bis zum nächsten Start“ oder feste Länge; Blocknamen, die nur in der ersten Zeile stehen, über `fill_down`; Zeiten optional auf der Uhr einer anderen Quelle). Nichts davon steht im Code: `session.suggest_mapping(quelle)` nimmt den Vorschlag des Profils (`SourceProfile.intervals`) oder errät die Rollen aus der Datenform. `session.intervals()` liefert alle Schritte auf Master-Zeit, dazu `problems` (Zeilen ohne Start, unlesbares Ende …). Schritte von Hand: `session.add_interval(start, ende, "Blindwert")`. `WindowRule` legt fest, welcher Teil jedes Schritts ausgewertet wird (Einschwingzeit abschneiden, nur die letzten N Sekunden). Alles steht in `campaign.json`.
-
-```python
-s.set_mapping(s.suggest_mapping(journal.id))           # Vorschlag aus dem Profil labjournal_xlsx
-s.set_window_rule(WindowRule(length_s=120))            # nur die letzten 2 min jedes Schritts
-for step in s.intervals().intervals:
-    print(step.label, step.window, step.params)
-```
-
-**Fenster-Statistik** (Etappe 2b, Schritt 6, Paket A): `session.window_table([(quelle, kanal), …])` liefert pro Schritt × Kanal eine Zeile mit Schritt, Fenster, Sollwerten und den Kennwerten aus `datualizer_core.stats.window_stats`: Anzahl Punkte, ausgeschlossene (`StatsConfig.exclude_flags`, Standard `spike`, `dropout`) und leere Werte, Abdeckungsgrad, Mittelwert, Median, SD, SEM, Min/Max, 5-/95-%-Quantil, OLS-Steigung pro Sekunde mit klassischem Standardfehler, R² und Residuen-SD, 2-Punkt-Differenz Δy/Δt mit Unsicherheit nach GUM (Ablesung aus `StatsConfig.reading_u`, Uhr aus `ClockModel.uncertainty_s`) und das Trapez-Integral. Lücken, leere und ausgeschlossene Werte werden nie überbrückt: Die nicht abgedeckte Zeit steht in `integral_gap_s`. `checks` nennt, was auffällt (zu wenige Punkte, geringe Abdeckung, 2-Punkt weicht von der Steigung ab), `assumptions`, worauf die Werte beruhen. SEM und klassischer Steigungs-SE setzen unabhängige Werte voraus und sind bei dicht abgetasteten Sensoren zu klein. Deshalb gibt es zusätzlich (Paket B): `rho1`, `n_eff` und `sem_eff` (AR(1)-Näherung), `slope_se_hac` (Newey-West, Lag `StatsConfig.hac_lag`, sonst ⌊4·(n/100)^(2/9)⌋), `slope_se_ar1`, `durbin_watson`, die robuste Theil-Sen-Steigung `slope_theil_sen` mit 95-%-Intervall `ts_ci_low`/`ts_ci_high` (Kendall, bei Autokorrelation verbreitert; ab 1000 Punkten aus einer festen Stichprobe von Paaren), `integral_u` und die Ampel `stationary` (Steigungstest und Hälftenvergleich `halves_diff`, Begründung in `checks`). Weichen OLS und Theil-Sen um mehr als 2 SE ab, steht das in `checks` (Ausreisser oder Knick). Die Einstellungen stehen als `stats` in `campaign.json`.
-
-```python
-from datualizer_core.stats import StatsConfig
-s.set_stats_config(StatsConfig(reading_u={"instrument_reader/masse": 0.01 / 12**0.5}))  # Auflösung 0,01 g
-t = s.window_table([("instrument_reader", "masse")])
-t.select("step_label", "v_mfc", "n", "coverage", (t["slope"] * 3600).alias("g_h"), "slope_se", "checks")
-```
-
-Einen einzelnen Schritt liefert `s.window_stats(schritt, quelle, kanal)` als `WindowResult`. Jeder Eintrag in `checks` hat zusätzlich eine Stufe (`check.level`: `fail` bei keinen oder zu wenigen Punkten, sonst `warn`); `result.level` fasst sie zur Ampel zusammen (`ok` ohne Befund). Das Fenster eines einzelnen Schritts lässt sich von Hand setzen: `s.set_window_override(schritt_id, start, ende)` ersetzt dort die Fenster-Regel, `clear_window_override` hebt das wieder auf. Overrides stehen in `campaign.json` (`window_overrides`), in `window_table` zeigt die Spalte `window_override` sie an. Bekommt ein Journal-Schritt später einen anderen Namen oder fehlt er, steht das in `intervals().problems`.
-
-Im Kampagnenfenster zeigt das Dock *Steps* die Schritte (Doppelklick zoomt und öffnet den Fenster-Inspektor, Rechtsklick bietet beides einzeln), die Probleme und die Fenster-Regel; *Steps from Source…* öffnet die Zuordnung mit Vorschau. Als Bänder über allen Plots erscheinen die Schritte, wenn *Settings → Tools → Interval Bands* eingeschaltet ist (Standard: aus, die Wahl wird gemerkt). Eigene Schritte: Rechtsklick → *Marker ○ ○*; der erste Klick setzt den Start (erster Kreis grün, gestrichelte Linie), der zweite das Ende. Eigene Bänder lassen sich ziehen, umbenennen und löschen; Esc verwirft einen offenen Marker.
-
-Der **Fenster-Inspektor** (Dock *Window*, auch per Rechtsklick im Plot → *Inspect step*) zeigt die gewählten Kanäle rund um einen Schritt:
-- das ausgewertete Fenster hell hinterlegt,
-- die OLS-Gerade (durchgezogen) und die Theil-Sen-Gerade (gestrichelt),
-- ausgelassene Samples als rote Kreuze,
-- die Stützstellen der 2-Punkt-Differenz als grüne Kreise.
-
-Darunter stehen die Kennwerte mit Unsicherheit (auf zwei Stellen der Unsicherheit gerundet), die Befunde mit Ampel pro Kanal und die Annahmen. Die Fensterränder lassen sich ziehen. Das gilt nur für diesen Schritt und wird in `campaign.json` gespeichert: Die Kante wird orange, im Steps-Dock steht „window ✎“. *Reset Window* überlässt den Schritt wieder der Fenster-Regel. Bild ab / Bild auf schaltet zum nächsten bzw. vorigen Schritt.
-
-In der GUI öffnet *Campaign → Open Campaign Window…* (Ctrl+K) die Kampagnenansicht: links die Quellen mit Profil, Zeitspanne und Uhr, darunter der Uhren-Editor; rechts oben, falls unter *Settings → Tools → Coverage Info* eingeschaltet (Standard: aus, die Wahl wird gemerkt), die Abdeckungsspur (eine Zeile pro Quelle, Abschnitte mit Werten gefüllt, Lücken schraffiert, die Infozeile nennt Dauer und Art der Lücke unter dem Fadenkreuz), darunter ein Subplot pro gewähltem Kanal, jeder mit eigenem x-Array auf einer gemeinsamen Datumsachse (verlinkt, ohne Resampling). Die Ansicht zeigt immer alle Spuren; eigenes Zoomen bleibt bis *Reset Zoom* erhalten. Beim Hinzufügen fragt das Fenster nach Blatt bzw. Tabelle und, bei reinen Uhrzeiten, nach dem Datum (Vorschlag aus dem Blattnamen); die Wahl steht im Profil und in der Spec der Quelle in `campaign.json` und wird beim Öffnen ohne Rückfrage wieder angewendet.
-
-**Darstellung pro Kanal** (nur Anzeige, die Daten bleiben unverändert): Rechtsklick oder Doppelklick auf einen Kanal im Quellen-Baum oder *Settings → Channel Display…* (Ctrl+D) öffnet die Einstellungen. Wählbar sind der Anzeigename (Alias, z. B. für Excel-Spalten `col_9`, deren Überschrift nur eine Einheit war; er erscheint in Achse, Baum und Infozeile, der Kanalname im Datensatz bleibt), der Stil (Linie, Punkte, Treppe, Linie + Punkte) und die Y-Skalierung: *Auto*, *robust* (1.–99. Perzentil, einstellbar, damit seltene OCR-Ausreisser den Rest nicht flach drücken) oder *fest* (min, max). Werte ausserhalb des Bereichs werden nicht verworfen, sondern am oberen oder unteren Rand mit einem Dreieck markiert. Der Standardstil kommt aus dem Profil (`SourceProfile.plot_style`; das Labjournal-Profil zeichnet Messschritte als Treppe). Die Einstellungen stehen pro Quelle unter `display` in `campaign.json`, nur Abweichungen vom Standard werden gespeichert:
-
-```python
-from datualizer_core.campaign import ChannelDisplay, YScale, YScaleMode
-s.set_display("instrument_reader", "massenstrom_waage", ChannelDisplay(y_scale=YScale(mode=YScaleMode.ROBUST)))
-s.set_display("SA_Labjournal", "col_9", ChannelDisplay(alias="Massenstrom Waage", style="line_points"))
-s.track("SA_Labjournal", "col_9").name                   # "Massenstrom Waage"
-```
-
-**Zeit und Zoom im Kampagnenfenster** (Menü *Settings*): Das Mausrad zoomt standardmässig nur die Zeitachse (über einer Y-Achse zoomt es diese), und automatisch skalierte Subplots passen Y an den sichtbaren Zeitausschnitt an; beides ist abschaltbar. Die Zeitachse zeigt wahlweise automatisch gewählte Formate, die Uhrzeit, Datum + Uhrzeit oder die Zeit relativ zu einem Bezugspunkt (t − t0). t0 setzt *Time Axis → Set t0 at Crosshair* an der Mausposition; ohne t0 gilt der erste angezeigte Messpunkt. *Campaign Time Zone…* wählt die Zone der Kampagne: Achse und Infozeile folgen ihr, Quellen ohne eigene Zone werden in ihr gelesen. Unter *Minimum Subplot Height…* (Standard 120 px, 0 = aus) bekommen Subplots eine Mindesthöhe; reicht der Platz nicht, scrollt die Ansicht, und jeder Subplot zeigt seine eigene Zeitachse. Zeitzone und t0 gehören zur Kampagne und stehen in `campaign.json` (`timezone`, `time_reference`); Achsenformat, Zoom-Verhalten und Mindesthöhe sind persönliche Vorlieben (QSettings).
-
-**Subplots und Farben** (*Settings → Subplots and Colours*): ein Subplot pro Kanal (Standard), Kanäle gleicher Einheit oder gleicher Quelle in einem gemeinsamen Subplot, dann mit Legende. Farben nach Kanal, nach Quelle (dieselbe Farbe wie die Zeile der Quelle in der Abdeckungsspur) oder manuell: Die Farbe pro Kanal wählt man im Dialog *Channel Display* und sie steht als `color` in `campaign.json`. Haben alle Kanäle eines gemeinsamen Subplots einen festen oder robusten Y-Bereich, zeigt er die Vereinigung dieser Bereiche; sonst skaliert er automatisch. Gruppierung und Farbschema sind persönliche Vorlieben (QSettings).
-
-**Werte unter dem Mauszeiger** (*Settings → Values under Cursor*): als Leiste über den Plots (Standard; was nicht passt, wird abgeschnitten), als Tooltip am Mauszeiger (eine Zeile pro Kanal) oder als Tabelle im Dock *Values* (Kanal, Wert, Einheit, darüber Zeit und Lücken). *Decimals…* legt die Nachkommastellen fest; −1 heisst automatisch (4 signifikante Stellen).
-
-**Export für den Bericht** (*Campaign → Export Plot…*, Ctrl+E): schreibt den gezeigten Zeitausschnitt mit den gezeigten Y-Bereichen, Subplots, Farben und der Abdeckungsspur als PNG, SVG oder PDF. Einstellbar sind Breite und Höhe in mm (Höhe automatisch: pro Subplot eine feste Höhe), Schriftgrösse und Linienbreite in pt, die Auflösung (nur PNG; SVG und PDF sind Vektordateien) und ein helles oder dunkles Theme. Am Bildschirm bleiben die Linien 1 px breit (Geschwindigkeit); dickere Linien und grössere Punkte gibt es nur in der Datei. Die letzten Einstellungen werden gemerkt.
-
-```python
-from datualizer_gui.components.plot_export import ExportOptions
-window.export_plot("bericht_12_10.pdf", ExportOptions(width_mm=170, font_pt=8, line_width_pt=0.75))
-```
-
-**Absolute Zeit** bleibt erhalten: `time_seconds` zählt ab dem ersten gültigen Sample, `ds.time_origin` ist der absolute Zeitpunkt dazu, `ds.time_abs` die absolute Zeit jeder Zeile und `ds.with_time_abs()` die Tabelle mit Spalte `time_abs`. Damit lassen sich später mehrere Geräte einer Messkampagne auf eine Zeitachse legen (Etappe 2b). Datums- und Zeitwerte ohne Zeitzone gelten als Wanduhrzeit. Mit `IngestionConfig(time=TimeConfig(timezone="Europe/Zurich"))` werden sie in dieser Zone gelesen, dann bleiben die Sekunden auch über die Sommerzeitumstellung korrekt (doppelte oder fehlende Uhrzeiten stehen im Audit). Logger, die nur die verstrichene Zeit exportieren (z. B. PicoLog `00:00:00`), bekommen ihren Startzeitpunkt über `TimeConfig(origin=datetime(...))`. Uhrzeiten ohne Datum (z. B. im Labjournal) bekommen ihr Datum über `TimeConfig(clock_date=date(...))`. Weitere Datumsformate: `TimeConfig(datetime_formats=[...])`; ein erzwungenes `TimeConfig(format=TimeFormat.DATETIME)`, das nicht passt, schlägt laut fehl (`TimeConfigError`).
-
-Die mitgelieferten Namenslisten (`Vocabulary`) sind nur Startwerte und keine Konvention, an die sich deine Daten halten müssen.
+Mehr dazu in der [ausführlichen Anleitung](docs/BENUTZUNG.md).
 
 ### Tests
 
 ```bash
-pytest -v
+python -m pytest -q
 ```
 
 ---
@@ -232,20 +181,23 @@ pytest -v
 
 ```mermaid
 flowchart LR
-    CSV[(Roh-CSV)] --> PS[PreScanner<br/><i>Delimiter, Dezimal,<br/>BOM, Footer</i>]
-    PS --> LD[CSVLoader<br/><i>Casting, Zeit,<br/>Sentinels</i>]
+    SRC[(CSV · Excel · SQLite)] --> RD[Reader + Profil]
+    RD --> PS[PreScanner<br/><i>Delimiter, Dezimal,<br/>BOM, Footer</i>]
+    PS --> LD[Loader<br/><i>Typen, Zeit, Long,<br/>Rollen, Einheiten</i>]
     LD --> DS[DualModeDataset]
-    LD -.-> AL[AuditLog]
+    LD -.-> AL[AuditLog + Spec]
+    DS --> CS[CampaignSession<br/><i>Uhren, Abdeckung,<br/>Schritte</i>]
+    CS --> ST[Fenster-Statistik]
     DS -->|wide, Zero-Copy| GUI[PyQtGraph-Canvas]
-    DS -->|to_long| TIDY[Tidy-Analyse]
+    CS --> GUI
     DS -.->|geplant| RC[Recipe-AST] -.-> EX[Code-Export<br/>Polars · SQL · R]
 ```
 
 ### Leitprinzipien
 
 - **Robustness First:** Echte Messdaten sind keine sauberen Rechtecke. Die Ingestion muss mit dem Schlimmsten rechnen und darf trotzdem nicht abstürzen.
-- **Wide *und* Long:** Wide für Mathematik und schnelles Plotting, Long für Tidy-Analysen. Beide Formate gibt es auf Abruf, keins wird erzwungen.
-- **Nichts wird destruktiv verändert:** Keine In-place-Mutationen. Jede Operation ist ein nachvollziehbarer, umkehrbarer Schritt.
+- **Automatik schlägt vor, der Nutzer entscheidet:** Jede Heuristik ist überschreibbar, jede Entscheidung steht ausgeschrieben in der Spec.
+- **Nichts wird destruktiv verändert:** Keine In-place-Mutationen. Qualitätsprobleme werden markiert, nicht gelöscht.
 - **Ehrliches Audit:** Ein Wert, der nicht geparst werden kann, wird *protokolliert* und nicht still zu `NaN` gemacht.
 
 ---
@@ -257,22 +209,19 @@ Datualizer/
 ├── datualizer_core/            # Engine, ohne GUI-Abhängigkeiten
 │   ├── dataset.py              # DualModeDataset, AuditLog
 │   ├── quality.py              # Qualitäts-Flags (Lücken, Dropout, Sprünge, Spikes, …)
-│   ├── stats/window.py         # Fenster-Statistik eines Messschritts (Unsicherheit mit Autokorrelation, Theil-Sen, Ampel)
-│   ├── ingestion/
-│   │   ├── pre_scanner.py      # Format-Sniffing
-│   │   ├── loader.py           # CSV → DualModeDataset
-│   │   └── merge.py            # mehrere CSVs → ein Dataset (Dedupe)
-│   └── pipeline/
-│       └── operators.py        # clean_names, drop_footer, unpivot
-├── datualizer_gui/             # PySide6-Desktop-App
-│   ├── app.py                  # Einstiegspunkt
-│   ├── main_window.py
-│   └── components/             # Tabelle, Plot, Inspector, Recipe-Panel
-├── tests/
-│   └── fixtures/runs_export/   # Echte Pipeline-Exporte als Testkorpus
-└── docs/
-    ├── MASTER_ETAPPEN_PLAN.md
-    └── DATENKATALOG_RUNS_EXPORT.md
+│   ├── timebase.py             # absolute Zeit, Zeitzonen, Sommerzeit
+│   ├── campaign/               # Messkampagne: Quellen, Uhren, Abdeckung, Schritte, Darstellung
+│   ├── stats/window.py         # Fenster-Statistik eines Messschritts
+│   ├── ingestion/              # PreScanner, Typ-Inferenz, Loader, Reader, Profile, Merge
+│   ├── pipeline/operators.py   # clean_names, drop_footer, unpivot
+│   └── profiles/*.json         # Geräteprofile (Daten, kein Code)
+├── datualizer_gui/             # PySide6-Desktop-App (Einstieg: app.py)
+│   ├── main_window.py          # Hauptfenster: eine Datei oder mehrere zusammengeführt
+│   ├── campaign_window.py      # Kampagnenfenster
+│   └── components/             # Plots, Docks, Dialoge, Export
+├── tools/readme_screenshots.py # rendert die Bilder in docs/img/
+├── tests/fixtures/             # echte Exporte als Testkorpus (unveränderlich)
+└── docs/                       # Anleitung, Masterplan, Datenkataloge, Recherche
 ```
 
 ---
@@ -282,26 +231,24 @@ Datualizer/
 | Etappe | Thema | Status |
 |:---:|---|:---:|
 | 1 | Minimal End-to-End Tracer Bullet | ✅ |
-| 2 | Ingestion-Festung für chaotische Realdaten | 🔜 in Arbeit |
+| 2 | Ingestion-Festung für chaotische Realdaten | 🔜 grösstenteils fertig |
+| 2b | Messkampagne: mehrere Geräte, Uhren, Schritte, Fenster-Statistik | 🔜 Schritte 1–6 fertig |
 | 3 | Tidy- & Reshaping-DSL (JSON-AST, 10 Operatoren, `join_asof`) | ⏳ |
 | 4 | Tidy-Axiom-Validierung & KI-gestützte Recipe-Reparatur | ⏳ |
 | 5 | High-Performance-Visualisierung (LTTB, Multi-Y, ROI) | ⏳ |
 | 6 | Desktop-UX & Multi-Target-Code-Export | ⏳ |
 | 7 | Beta-Härtung & Standalone-Windows-Binary | ⏳ |
 
+Details: [`docs/MASTER_ETAPPEN_PLAN.md`](docs/MASTER_ETAPPEN_PLAN.md).
+
 ---
 
 ## Testdaten
 
-Datualizer wird gegen echte Exporte entwickelt, nicht gegen Lehrbuch-CSVs. Der Korpus in [`tests/fixtures/runs_export/`](tests/fixtures/runs_export/) enthält unter anderem:
+Datualizer wird gegen echte Exporte entwickelt, nicht gegen Lehrbuch-CSVs:
 
-- abgebrochene Runs
-- Duplikate
-- Dateinamen, die über ihr eigenes Format lügen
-- Sensor-Dropouts als `0.0`
-- Parameter namens `snad2`
-
-Was genau darin steckt und welche Anforderungen daraus folgen, steht im [Datenkatalog](docs/DATENKATALOG_RUNS_EXPORT.md).
+- [`tests/fixtures/runs_export/`](tests/fixtures/runs_export/): Pipeline-Exporte mit abgebrochenen Runs, Duplikaten, Dateinamen, die über ihr eigenes Format lügen, Sensor-Dropouts als `0.0` und Parametern namens `snad2` ([Datenkatalog](docs/DATENKATALOG_RUNS_EXPORT.md)).
+- [`tests/fixtures/sa_12_10/`](tests/fixtures/sa_12_10/): Ausschnitte einer echten Mehrgeräte-Kampagne mit FID, Thermoelement-Logger, OCR-Waage und Labjournal, jedes Gerät mit eigener Uhr und eigenem Format ([Datenkatalog](docs/DATENKATALOG_SA_KAMPAGNE.md)).
 
 **Du hast besonders hässliche Messdaten?** Her damit (gern anonymisiert). Jede neue Pathologie macht Datualizer robuster.
 
@@ -311,9 +258,10 @@ Was genau darin steckt und welche Anforderungen daraus folgen, steht im [Datenka
 
 Issues, Bug-Reports und Pull Requests sind willkommen. KI-Agenten (und gern auch Menschen) lesen vorher [`AGENTS.md`](AGENTS.md): Dort stehen Ziel, Prinzipien, Arbeitsablauf und die nächsten offenen Punkte. Ein paar Hausregeln:
 
-- `pytest -v` muss grün sein, bevor etwas gemergt wird.
+- `python -m pytest` muss grün sein, bevor etwas gemergt wird.
 - Neue Ingestion-Features bekommen eine Fixture mit dem Problemfall dazu.
 - Keine In-place-Mutationen von DataFrames (siehe Leitprinzipien).
+- Ändert sich die GUI sichtbar, die Bilder mit `python tools/readme_screenshots.py` neu rendern.
 
 ---
 

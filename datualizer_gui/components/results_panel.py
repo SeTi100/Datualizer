@@ -81,6 +81,7 @@ class ResultsPanel(QWidget):
 
     step_double_clicked = Signal(str)  # step_id
     evaluation_changed = Signal()  # emitted when configuration is updated
+    open_views_requested = Signal()  # open separate results views window
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -146,6 +147,11 @@ class ResultsPanel(QWidget):
         self.btn_recompute.setToolTip("Recalculate results from campaign data and formulas")
         self.btn_recompute.clicked.connect(self.refresh)
         toolbar.addWidget(self.btn_recompute)
+
+        self.btn_views = QPushButton("Views...")
+        self.btn_views.setToolTip("Open separate Results Views window with XY plots, matrices and tables")
+        self.btn_views.clicked.connect(self.open_views_requested.emit)
+        toolbar.addWidget(self.btn_views)
 
         layout.addLayout(toolbar)
 

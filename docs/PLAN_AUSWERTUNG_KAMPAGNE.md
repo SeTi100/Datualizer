@@ -246,7 +246,7 @@ Die Namen der Kanäle/Quellen sind Beispiele. Die Restdrift (|dX/dt|·10 min) is
 | 4 ✅ | Bezüge: Blindwert, Beladung, Klassen | 1, 3 | 2b-8 |
 | 5 ✅ | Rechengrössen, Kriterien, Szenarien, `Evaluation`, Dock „Results“ | 1, 3, 4 | 2b-8 |
 | 6 ✅ | Auswertungen: Durchgang, Geradenfit, Aggregation, Korrelation zwischen Zeilen (`scope`) | 5 | 2b-8 |
-| 7 | Ergebnisfenster: Ansichten `table`, `xy`, `matrix`, Kleinvielfache | 5, 6 | 2b-8, Etappe 5 |
+| 7 ✅ | Ergebnisfenster: Ansichten `table`, `xy`, `matrix`, Kleinvielfache | 5, 6 | 2b-8, Etappe 5 |
 | 8 | `aligned` + `broadcast_steps`, `bars`, Bericht als PDF | 2, 7 | 2b-8 |
 | 9 ✅ | Uhr-Anker aus Zellpaaren, Kreuzkorrelation, Dialog | – | 2b-7 |
 | 10 | SA-Kampagne (3 Tage) als Beispiel + Rezept, End-to-End-Orakel, Doku | 1–9 | 2b-10 |

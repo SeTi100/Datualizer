@@ -152,8 +152,10 @@ class CampaignWindow(QMainWindow):
         )
         self.canvas.mask_edit_requested.connect(self.sources_panel.edit_mask)
         self.canvas.mask_remove_requested.connect(self.sources_panel.remove_mask)
+        self._results_window = None
         self.results_panel.step_double_clicked.connect(self.inspect_step)
         self.results_panel.evaluation_changed.connect(self._on_evaluation_changed)
+        self.results_panel.open_views_requested.connect(self.open_results_window)
 
         menu = self.menuBar().addMenu("&Campaign")
         for text, key, slot in [
@@ -230,6 +232,10 @@ class CampaignWindow(QMainWindow):
         self.action_results.setText("&Results Dock")
         self.action_results.setToolTip("Results table, formulas, criteria and scenarios")
         tools_menu.addAction(self.action_results)
+        self.action_results_views = QAction("Results &Views...", self)
+        self.action_results_views.setToolTip("Open separate Results Views window with XY plots, matrices and tables")
+        self.action_results_views.triggered.connect(self.open_results_window)
+        tools_menu.addAction(self.action_results_views)
         self.status_bar = QStatusBar(self)
         self.setStatusBar(self.status_bar)
         self._apply_view_settings()
@@ -487,6 +493,20 @@ class CampaignWindow(QMainWindow):
         self.window_inspector.show_step(interval_id)
         self.window_inspector.setFocus()
 
+    def open_results_window(self) -> Any:
+        """Open or raise the Results Views window (tabs for Table, XY and Matrix views)."""
+        from datualizer_gui.results_window import ResultsWindow
+
+        if self._results_window is None:
+            self._results_window = ResultsWindow(self._session, parent=self)
+            self._results_window.step_inspected.connect(self.inspect_step)
+        else:
+            self._results_window.set_session(self._session)
+        self._results_window.show()
+        self._results_window.raise_()
+        self._results_window.activateWindow()
+        return self._results_window
+
     def set_step_window(self, interval_id: str, start: float, end: float, window: str = DEFAULT_WINDOW) -> None:
         """Window of one step set by hand (master epoch seconds; `window`: which named window); saved with the campaign."""
         try:
@@ -514,6 +534,8 @@ class CampaignWindow(QMainWindow):
         self.intervals_panel.set_session(self._session)
         self.window_inspector.set_session(self._session)
         self.results_panel.set_session(self._session)
+        if self._results_window is not None:
+            self._results_window.set_session(self._session)
         self.refresh_plot()
         name = self._session.campaign.name
         self.setWindowTitle(f"Datualizer – Campaign: {name}" + (f" ({self._path.name})" if self._path else ""))

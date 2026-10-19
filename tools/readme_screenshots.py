@@ -1,4 +1,4 @@
-"""Render the README screenshots from the fixtures (docs/img/*.png).
+r"""Render the README screenshots from the fixtures (docs/img/*.png).
 
 Run from the repository root:  .venv\Scripts\python.exe tools\readme_screenshots.py
 Uses a temporary settings folder, so the user's GUI preferences stay untouched.
@@ -20,6 +20,7 @@ from datualizer_core.ingestion.profiles import detect_profile, get_profile  # no
 from datualizer_core.ingestion.source_loader import load_source, with_choices  # noqa: E402
 from datualizer_gui import campaign_window  # noqa: E402
 from datualizer_gui.app import create_app  # noqa: E402
+from datualizer_core.campaign.views import MatrixViewSpec, TableViewSpec, XYViewSpec  # noqa: E402
 from datualizer_gui.campaign_window import CampaignWindow  # noqa: E402
 from datualizer_gui.components.plot_export import ExportOptions  # noqa: E402
 
@@ -114,6 +115,32 @@ def main() -> None:
     settle(app)
     win.export_plot(OUT / "export_bericht.png", ExportOptions(width_mm=170, dpi=150))
     print("wrote docs/img/export_bericht.png")
+
+    ev = win.session.campaign.evaluation
+    ev.views = [
+        XYViewSpec(
+            name="light_off",
+            title="Light-off",
+            subtitle="Temperatur gegen Dosierstufe V_MFC",
+            x="temperatur",
+            y="v_mfc",
+            color_by="v_mfc",
+            connect_by="v_mfc",
+        ),
+        MatrixViewSpec(
+            name="matrix",
+            title="Umsatz-Matrix",
+            rows="temperatur",
+            cols="v_mfc",
+            value="v_mfc",
+        ),
+        TableViewSpec(name="tabelle", title="Ergebnistabelle"),
+    ]
+    res_win = win.open_results_window()
+    res_win.resize(1300, 750)
+    settle(app)
+    shot(app, res_win, "results_window.png")
+    res_win.close()
     win.close()
 
 

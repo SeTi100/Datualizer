@@ -249,7 +249,8 @@ Die Namen der Kanäle/Quellen sind Beispiele. Geladene Spalten stehen in bereini
 | 7 ✅ | Ergebnisfenster: Ansichten `table`, `xy`, `matrix`, Kleinvielfache | 5, 6 | 2b-8, Etappe 5 |
 | 8 ✅ | `aligned` + `broadcast_steps`, `bars`, Bericht als PDF | 2, 7 | 2b-8 |
 | 9 ✅ | Uhr-Anker aus Zellpaaren, Kreuzkorrelation, Dialog | – | 2b-7 |
-| 10 | SA-Kampagne (3 Tage) als Beispiel + Rezept, End-to-End-Orakel, Doku | 1–9 | 2b-10 |
+| 9b | Robuste Schrittzuordnung (Überschriften, Zeilenauswahl, End-Rückfall, Parameter-Standardwerte, stabile IDs, Zellwerte über Beschriftung) und Tabellenansicht zum Anklicken | 3, 9 | 2b-5 |
+| 10 | SA-Kampagne (3 Tage) als Beispiel + Rezept, End-to-End-Orakel, Doku; Lücken aus dem Probelauf (Profil FID-.csv, `nan`, Unsicherheit aus Formel, Messgrösse aus mehreren Quellen, Konstanten je Tag) | 1–9, 9b | 2b-10 |
 
 Parallel möglich: PR 2, 3 und 9 (PR 1 ist in main).
 

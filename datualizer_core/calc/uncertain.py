@@ -16,7 +16,11 @@ From the sensitivities and the input uncertainties uᵢ follow (GUM, linear prop
 
 The `group` of a random input has no effect. A full correlation lets contributions cancel: for
 f = a − b with a, b in one group and equal uᵢ the systematic part is 0, as it should be when both
-come from the same error source (e.g. one reference gas, one balance, one measuring day).
+come from the same error source (e.g. two concentrations from one reference gas, two masses from one
+balance calibration). Give a group only to inputs that share one physical error source. Different
+quantities measured on the same day (air flow, set-point temperature, response factor) are
+independent and get no common group: a shared group would let their errors cancel or add without
+reason. "Same constant in every step of a day" is a correlation between rows, see below.
 
 Within one `UArray` the correlation acts per element (one step, one row). Correlation between
 different rows through the same input (the same constant in every step of a day) is the business
@@ -50,7 +54,8 @@ class Constant(BaseModel):
     u: float = Field(0.0, ge=0.0, description="Standard uncertainty (k = 1), same unit as value.")
     kind: Kind = Field("syst", description="'zufall' (random) or 'syst' (systematic).")
     group: str | None = Field(
-        None, description="Systematic inputs with the same group are fully correlated (e.g. one measuring day)."
+        None, description="Systematic inputs with the same group share one error source and are fully correlated "
+        "(e.g. one reference gas). Not for different quantities of the same day."
     )
     unit: str = ""
     note: str = ""

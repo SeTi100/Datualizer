@@ -1,6 +1,8 @@
 # Übergabeprompts: Auswertung einer Messkampagne (PR 1–10)
 
-> Zu [`PLAN_AUSWERTUNG_KAMPAGNE.md`](PLAN_AUSWERTUNG_KAMPAGNE.md). Ein Prompt pro PR, jeweils vollständig in eine neue Agent-Sitzung kopieren. Reihenfolge und Abhängigkeiten: Plan, Abschnitt 6. PR 1, 3 und 9 können parallel starten.
+> Zu [`PLAN_AUSWERTUNG_KAMPAGNE.md`](PLAN_AUSWERTUNG_KAMPAGNE.md). Ein Prompt pro PR, jeweils vollständig in eine neue Agent-Sitzung kopieren. Reihenfolge und Abhängigkeiten: Plan, Abschnitt 6. PR 1 ist in main (#36); PR 2, 3 und 9 können parallel starten.
+>
+> Nachtrag nach PR 1 (2026-10-19): `group` in `UArray` heisst gemeinsame Fehlerquelle innerhalb einer Zeile, nicht „gleicher Messtag“ (Plan 3.1). Text in Formeln kommt mit PR 3, die Korrelation zwischen Zeilen mit PR 6. Die Prompts unten sind darauf angepasst.
 
 Gemeinsamer Rahmen (steht in jedem Prompt, hier zum Nachlesen):
 - `AGENTS.md` und `CLAUDE.md` gelten: Branch von aktuellem `main`, zuerst der Test mit dem echten Problemfall, `pytest` grün, GUI-Smoke-Test offscreen bei GUI-Änderungen, Docs im selben PR, PR nach `main`.
@@ -12,7 +14,7 @@ Gemeinsamer Rahmen (steht in jedem Prompt, hier zum Nachlesen):
 
 ---
 
-## PR 1 – Formelkern mit Fehlerfortpflanzung
+## PR 1 – Formelkern mit Fehlerfortpflanzung (✅ #36, Prompt nur noch zur Nachvollziehbarkeit)
 
 ```text
 Du arbeitest im Repo C:\Users\timkl\Desktop\Coding\EEU\Datualizer (Python, Polars, PySide6).
@@ -81,17 +83,29 @@ Nicht in diesem PR: Schritt-Tabelle, Statistik-Änderungen.
 
 ---
 
-## PR 3 – Schrittarten, benannte Fenster, Schritt-Tabelle, Äquivalenztest
+## PR 3 – Text in Formeln, Schrittarten, benannte Fenster, Schritt-Tabelle, Äquivalenztest
 
 ```text
 Repo: C:\Users\timkl\Desktop\Coding\EEU\Datualizer. Lies AGENTS.md, CLAUDE.md,
-docs/PLAN_AUSWERTUNG_KAMPAGNE.md (1.2, 1.4, 3.3), docs/RESEARCH_FENSTER_STATISTIK.md,
-datualizer_core/stats/window.py und datualizer_core/campaign/campaign.py (window_table).
+docs/PLAN_AUSWERTUNG_KAMPAGNE.md (1.2, 1.4, 3.1, 3.3), docs/RESEARCH_FENSTER_STATISTIK.md,
+datualizer_core/calc/ (Formelkern aus PR 1, in main), datualizer_core/stats/window.py und
+datualizer_core/campaign/campaign.py (window_table).
 
 Aufgabe (PR 3 von 10):
-1. `StepClass(name, when)` – `when` ist ein einfacher Ausdruck über Schrittparametern
-   (Formelkern aus PR 1 nutzen, falls in main; sonst Vergleiche `param op wert` mit and/or).
-   Spalte `klasse` je Schritt; Schritte ohne Treffer: Klasse leer + Hinweis.
+0. Text in Formeln (Erweiterung von datualizer_core/calc/expr.py): Text-Literale in einfachen
+   oder doppelten Anführungszeichen und Textspalten, nur mit `==` und `!=` (Ergebnis Wahrheits-
+   wert, Ableitung 0); jeder andere Gebrauch von Text (Arithmetik, <, Funktionen) ist ein
+   `ExprError` mit Position. Polars und numpy rechnen gleich; null/fehlender Text ist weder
+   gleich noch ungleich einem Literal (Ergebnis falsch, wie NaN bei Zahlen) – im Docstring
+   festhalten. `UArray` bleibt zahlenbasiert: Textspalten kommen als eigener, unsicherheitsfreier
+   Eingang (z. B. numpy-Array dtype object/str). Tests: `klasse == 'null'`, `klasse != "null"
+   and V_MFC > 0`, Fehler bei `klasse + 1` und `klasse < 'a'`, Polars = numpy mit null.
+   Nebenbei: Der Vorschlag bei Tippfehlern bevorzugt gleichen Anfangsbuchstaben bzw. Gross/klein
+   (heute schlägt `Bx` bei bekannten `B` und `x` den Namen `x` vor); Test dazu.
+1. `StepClass(name, when)` – `when` ist eine Formel des Formelkerns über Schrittparametern
+   (Zahlen und Text, z. B. `V_MFC > 0`, `Probe == 'Eingang'`).
+   Spalte `klasse` je Schritt; Schritte ohne Treffer: Klasse leer + Hinweis; Treffer in
+   mehreren Klassen: erste Klasse + Hinweis.
 2. `NamedWindow(name, rule: WindowRule, classes=[])`; die bestehende `window_rule` ist das
    Fenster `default` (Rückwärtskompatibilität von campaign.json!). `WindowOverride` bekommt
    optional `window` (Name); Fenster-Inspektor zeigt eine Auswahl der Fenster.
@@ -162,6 +176,9 @@ Aufgabe (PR 5 von 10):
    Kriterien als Bool, `bewertung`, `grund` (Texte der verletzten Kriterien, "; "-getrennt).
    Unsicherheiten der Measures und Relations sind zufällige Eingänge; Konstanten nach `kind`.
    Szenario = Satz von Konstanten, der die Grundwerte überschreibt.
+   Konstanten bekommen zusätzlich `scope` (z. B. "tag"), nur gespeichert und in der
+   Tabelle der Konstanten gezeigt; ausgewertet wird es in PR 6. `group` nur für Eingänge mit
+   gemeinsamer Fehlerquelle (Plan 3.1); die SA-Konstanten aus Plan 4 haben keine `group`.
 3. Dock „Results“ im Kampagnenfenster: Konstanten (Wert, u, Art), Formeln mit Prüfung beim
    Tippen, Kriterien, Bewertungsregeln, Szenario-Umschalter, Ergebnistabelle (Filter,
    Sortierung, CSV-Export, Spaltenauswahl); Doppelklick auf eine Zeile → Fenster-Inspektor.
@@ -188,12 +205,29 @@ Aufgabe (PR 6 von 10): datualizer_core/calc/analyses.py, Konfiguration `Analysis
    σ² = u_y² + m²·u_x², 5 Iterationen, χ²_red, u_m mit Birge-Faktor max(1, √χ²_red);
    abgeleitete Grössen als Formel (z. B. Ea = −m·8.314).
 3. `aggregate(table, rows, cols, value, where, how)` (mean, median, n, min, max).
-4. Optional: Monte Carlo (Option `mc_samples`) für crossing und fit_line.
-5. Tests: SA-Light-off 10 Nl/min aus Plan 7 (Werte aus
+4. Korrelation zwischen Zeilen: `Constant.scope` (z. B. "tag" = eine Konstante gilt für alle
+   Schritte desselben Messtags gleich; Messtag aus dem Schrittstart in der Kampagnenzone).
+   Aus den Budget-Spalten der Ergebnis-Tabelle (PR 5: Beitrag je Eingang und Zeile) die
+   Kovarianzmatrix bilden: zufällige Beiträge nur auf der Diagonale, systematische Beiträge
+   derselben Konstante innerhalb desselben scope voll korreliert (c_i·c_j), über scope-Grenzen
+   unabhängig. `group` aus PR 1 bleibt die Korrelation verschiedener Eingänge innerhalb einer
+   Zeile und wird nicht umgedeutet.
+   - `fit_line`: verallgemeinerte kleinste Quadrate mit dieser Kovarianz (auf y nach
+     Transformation, also Beiträge über die Ableitung von y_expr umrechnen) plus u_x über die
+     effektive Varianz. Ausweisen: m und u_m nur zufällig, u_m mit Korrelation, u_b. Erwartung
+     und Test: ein systematischer Faktor auf alle k eines Tages (Luftstrom) verschiebt nur b,
+     u_m bleibt gleich; ein Faktor, der nur einen Tag trifft, wirkt auf m, wenn Punkte mehrerer
+     Tage im Fit sind.
+   - `crossing`: Bereich zusätzlich mit allen systematischen Beiträgen desselben scope gemeinsam
+     verschoben (statt Punkt für Punkt ± u), getrennt als `bereich_syst` ausgewiesen.
+5. Optional: Monte Carlo (Option `mc_samples`) für crossing und fit_line, mit derselben
+   Kovarianz (multivariate Normalverteilung).
+6. Tests: SA-Light-off 10 Nl/min aus Plan 7 (Werte aus
    …\SA\auswertung\ergebnisse_auto\katalyse\kampagne_ergebnisse.csv): T50 179 °C,
    Arrhenius Ea 21 ± 4 kJ/mol aus 8 Punkten. Fit gegen scipy.odr als Kontrolle (nur im Test,
    falls vorhanden; sonst Handrechnung).
-6. Anzeige in einem einfachen Tabellen-Tab des Results-Docks; Docs.
+7. Anzeige in einem einfachen Tabellen-Tab des Results-Docks; Docs (BENUTZUNG.md: Unterschied
+   `group` innerhalb einer Zeile und `scope` zwischen Zeilen, mit Beispiel).
 ```
 
 ---

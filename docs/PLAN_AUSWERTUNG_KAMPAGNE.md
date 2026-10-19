@@ -88,7 +88,9 @@ Alles, was der Nutzer festlegt, steht in `campaign.json` (Abschnitt `evaluation`
 ### 3.1 Formelkern (`calc/expr.py`, `calc/uncertain.py`) – PR 1
 - Parser auf Python-`ast` mit Positivliste: Zahlen, Namen (auch `a.b` als ein Name), `+ − * / **`, unäres Minus, Vergleiche, `and/or/not`, `x if c else y`, Funktionen `log, log10, exp, sqrt, abs, min, max, where, isfinite, round`. **Kein `eval`.** Fehler mit Position und Liste bekannter Namen.
 - Ein Ausdruck, zwei Ziele: `Expr.to_polars()` (Rechenkanäle auf Rohdaten) und `Expr.evaluate(env)` (numpy, Schritt-Tabelle).
-- Unsicherheit: `UArray(value, grads: dict[input, ndarray])` als Dual-Zahl über alle unsicheren Eingänge. Ein Eingang hat `u`, `kind` (`zufall`/`syst`) und `group` (z. B. Messtag: systematisch innerhalb eines Tages voll korreliert). Ergebnis: Wert, u gesamt, u zufällig, u syst., Beitrag je Eingang.
+- Unsicherheit: `UArray(value, grads: dict[input, ndarray])` als Dual-Zahl über alle unsicheren Eingänge. Ein Eingang hat `u`, `kind` (`zufall`/`syst`) und `group`. Gleiche `group` heisst gemeinsame Fehlerquelle (ein Prüfgas, eine Waagenkalibrierung), voll korreliert innerhalb einer Zeile; verschiedene Grössen desselben Tages bekommen **keine** gemeinsame Gruppe. Ergebnis: Wert, u gesamt, u zufällig, u syst., Beitrag je Eingang. (PR 1 ✅)
+- Korrelation **zwischen Zeilen** (dieselbe Konstante in allen Schritten eines Tages) bildet `UArray` nicht ab; sie gehört zu den Auswertungen in PR 6 (`scope` der Konstante, Kovarianz im Fit).
+- Text in Formeln: PR 1 kennt nur Zahlen. Text-Literale (`klasse == 'null'`) kommen mit PR 3.
 - `Constant(name, value, u=0, kind="syst", group=None, unit="", note="")`.
 - Monte Carlo (GUM S1) optional, nur für Auswertungen in PR 6.
 
@@ -164,7 +166,7 @@ Farben nach `docs`-Konvention des Kampagnenfensters; Ordinal-Rampe (Dosierstufe)
   "constants": {
     "f": {"value": 2.701, "note": "mgC -> mg Ethanol (RF 0.71)", "u": 0.135, "kind": "syst"},
     "V_kat": {"value": 0.0135, "unit": "m3"},
-    "luft_m3_h": {"value": 100, "u": 7.2, "kind": "syst", "group": "tag"},
+    "luft_m3_h": {"value": 100, "u": 7.2, "kind": "syst", "scope": "tag"},
     "T_ref": {"value": 24.4, "u": 3, "kind": "syst"}
   },
   "step_classes": [{"name": "dosierung", "when": "V_MFC > 0"}, {"name": "null", "when": "V_MFC == 0"}],
@@ -220,7 +222,7 @@ Die Namen der Kanäle/Quellen sind Beispiele. Die Restdrift (|dX/dt|·10 min) is
 |---|---|---|
 | Formelmaschine | eigener AST · sympy · numexpr/asteval | eigener AST: klein, sicher, Polars + numpy, Ableitungen über Dual-Zahlen. sympy wäre schwer; numexpr/asteval liefern keine Ableitungen |
 | Fehlerfortpflanzung | linear (Dual-Zahlen) · Monte Carlo | linear für Schrittgrössen; Monte Carlo optional für T50 und Fits |
-| Korrelation | unkorreliert · Gruppen | `group` je Eingang: systematisch innerhalb eines Tages voll korreliert; dadurch hängt Ea korrekt nicht vom Luftstrom ab |
+| Korrelation | innerhalb einer Zeile · zwischen Zeilen | `group` (PR 1) nur für Eingänge mit gemeinsamer Fehlerquelle; zwischen Zeilen `scope` je Konstante (z. B. `tag`), ausgewertet in PR 6: dieselbe systematische Konstante wirkt auf alle Schritte eines Tages gleich, dadurch hängt Ea korrekt nicht vom Luftstrom ab |
 | Stationarität | statistische Ampel · Äquivalenztest | beide anzeigen; Kriterien nutzen den Äquivalenztest |
 | Mehrere Tage | eine Kampagne mit allen Quellen · Sammlung mehrerer `campaign.json` | zuerst eine Kampagne (Master-Zeit kann mehrere Tage); Sammlung später |
 | Bericht | pyqtgraph-Export · matplotlib | pyqtgraph (keine neue Abhängigkeit, Vektor); matplotlib höchstens als Extra `[report]` |
@@ -232,16 +234,16 @@ Die Namen der Kanäle/Quellen sind Beispiele. Die Restdrift (|dX/dt|·10 min) is
 |---|---|---|---|
 | 1 ✅ | Formelkern + Dual-Zahlen + Konstanten | – | 2b-8 |
 | 2 | Rechenkanäle (Zeitstücke), Masken, Settings-XML, `json_columns` | 1 | 2b-8, 2b-2 |
-| 3 | Schrittarten, benannte Fenster, `step_table`, Äquivalenztest | – (Formeln für `when` aus 1, sonst einfache Vergleiche) | 2b-6/8 |
+| 3 | Text-Literale in Formeln, Schrittarten, benannte Fenster, `step_table`, Äquivalenztest | 1 | 2b-6/8 |
 | 4 | Bezüge: Blindwert, Beladung, Klassen | 1, 3 | 2b-8 |
 | 5 | Rechengrössen, Kriterien, Szenarien, `Evaluation`, Dock „Results“ | 1, 3, 4 | 2b-8 |
-| 6 | Auswertungen: Durchgang, Geradenfit, Aggregation | 5 | 2b-8 |
+| 6 | Auswertungen: Durchgang, Geradenfit, Aggregation, Korrelation zwischen Zeilen (`scope`) | 5 | 2b-8 |
 | 7 | Ergebnisfenster: Ansichten `table`, `xy`, `matrix`, Kleinvielfache | 5, 6 | 2b-8, Etappe 5 |
 | 8 | `aligned` + `broadcast_steps`, `bars`, Bericht als PDF | 2, 7 | 2b-8 |
 | 9 | Uhr-Anker aus Zellpaaren, Kreuzkorrelation, Dialog | – | 2b-7 |
 | 10 | SA-Kampagne (3 Tage) als Beispiel + Rezept, End-to-End-Orakel, Doku | 1–9 | 2b-10 |
 
-Parallel möglich: PR 1, 3 und 9 sofort; PR 2 nach 1.
+Parallel möglich: PR 2, 3 und 9 (PR 1 ist in main).
 
 ## 7. Abnahme (PR 10)
 

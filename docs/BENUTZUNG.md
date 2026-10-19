@@ -157,6 +157,8 @@ except ExprError as e:
 | `u_syst()` | Eingänge `kind="syst"` mit gleicher `group` sind voll korreliert: ihre Beiträge addieren sich linear, Gruppen und Eingänge ohne Gruppe quadratisch |
 | `u()` | √(u_random² + u_syst²) |
 
+**`group` nur bei gemeinsamer Fehlerquelle:** zum Beispiel zwei Konzentrationen aus demselben Prüfgas oder zwei Massen aus derselben Waagenkalibrierung. Verschiedene Grössen desselben Messtags (Luftstrom, Einstell-Temperatur, Response-Faktor) sind unabhängig und bekommen keine gemeinsame Gruppe, sonst heben sich ihre Fehler ohne Grund auf oder addieren sich. Dass dieselbe Konstante in allen Schritten eines Tages gleich wirkt, ist eine Korrelation zwischen Zeilen; sie gehört zu den Auswertungen über viele Schritte (Geradenfit, Durchgang) und ist hier nicht abgebildet.
+
 Eine `Constant` (`name`, `value`, `u`, `kind`, `group`, `unit`, `note`) ist serialisierbar und kommt später aus `campaign.json`. Gemessene Werte mit einer Unsicherheit pro Schritt werden zu `UArray.input(name, werte, u, kind="zufall")`. `round` und Vergleiche haben die Ableitung 0; `abs`, `min`, `max`, `where` und `if` nehmen die Ableitung des benutzten Zweigs.
 
 ```python

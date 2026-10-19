@@ -31,11 +31,11 @@ Referenz-Implementierung (nur lesen, nicht kopieren):
 | Operation | Datualizer |
 |---|---|
 | FID-Endwert: Mittel der letzten 120 s; u = sd/√(n/10) ⊕ Nullpunkt 0.1 mgC | ◐ `mean`, `sem_eff`; Nullpunkt über `reading_u` |
-| Blindwert: Mittel der letzten 180 s einer Null-Phase | ◐ anderes Fenster nötig → PR 3 |
+| Blindwert: Mittel der letzten 180 s einer Null-Phase | ✅ benanntes Fenster nur für Null-Phasen (PR 3); Auswahl der Null-Phase → PR 4 |
 | Steigung der letzten 300 s (Stationarität) | ✅ OLS, HAC, Theil-Sen |
 | Massenstrom: OLS-Steigung der Masse, erste 60 s weg; Ersatz Journal 2 Punkte (GUM) | ✅ besser als im Skript (HAC/AR(1), `two_point`) |
 | Bett-T = (K1 + K2)/2 der letzten 300 s; K1-Drift der letzten 10 min | ◐ Kanäle kombinieren → PR 3/5 |
-| Verschiedene Fenster je Grösse | ✗ eine globale `WindowRule` → PR 3 |
+| Verschiedene Fenster je Grösse | ✅ `NamedWindow`, `Measure` (PR 3) |
 
 ### 1.3 Grössen pro Schritt
 - V̇_N = V̇ · 273.15/(T_ref + 273.15); c_in = ṁ/V̇_N (mg/Nm³)
@@ -90,7 +90,7 @@ Alles, was der Nutzer festlegt, steht in `campaign.json` (Abschnitt `evaluation`
 - Ein Ausdruck, zwei Ziele: `Expr.to_polars()` (Rechenkanäle auf Rohdaten) und `Expr.evaluate(env)` (numpy, Schritt-Tabelle).
 - Unsicherheit: `UArray(value, grads: dict[input, ndarray])` als Dual-Zahl über alle unsicheren Eingänge. Ein Eingang hat `u`, `kind` (`zufall`/`syst`) und `group`. Gleiche `group` heisst gemeinsame Fehlerquelle (ein Prüfgas, eine Waagenkalibrierung), voll korreliert innerhalb einer Zeile; verschiedene Grössen desselben Tages bekommen **keine** gemeinsame Gruppe. Ergebnis: Wert, u gesamt, u zufällig, u syst., Beitrag je Eingang. (PR 1 ✅)
 - Korrelation **zwischen Zeilen** (dieselbe Konstante in allen Schritten eines Tages) bildet `UArray` nicht ab; sie gehört zu den Auswertungen in PR 6 (`scope` der Konstante, Kovarianz im Fit).
-- Text in Formeln: PR 1 kennt nur Zahlen. Text-Literale (`klasse == 'null'`) kommen mit PR 3.
+- Text in Formeln (PR 3 ✅): Text-Literale und Textspalten nur mit `==`/`!=` (`klasse == 'null'`); fehlender Text ist weder gleich noch ungleich (beides falsch).
 - `Constant(name, value, u=0, kind="syst", group=None, unit="", note="")`.
 - Monte Carlo (GUM S1) optional, nur für Auswertungen in PR 6.
 
@@ -100,7 +100,10 @@ Alles, was der Nutzer festlegt, steht in `campaign.json` (Abschnitt `evaluation`
 - Reader für Testa-iFID-`Settings*.xml`: Kalibrierblock (`time_last_cal`, `std_gas`, `sig_span`, `sens`, `zero`, `rsp-fac`) als `source_meta`; Vorschlag für die Kalibrierung `a = k/sens`, `b = −zero·a` mit `k` (mgC/ppm) als Eingabe. Vorschlag, nicht Automatik (Prinzip 2). Datei enthält Passwort-Hash, PIN und Systemkennung: Reader liest nur den Kalibrierblock, Fixture nur gekürzt.
 - `SqliteOptions.json_columns: list[str]`: JSON-Spalten in Spalten zerlegen (`parameters_json` → `V_MFC`, `Volumenstrom`, `f_Fan`).
 
-### 3.3 Schrittarten, benannte Fenster, Schritt-Tabelle, praktische Stationarität – PR 3
+### 3.3 Schrittarten, benannte Fenster, Schritt-Tabelle, praktische Stationarität – PR 3 ✅
+
+Umgesetzt in `datualizer_core/campaign/evaluation.py` und `CampaignSession.step_table`. Spaltennamen der Schritt-Tabelle: `step_id`, `step_label`, `step_start`, `step_end`, `dauer_s`, Parameter, `klasse`, `klasse_hinweis`, je Messgrösse `<alias>`, `u_<alias>`, `checks_<alias>`. Klassenformeln kennen zusätzlich `step_id`, `step_label` und `dauer_s`. Das 90-%-Intervall des Äquivalenztests nimmt den grösseren der beiden autokorrelationsfesten SE (`slope_se_eff`), Normalquantile wie die Ampel.
+
 ```python
 class StepClass(BaseModel):  name: str; when: str            # "dosierung": "V_MFC > 0"
 class NamedWindow(BaseModel): name: str; rule: WindowRule; classes: list[str] = []
@@ -239,7 +242,7 @@ Die Namen der Kanäle/Quellen sind Beispiele. Die Restdrift (|dX/dt|·10 min) is
 |---|---|---|---|
 | 1 ✅ | Formelkern + Dual-Zahlen + Konstanten | – | 2b-8 |
 | 2 | Rechenkanäle (Zeitstücke), Masken, Settings-XML, `json_columns` | 1 | 2b-8, 2b-2 |
-| 3 | Text-Literale in Formeln, Schrittarten, benannte Fenster, `step_table`, Äquivalenztest | 1 | 2b-6/8 |
+| 3 ✅ | Text-Literale in Formeln, Schrittarten, benannte Fenster, `step_table`, Äquivalenztest | 1 | 2b-6/8 |
 | 4 | Bezüge: Blindwert, Beladung, Klassen | 1, 3 | 2b-8 |
 | 5 | Rechengrössen, Kriterien, Szenarien, `Evaluation`, Dock „Results“ | 1, 3, 4 | 2b-8 |
 | 6 | Auswertungen: Durchgang, Geradenfit, Aggregation, Korrelation zwischen Zeilen (`scope`) | 5 | 2b-8 |

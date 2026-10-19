@@ -1,4 +1,4 @@
-"""Safe formulas for calculated quantities (Etappe 2b, step 8, PR 1).
+"""Safe formulas for calculated quantities (Etappe 2b, step 8, PR 1 and PR 3).
 
 A formula is parsed with Python's `ast` and checked against a positive list; it is never handed
 to `eval` or `exec`. Allowed are:
@@ -7,9 +7,21 @@ to `eval` or `exec`. Allowed are:
 - ``+ - * / **``, unary ``-`` and ``+``, comparisons (also chained, ``0 < x <= 1``),
   ``and``, ``or``, ``not``, ``a if c else b``;
 - the functions in `FUNCTIONS`: log (natural), log10, exp, sqrt, abs, min, max (two or more
-  arguments), where(c, a, b), isfinite, round(x, n=0).
+  arguments), where(c, a, b), isfinite, round(x, n=0);
+- text: literals in single or double quotes and text-valued names (a text column, a text step
+  parameter), **only** as an operand of ``==`` or ``!=`` with other text (``klasse == 'null'``).
+  The comparison is a truth value with derivative 0. Any other use of text (arithmetic, ``<``,
+  functions, conditions, text as the result, text compared with a number) is an `ExprError` with
+  the position. Missing text (null, None, NaN in an object array) is neither equal nor unequal to
+  anything: both ``==`` and ``!=`` give false there. (Unlike a NaN number, for which ``!=`` is
+  true: a missing class or sample name must not satisfy a condition by accident.)
 
-Everything else (attribute access, method calls, indexing, lambdas, comprehensions, strings,
+Which names hold text: `compile_expr(text_names=...)` says it; without it a name compared directly
+with a text literal is taken as text. `Expr.evaluate` checks again against the values it gets
+(str, numpy str/object arrays, Polars String/Categorical columns), `Expr.to_polars` against
+its `text_names` argument.
+
+Everything else (attribute access, method calls, indexing, lambdas, comprehensions, f-strings,
 keyword arguments, other operators) is rejected with an `ExprError` that names the position and
 the known names. The typographic signs − (minus), · and × (times) are read as ``-`` and ``*``.
 
@@ -35,6 +47,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping
 
+import numpy as np
 import polars as pl
 
 from datualizer_core.calc import uncertain as U
@@ -133,6 +146,11 @@ class _Num(_Node):
 
 
 @dataclass(frozen=True)
+class _Str(_Node):
+    value: str
+
+
+@dataclass(frozen=True)
 class _Var(_Node):
     name: str
 
@@ -178,6 +196,26 @@ class _Call(_Node):
 # --- compiling ----------------------------------------------------------------------------------
 
 
+def suggest_name(name: str, known: Iterable[str], cutoff: float = 0.6) -> str | None:
+    """The known name `name` was most likely meant to be, or None.
+
+    Similarity ignores case. Among similar names a name differing only in case wins, then one with
+    the same first letter (case-insensitive, then exact), then the higher similarity: for ``Bx``
+    with ``B`` and ``x`` known, ``B`` is suggested, for ``v_mfc`` the column ``V_MFC``.
+    """
+    low = name.lower()
+    best, best_key = None, None
+    for k in sorted(set(known)):
+        ratio = difflib.SequenceMatcher(None, low, k.lower()).ratio()
+        if ratio < cutoff:
+            continue
+        key = (k.lower() == low, k[:1].lower() == low[:1], k[:1] == name[:1], ratio)
+        if best_key is None or key > best_key:
+            best, best_key = k, key
+    return best
+
+
+
 class _Compiler:
     def __init__(self, text: str, source: str, lead: int, names: frozenset[str] | None) -> None:
         self.text = text
@@ -220,8 +258,10 @@ class _Compiler:
                     return _Num(p, float(v))
                 except OverflowError:
                     raise self.fail("number is too large", node) from None
-            if isinstance(v, (str, bytes)):
-                raise self.fail("text constants are not allowed, only numbers", node)
+            if isinstance(v, str):
+                return _Str(p, v)
+            if isinstance(v, bytes):
+                raise self.fail("byte strings are not allowed, only numbers and text", node)
             raise self.fail(f"constant {v!r} is not allowed, only numbers", node)
         if isinstance(node, (ast.Name, ast.Attribute)):
             return self.name(node)
@@ -271,8 +311,8 @@ class _Compiler:
         if name in FUNCTIONS:
             raise self.fail(f"function {name!r} needs arguments, e.g. {name}(x)", node)
         if self.known is not None and name not in self.known:
-            hint = difflib.get_close_matches(name, sorted(self.known), n=1)
-            extra = f"; did you mean {hint[0]!r}?" if hint else ""
+            hint = suggest_name(name, self.known)
+            extra = f"; did you mean {hint!r}?" if hint else ""
             raise self.fail(f"unknown name {name!r}{extra}", node, known=True)
         if name not in self.seen:
             self.seen.append(name)
@@ -302,8 +342,72 @@ class _Compiler:
         return _Call(self.pos(node), func.id, args)
 
 
-def compile_expr(text: str, names: Iterable[str] | None = None) -> "Expr":
-    """Parse and check a formula. `names` are the accepted names (None = any name)."""
+_TEXT_USE = "text can only be compared with '==' or '!=' (e.g. klasse == 'null')"
+
+
+class _Types:
+    """Where text may stand: only as an operand of == or != with other text (see the module docstring).
+
+    `text` = names known to hold text, every other name a number; None = unknown: a name compared
+    directly with text is taken as text (collected in `inferred`), other names as numbers.
+    """
+
+    def __init__(self, source: str, text: frozenset[str] | None) -> None:
+        self.source = source
+        self.text = text
+        self.inferred: set[str] = set()
+
+    def fail(self, message: str, node: _Node) -> ExprError:
+        return ExprError(message, self.source, node.pos)
+
+    def kind(self, node: _Node) -> str:
+        """'text', 'num' or '?' (a name of unknown kind)."""
+        if isinstance(node, _Str):
+            return "text"
+        if isinstance(node, _Var):
+            if self.text is None:
+                return "text" if node.name in self.inferred else "?"
+            return "text" if node.name in self.text else "num"
+        if isinstance(node, _Cmp):
+            kinds = [self.kind(o) for o in node.operands]
+            pairs = zip(node.ops, node.operands, node.operands[1:], kinds, kinds[1:])
+            for op, a, b, ka, kb in pairs:
+                if "text" not in (ka, kb):
+                    continue
+                if op not in ("==", "!="):
+                    at = a if isinstance(a, _Str) or (kb != "text" and not isinstance(b, _Str)) else b
+                    raise self.fail(f"'{op}' needs numbers; {_TEXT_USE}", at)
+                other, ko = (b, kb) if ka == "text" else (a, ka)
+                if ko == "num":
+                    raise self.fail(f"'{op}' compares text with a number", other)
+                if ko == "?":
+                    self.inferred.add(other.name)  # type: ignore[attr-defined]  # '?' is always a name
+            return "num"
+        for child in _children(node):
+            self.need_number(child)
+        return "num"
+
+    def need_number(self, node: _Node) -> None:
+        if self.kind(node) == "text":
+            raise self.fail(_TEXT_USE, node)
+
+
+def _check_types(source: str, node: _Node, text: frozenset[str] | None) -> frozenset[str]:
+    """Check where text stands; returns the names that hold text (raises ExprError)."""
+    if text is None:
+        lenient = _Types(source, None)
+        lenient.need_number(node)
+        text = frozenset(lenient.inferred)  # a name taken as text must be text everywhere
+    _Types(source, text).need_number(node)
+    return text
+
+
+def compile_expr(text: str, names: Iterable[str] | None = None, text_names: Iterable[str] | None = None) -> "Expr":
+    """Parse and check a formula.
+
+    `names`: the accepted names (None = any name). `text_names`: the names that hold text, all
+    others are numbers (None = unknown: a name compared directly with a text literal is text).
+    """
     if not isinstance(text, str):
         raise ExprError(f"a formula must be text, got {type(text).__name__}")
     known = None if names is None else frozenset(names)
@@ -327,11 +431,13 @@ def compile_expr(text: str, names: Iterable[str] | None = None) -> "Expr":
     except (RecursionError, MemoryError):
         raise ExprError("the formula is nested too deeply", text, known=known_list) from None
     compiler = _Compiler(text, source, lead, known)
+    given = None if text_names is None else frozenset(text_names)
     try:
         node = compiler.convert(tree.body)
+        text_used = _check_types(text, node, given)
     except RecursionError:
         raise ExprError("the formula is nested too deeply", text, known=known_list) from None
-    return Expr(text, node, tuple(compiler.seen))
+    return Expr(text, node, tuple(compiler.seen), frozenset(n for n in text_used if n in compiler.seen))
 
 
 # --- the compiled expression --------------------------------------------------------------------
@@ -339,22 +445,35 @@ def compile_expr(text: str, names: Iterable[str] | None = None) -> "Expr":
 
 @dataclass(frozen=True)
 class Expr:
-    """A checked formula. `names` lists the names it uses, in order of appearance."""
+    """A checked formula. `names` lists the names it uses, in order of appearance, `text_names` those holding text."""
 
     text: str
     node: _Node
     names: tuple[str, ...]
+    text_names: frozenset[str] = frozenset()
 
     def __str__(self) -> str:
         return self.text
 
+    def _text_for(self, text_names: Iterable[str]) -> frozenset[str]:
+        """The given text names (of this formula), checked against the formula if they differ."""
+        text = frozenset(n for n in text_names if n in self.names)
+        if text != self.text_names:
+            _check_types(self.text, self.node, text)
+        return text
+
     def evaluate(self, env: Mapping[str, Any]) -> UArray:
-        """Compute with numpy. `env` maps every name to a `UArray`, `Constant`, number, array or Series."""
+        """Compute with numpy. `env` maps every name to a `UArray`, `Constant`, number, array or Series.
+
+        Text values (str, numpy str or object arrays of text, Polars String columns) are allowed for
+        names the formula only compares with text; they carry no uncertainty.
+        """
         missing = [n for n in self.names if n not in env]
         if missing:
             node = _find_var(self.node, missing[0])
             raise ExprError(f"no value for name {missing[0]!r}", self.text, node.pos if node else None, env.keys())
-        values = {n: UArray.of(env[n]) for n in self.names}
+        text = self._text_for(n for n in self.names if is_text(env[n]))
+        values = {n: (_text_values(env[n]) if n in text else UArray.of(env[n])) for n in self.names}
         try:
             return _NumpyEval(values).run(self.node)
         except ValueError as e:
@@ -364,13 +483,16 @@ class Expr:
         self,
         columns: Mapping[str, str] | None = None,
         constants: Mapping[str, float | Constant] | None = None,
+        text_names: Iterable[str] | None = None,
     ) -> pl.Expr:
         """The formula as a Polars expression.
 
         A name becomes ``pl.col(columns.get(name, name))``, or a float literal if it is in
         `constants` (a `Constant` contributes its value; Polars carries no uncertainty).
+        `text_names`: the names that are text columns (default: as compiled).
         """
-        return _PolarsBuild(columns or {}, constants or {}).run(self.node)
+        text = self.text_names if text_names is None else self._text_for(text_names)
+        return _PolarsBuild(columns or {}, constants or {}, text).run(self.node)
 
 
 def _find_var(node: _Node, name: str) -> _Var | None:
@@ -399,6 +521,65 @@ def _children(node: _Node) -> tuple[_Node, ...]:
     return ()
 
 
+# --- text values --------------------------------------------------------------------------------
+
+
+def _missing_text(v: Any) -> bool:
+    return v is None or (isinstance(v, float) and math.isnan(v))
+
+
+def is_text(value: Any) -> bool:
+    """True for values a formula treats as text: str, numpy str arrays, object arrays holding text,
+    Polars String/Categorical/Enum columns (pandas object columns via their values)."""
+    if isinstance(value, str):
+        return True
+    if isinstance(value, pl.Series):
+        return isinstance(value.dtype, (pl.String, pl.Categorical, pl.Enum))
+    if isinstance(value, (UArray, Constant, int, float)):
+        return False
+    if hasattr(value, "to_numpy") and not isinstance(value, np.ndarray):
+        value = value.to_numpy()
+    if isinstance(value, (list, tuple)):
+        value = np.asarray(value, dtype=object)
+    if not isinstance(value, np.ndarray):
+        return False
+    if value.dtype.kind in "US":
+        return True
+    if value.dtype.kind == "O":
+        items = [v for v in value.ravel() if not _missing_text(v)]
+        return bool(items) and all(isinstance(v, str) for v in items)
+    return False
+
+
+@dataclass(frozen=True)
+class _Text:
+    """Text values in the numpy evaluation: an object array, None where missing."""
+
+    values: np.ndarray
+
+
+def _text_values(value: Any) -> _Text:
+    if isinstance(value, pl.Series):
+        value = value.cast(pl.String).to_list()
+    elif hasattr(value, "to_numpy") and not isinstance(value, np.ndarray):
+        value = value.to_numpy()
+    arr = np.asarray(value, dtype=object)
+    out = np.empty(arr.shape, dtype=object)
+    for i, v in np.ndenumerate(arr):
+        out[i] = None if _missing_text(v) else str(v)
+    return _Text(out)
+
+
+def _text_compare(op: str, a: _Text, b: _Text) -> UArray:
+    """== or != of text; false wherever one side is missing."""
+    x, y = np.broadcast_arrays(a.values, b.values)
+    out = np.zeros(x.shape, dtype=bool)
+    for i in np.ndindex(x.shape):
+        if x[i] is not None and y[i] is not None:
+            out[i] = (x[i] == y[i]) == (op == "==")
+    return UArray(out)
+
+
 # --- numpy with uncertainties -------------------------------------------------------------------
 
 _NUMPY_BIN: dict[str, Callable[[Any, Any], UArray]] = {
@@ -411,12 +592,14 @@ _NUMPY_FUNC: dict[str, Callable[..., UArray]] = {
 
 
 class _NumpyEval:
-    def __init__(self, values: Mapping[str, UArray]) -> None:
+    def __init__(self, values: Mapping[str, UArray | _Text]) -> None:
         self.values = values
 
-    def run(self, node: _Node) -> UArray:
+    def run(self, node: _Node) -> Any:
         if isinstance(node, _Num):
             return UArray(node.value)
+        if isinstance(node, _Str):
+            return _Text(np.array(node.value, dtype=object))
         if isinstance(node, _Var):
             return self.values[node.name]
         if isinstance(node, _Unary):
@@ -428,7 +611,10 @@ class _NumpyEval:
             operands = [self.run(o) for o in node.operands]
             result = None
             for op, a, b in zip(node.ops, operands, operands[1:]):
-                part = U.COMPARISONS[op](a, b)
+                if isinstance(a, _Text) or isinstance(b, _Text):  # both text: checked when compiling
+                    part = _text_compare(op, a, b)
+                else:
+                    part = U.COMPARISONS[op](a, b)
                 result = part if result is None else U.logical_and(result, part)
             return result
         if isinstance(node, _Bool):
@@ -488,19 +674,33 @@ def _pl_compare(op: str, a: pl.Expr, b: pl.Expr) -> pl.Expr:
     return pl.when(a.is_nan() | b.is_nan()).then(pl.lit(op == "!=")).otherwise(_PL_CMP[op](a, b))
 
 
+def _pl_text_compare(op: str, a: pl.Expr, b: pl.Expr) -> pl.Expr:
+    """== or != of text like numpy: false where one side is null (not null as elsewhere in Polars)."""
+    return _PL_CMP[op](a, b).fill_null(False)
+
+
 class _PolarsBuild:
-    def __init__(self, columns: Mapping[str, str], constants: Mapping[str, float | Constant]) -> None:
+    def __init__(
+        self, columns: Mapping[str, str], constants: Mapping[str, float | Constant], text: frozenset[str]
+    ) -> None:
         self.columns = columns
         self.constants = constants
+        self.text = text
+
+    def is_text(self, node: _Node) -> bool:
+        return isinstance(node, _Str) or (isinstance(node, _Var) and node.name in self.text)
 
     def run(self, node: _Node) -> pl.Expr:
         if isinstance(node, _Num):
             return pl.lit(node.value, dtype=pl.Float64)
+        if isinstance(node, _Str):
+            return pl.lit(node.value, dtype=pl.String)
         if isinstance(node, _Var):
             if node.name in self.constants:
                 c = self.constants[node.name]
                 return pl.lit(float(c.value if isinstance(c, Constant) else c), dtype=pl.Float64)
-            return pl.col(self.columns.get(node.name, node.name))
+            col = pl.col(self.columns.get(node.name, node.name))
+            return col.cast(pl.String) if node.name in self.text else col
         if isinstance(node, _Unary):
             x = self.run(node.operand)
             return ~_truth(x) if node.op == "not" else (-x if node.op == "-" else x)
@@ -511,7 +711,11 @@ class _PolarsBuild:
             return {"+": a + b, "-": a - b, "*": a * b, "/": a / b}[node.op]
         if isinstance(node, _Cmp):
             operands = [self.run(o) for o in node.operands]
-            parts = [_pl_compare(op, a, b) for op, a, b in zip(node.ops, operands, operands[1:])]
+            texts = [self.is_text(o) for o in node.operands]
+            parts = [
+                _pl_text_compare(op, a, b) if ta or tb else _pl_compare(op, a, b)
+                for op, a, b, ta, tb in zip(node.ops, operands, operands[1:], texts, texts[1:])
+            ]
             result = parts[0]
             for part in parts[1:]:
                 result = result & part
@@ -556,4 +760,4 @@ def evaluate(text: str, env: Mapping[str, Any]) -> UArray:
     return compile_expr(text, env.keys()).evaluate(env)
 
 
-__all__ = ["FUNCTIONS", "Expr", "ExprError", "compile_expr", "evaluate"]
+__all__ = ["FUNCTIONS", "Expr", "ExprError", "compile_expr", "evaluate", "is_text", "suggest_name"]

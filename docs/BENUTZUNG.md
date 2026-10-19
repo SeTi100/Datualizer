@@ -117,9 +117,37 @@ t = s.window_table([("instrument_reader", "masse")])
 t.select("step_label", "v_mfc", "n", "coverage", (t["slope"] * 3600).alias("g_h"), "slope_se", "checks")
 ```
 
+**Praktische Stationarität (Äquivalenztest):** Bei 1-Hz-Daten ist fast jede Steigung signifikant, die Ampel `stationary` steht dann auf „nicht stationär“, obwohl der Drift fachlich bedeutungslos ist. Mit einer Toleranz δ pro Kanal in Einheit pro Sekunde (`StatsConfig.equivalence={"fid/conc": 0.1 / 60}` für 0,1 mgC/min) prüft ein TOST, ob das 90-%-Intervall der Steigung (Steigung ± 1,645 · größerer der beiden autokorrelationsfesten SE) ganz in ±δ liegt: `stationary_practical` ist dann `True`, die getestete Toleranz steht in `equivalence_delta`, die Begründung in `assumptions` bzw. `checks`. Ohne δ bleibt das Feld `None`. Beispiel FID-Plateau vom 12.10. (letzte 120 s): Steigung −0,051 mgC/min, statistisch signifikant (4,4 SE), praktisch stationär bei δ = 0,1 mgC/min.
+
 Einen einzelnen Schritt liefert `s.window_stats(schritt, quelle, kanal)` als `WindowResult`. Jeder Eintrag in `checks` hat zusätzlich eine Stufe (`check.level`: `fail` bei keinen oder zu wenigen Punkten, sonst `warn`); `result.level` fasst sie zur Ampel zusammen (`ok` ohne Befund). Das Fenster eines einzelnen Schritts lässt sich von Hand setzen: `s.set_window_override(schritt_id, start, ende)` ersetzt dort die Fenster-Regel, `clear_window_override` hebt das wieder auf. Overrides stehen in `campaign.json` (`window_overrides`), in `window_table` zeigt die Spalte `window_override` sie an. Bekommt ein Journal-Schritt später einen anderen Namen oder fehlt er, steht das in `intervals().problems`.
 
 Im Kampagnenfenster zeigt das Dock *Steps* die Schritte (Doppelklick zoomt und öffnet den Fenster-Inspektor, Rechtsklick bietet beides einzeln), die Probleme und die Fenster-Regel; *Steps from Source…* öffnet die Zuordnung mit Vorschau. Als Bänder über allen Plots erscheinen die Schritte, wenn *Settings → Tools → Interval Bands* eingeschaltet ist (Standard: aus, die Wahl wird gemerkt). Eigene Schritte: Rechtsklick → *Marker ○ ○*; der erste Klick setzt den Start (erster Kreis grün, gestrichelte Linie), der zweite das Ende. Eigene Bänder lassen sich ziehen, umbenennen und löschen; Esc verwirft einen offenen Marker.
+
+**Schrittarten, benannte Fenster, Schritt-Tabelle** (Etappe 2b, Schritt 8, PR 3) stehen in `campaign.json` unter `evaluation`:
+
+- `StepClass(name, when)`: Eine Schrittart ist eine Formel über die Schrittparameter, Zahlen und Text (`"v_mfc > 0"`, `"Probe == 'Eingang'"`). Bekannt sind ausserdem `step_id`, `step_label` (Text) und `dauer_s`. Es gewinnt die erste Klasse, deren Formel wahr ist. Passt keine, bleibt die Klasse leer; passen mehrere, nimmt der Datualizer die erste. In beiden Fällen steht ein Hinweis in `step_classes().notes` bzw. in der Spalte `klasse_hinweis`. Eine Formel mit unbekanntem Parameter schlägt laut fehl (`ExprError` mit Vorschlag).
+- `NamedWindow(name, rule, classes=[])`: Fensterregel mit Namen, wahlweise nur für bestimmte Klassen. Die bisherige `window_rule` ist das Fenster `default`, ältere `campaign.json` lesen sich unverändert. `s.step_window(schritt, "blank")` liefert das Fenster eines Schritts, `s.window_stats(schritt, quelle, kanal, window="blank")` die Kennwerte darin. Ein Override von Hand gilt pro Fenster: `s.set_window_override(id, start, ende, window="blank")`, gespeichert unter `"<id>@blank"`.
+- `Measure(alias, source, channel, window, stat)`: eine Zahl pro Schritt, `stat` ist ein Feld von `WindowResult` (`mean`, `slope`, `two_point`, `integral`, `median`, `stationary_practical` als 1/0 …). Die Standardunsicherheit kommt mit: `mean` → √(`sem_eff`² + `reading_u`²), `slope` → `slope_se_eff`, `two_point` → `two_point_u`, `integral` → `integral_u`, sonst leer.
+
+`s.step_table()` (oder `s.step_table(spec)` mit einer eigenen `Evaluation`, ohne die Kampagne zu ändern) liefert eine Zeile pro Schritt: `step_id`, `step_label`, `step_start`, `step_end`, `dauer_s`, die Parameter, `klasse`, `klasse_hinweis` und je Messgrösse `<alias>`, `u_<alias>` und `checks_<alias>`. Ein Fenster, das nicht zur Klasse des Schritts passt, lässt seine Messgrössen leer. Liefert es keine Daten, steht der Grund in `checks_<alias>`.
+
+```python
+from datualizer_core.campaign import Evaluation, Measure, NamedWindow, StepClass, WindowRule
+
+s.set_evaluation(Evaluation(
+    step_classes=[StepClass(name="null", when="v_mfc == 0"), StepClass(name="dosierung", when="v_mfc > 0")],
+    windows=[NamedWindow(name="ende", rule=WindowRule(length_s=120)),
+             NamedWindow(name="blank", rule=WindowRule(length_s=180), classes=["null"]),
+             NamedWindow(name="masse", rule=WindowRule(skip_start_s=60))],
+    measures=[Measure(alias="S", source="fid", channel="conc", window="ende", stat="mean"),
+              Measure(alias="S_b", source="fid", channel="conc", window="blank", stat="mean"),
+              Measure(alias="mdot", source="waage", channel="masse", window="masse", stat="slope")],
+))
+t = s.step_table()
+t.select("step_label", "klasse", "S", "u_S", "S_b", "mdot", "u_mdot")
+```
+
+Im Dock *Steps* zeigt die Spalte *Class* die Schrittart; ein Schritt ohne oder mit mehreren Klassen ist orange, der Hinweis steht im Tooltip. Bearbeitet werden Klassen, Fenster und Messgrössen vorerst in `campaign.json`, das Dock *Results* folgt mit PR 5.
 
 Der **Fenster-Inspektor** (Dock *Window*, auch per Rechtsklick im Plot → *Inspect step*) zeigt die gewählten Kanäle rund um einen Schritt:
 - das ausgewertete Fenster hell hinterlegt,
@@ -127,7 +155,7 @@ Der **Fenster-Inspektor** (Dock *Window*, auch per Rechtsklick im Plot → *Insp
 - ausgelassene Samples als rote Kreuze,
 - die Stützstellen der 2-Punkt-Differenz als grüne Kreise.
 
-Darunter stehen die Kennwerte mit Unsicherheit (auf zwei Stellen der Unsicherheit gerundet), die Befunde mit Ampel pro Kanal und die Annahmen. Die Fensterränder lassen sich ziehen. Das gilt nur für diesen Schritt und wird in `campaign.json` gespeichert: Die Kante wird orange, im Steps-Dock steht „window ✎“. *Reset Window* überlässt den Schritt wieder der Fenster-Regel. Bild ab / Bild auf schaltet zum nächsten bzw. vorigen Schritt.
+Darunter stehen die Kennwerte mit Unsicherheit (auf zwei Stellen der Unsicherheit gerundet), die Befunde mit Ampel pro Kanal und die Annahmen. Die Fensterränder lassen sich ziehen. Das gilt nur für diesen Schritt und wird in `campaign.json` gespeichert: Die Kante wird orange, im Steps-Dock steht „window ✎“. *Reset Window* überlässt den Schritt wieder der Fenster-Regel. Bild ab / Bild auf schaltet zum nächsten bzw. vorigen Schritt. Gibt es benannte Fenster, wählt eine Auswahl neben dem Titel, welches gezeigt und gezogen wird (`default` oder z. B. `blank`). Ein Fenster, das nicht zur Klasse des Schritts passt, zeigt keine Kennwerte, sondern den Grund.
 
 In der GUI öffnet *Campaign → Open Campaign Window…* (Ctrl+K) die Kampagnenansicht: links die Quellen mit Profil, Zeitspanne und Uhr, darunter der Uhren-Editor; rechts oben, falls unter *Settings → Tools → Coverage Info* eingeschaltet (Standard: aus, die Wahl wird gemerkt), die Abdeckungsspur (eine Zeile pro Quelle, Abschnitte mit Werten gefüllt, Lücken schraffiert, die Infozeile nennt Dauer und Art der Lücke unter dem Fadenkreuz), darunter ein Subplot pro gewähltem Kanal, jeder mit eigenem x-Array auf einer gemeinsamen Datumsachse (verlinkt, ohne Resampling). Die Ansicht zeigt immer alle Spuren; eigenes Zoomen bleibt bis *Reset Zoom* erhalten. Beim Hinzufügen fragt das Fenster nach Blatt bzw. Tabelle und, bei reinen Uhrzeiten, nach dem Datum (Vorschlag aus dem Blattnamen); die Wahl steht im Profil und in der Spec der Quelle in `campaign.json` und wird beim Öffnen ohne Rückfrage wieder angewendet.
 
@@ -161,9 +189,9 @@ window.export_plot("bericht_12_10.pdf", ExportOptions(width_mm=170, font_pt=8, l
 
 ## Formeln mit Unsicherheit
 
-`datualizer_core/calc/` ist der Formelkern für Rechengrössen (Etappe 2b, Schritt 8). Er kennt weder Kampagne noch GUI; die Anbindung an Schritt-Tabelle und Rechenkanäle folgt.
+`datualizer_core/calc/` ist der Formelkern für Rechengrössen (Etappe 2b, Schritt 8). Er kennt weder Kampagne noch GUI. Die Schrittarten der Schritt-Tabelle nutzen ihn bereits (siehe oben), Rechenkanäle und Rechengrössen folgen.
 
-**Was eine Formel enthalten darf:** Zahlen, Namen (auch mit Punkt, `fid.mean` ist *ein* Name), `+ - * / **`, unäres Minus, Vergleiche (auch verkettet, `0 < X <= 1`), `and`, `or`, `not`, `a if c else b` und die Funktionen `log` (natürlich), `log10`, `exp`, `sqrt`, `abs`, `min`, `max` (zwei oder mehr Argumente), `where(c, a, b)`, `isfinite`, `round(x, n=0)`. Die Zeichen − · × werden als `-` und `*` gelesen. Alles andere (Attribute, Methodenaufrufe, Indizes, Lambdas, Comprehensions, Text) lehnt `compile_expr` mit einem `ExprError` ab, der die Spalte und die bekannten Namen nennt:
+**Was eine Formel enthalten darf:** Zahlen, Namen (auch mit Punkt, `fid.mean` ist *ein* Name), `+ - * / **`, unäres Minus, Vergleiche (auch verkettet, `0 < X <= 1`), `and`, `or`, `not`, `a if c else b` und die Funktionen `log` (natürlich), `log10`, `exp`, `sqrt`, `abs`, `min`, `max` (zwei oder mehr Argumente), `where(c, a, b)`, `isfinite`, `round(x, n=0)`. Die Zeichen − · × werden als `-` und `*` gelesen. Text in einfachen oder doppelten Anführungszeichen und Textspalten sind nur mit `==` und `!=` erlaubt (`klasse == 'null'`, `Probe != "Eingang" and v_mfc > 0`). Das Ergebnis ist ein Wahrheitswert ohne Ableitung. Fehlender Text (null) ist weder gleich noch ungleich: Beide Vergleiche ergeben falsch, damit eine fehlende Klasse keine Bedingung zufällig erfüllt. Welche Namen Text sind, sagt `compile_expr(…, text_names=[…])`. Ohne Angabe gilt ein Name, der direkt mit Text verglichen wird, als Text; `evaluate` prüft das an den Werten (str, Objekt-Arrays, Polars-String-Spalten). Alles andere (Attribute, Methodenaufrufe, Indizes, Lambdas, Comprehensions, Rechnen oder `<` mit Text, Text mit Zahl verglichen) lehnt `compile_expr` mit einem `ExprError` ab, der die Spalte und die bekannten Namen nennt. Bei Tippfehlern schlägt es bevorzugt einen Namen mit gleichem Anfangsbuchstaben vor bzw. einen, der sich nur in Gross/klein unterscheidet:
 
 ```python
 from datualizer_core.calc import ExprError, compile_expr

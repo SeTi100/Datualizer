@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from datualizer_core.campaign import Campaign, CampaignSession, IntervalSet, master_datetime
+from datualizer_core.campaign import DEFAULT_WINDOW, Campaign, CampaignSession, IntervalSet, master_datetime
 from datualizer_gui.components.campaign_canvas import CampaignPlotCanvas
 from datualizer_gui.components.intervals_panel import IntervalsPanel
 from datualizer_gui.components.source_dialog import load_source_interactive
@@ -471,18 +471,18 @@ class CampaignWindow(QMainWindow):
         self.window_inspector.show_step(interval_id)
         self.window_inspector.setFocus()
 
-    def set_step_window(self, interval_id: str, start: float, end: float) -> None:
-        """Window of one step set by hand (master epoch seconds); saved with the campaign."""
+    def set_step_window(self, interval_id: str, start: float, end: float, window: str = DEFAULT_WINDOW) -> None:
+        """Window of one step set by hand (master epoch seconds; `window`: which named window); saved with the campaign."""
         try:
-            self._session.set_window_override(interval_id, start, end)
+            self._session.set_window_override(interval_id, start, end, window)
         except (KeyError, ValueError) as exc:
             self.status_bar.showMessage(f"Window not changed: {exc}")
             return
         self.refresh_steps()
         self.status_bar.showMessage(f"Window of the step set by hand ({end - start:.0f} s, saved with the campaign)")
 
-    def reset_step_window(self, interval_id: str) -> None:
-        self._session.clear_window_override(interval_id)
+    def reset_step_window(self, interval_id: str, window: str = DEFAULT_WINDOW) -> None:
+        self._session.clear_window_override(interval_id, window)
         self.refresh_steps()
         self.status_bar.showMessage("Window of the step follows the window rule again")
 

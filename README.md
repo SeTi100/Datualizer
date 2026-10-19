@@ -92,8 +92,9 @@ Dazu pro Kanal: Anzeigename, Stil (Linie, Punkte, Treppe), Farbe und Y-Skalierun
 | **Qualität** | Flags statt Löschen: Lücke, Dropout, Sprung, eingefrorener Sensor, Bereich, Hampel-Spike |
 | **Zeit** | Absolute Zeit mit Zeitzone und Sommerzeit, Startzeit für Logger mit verstrichener Zeit, Datum für reine Uhrzeiten |
 | **Messkampagne** | Mehrere Quellen auf Master-Zeit, Uhrenmodell (Versatz, Drift, Anker), Abdeckung, Messschritte, `campaign.json` |
-| **Formeln** | Sicherer Parser (Positivliste, kein `eval`), Polars-Ausdruck oder numpy mit linearer Fehlerfortpflanzung: Budget je Eingang, zufällig/systematisch getrennt, korrelierte Gruppen |
-| **Fenster-Statistik** | Mittelwert, Median, SD, SEM, OLS- und Theil-Sen-Steigung, 2-Punkt-Differenz nach GUM, Integral; AR(1)-`n_eff`, Newey-West, Durbin-Watson, Stationaritäts-Ampel |
+| **Formeln** | Sicherer Parser (Positivliste, kein `eval`), Polars-Ausdruck oder numpy mit linearer Fehlerfortpflanzung: Budget je Eingang, zufällig/systematisch getrennt, korrelierte Gruppen; Text nur für Vergleiche (`klasse == 'null'`) |
+| **Schritt-Tabelle** | Schrittarten als Formel über die Sollwerte, benannte Fenster je Grösse (z. B. Blindwert nur in Null-Phasen), eine Zeile pro Schritt mit Wert und Standardunsicherheit jeder Messgrösse |
+| **Fenster-Statistik** | Mittelwert, Median, SD, SEM, OLS- und Theil-Sen-Steigung, 2-Punkt-Differenz nach GUM, Integral; AR(1)-`n_eff`, Newey-West, Durbin-Watson, Stationaritäts-Ampel und praktische Stationarität (Äquivalenztest mit Toleranz) |
 | **Plots** | Eigenes Peak-Downsampling ohne Linien über Lücken, verlinkte Zeitachsen, Fadenkreuz-Werte, Subplots nach Kanal/Einheit/Quelle, Export PNG/SVG/PDF |
 
 Alles mit Code-Beispielen: **[ausführliche Anleitung](docs/BENUTZUNG.md)**.

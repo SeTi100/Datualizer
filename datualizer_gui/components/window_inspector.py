@@ -7,7 +7,9 @@ Bottom: the statistics with uncertainties, the traffic light per channel and the
 
 Dragging the window edges sets a window for this step only (`WindowOverride`, saved in
 campaign.json); "Reset Window" goes back to the window rule. Page Down / Page Up step through
-the steps, so a whole journal is reviewed quickly.
+the steps, so a whole journal is reviewed quickly. The box next to the title chooses which window
+is shown and dragged: `default` (the window rule) or a named window of `Evaluation.windows`
+(PR 3); a named window that is not for the step's class says so instead of showing statistics.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QGraphicsScene,
     QHBoxLayout,
     QHeaderView,
@@ -36,7 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from datualizer_core.campaign import CampaignSession, ResolvedInterval
+from datualizer_core.campaign import DEFAULT_WINDOW, CampaignSession, ResolvedInterval, StepWindow
 from datualizer_core.stats import WindowResult
 from datualizer_gui.components.curves import add_curve, curve_pen, ensure_pixmap_cache, light_grid
 from datualizer_gui.components.plot_canvas import CHANNEL_COLORS
@@ -138,8 +141,8 @@ class _ChannelView:
 class WindowInspector(QWidget):
     """Dock contents "Window": plots and statistics of one step."""
 
-    override_changed = Signal(str, float, float)  # step id, master start, end of the window set by hand
-    override_cleared = Signal(str)  # step id: back to the window rule
+    override_changed = Signal(str, float, float, str)  # step id, master start, end of the window set by hand, window
+    override_cleared = Signal(str, str)  # step id, window: back to the window's rule
     step_changed = Signal(str)  # step id now shown
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -149,6 +152,8 @@ class WindowInspector(QWidget):
         self._step_id: str | None = None
         self._views: list[_ChannelView] = []
         self._results: dict[tuple[str, str], WindowResult] = {}
+        self._window = DEFAULT_WINDOW
+        self._step_window: StepWindow | None = None
         self._syncing = False
 
         layout = QVBoxLayout(self)
@@ -161,11 +166,15 @@ class WindowInspector(QWidget):
         for b in (self.btn_prev, self.btn_next):
             b.setFixedWidth(32)
         self.title = ReadoutLabel("Double-click a step in the Steps dock or right click → Inspect step.")
+        self.window_box = QComboBox()
+        self.window_box.setToolTip("Window shown and dragged: the window rule (default) or a named window")
+        self.window_box.addItem(DEFAULT_WINDOW)
         self.btn_reset = QPushButton("Reset Window")
         self.btn_reset.setToolTip("Use the window rule for this step again")
         head.addWidget(self.btn_prev)
         head.addWidget(self.title, stretch=1)
         head.addWidget(self.btn_next)
+        head.addWidget(self.window_box)
         head.addWidget(self.btn_reset)
         layout.addLayout(head)
 
@@ -208,6 +217,7 @@ class WindowInspector(QWidget):
         self.btn_prev.clicked.connect(self.previous_step)
         self.btn_next.clicked.connect(self.next_step)
         self.btn_reset.clicked.connect(self._on_reset)
+        self.window_box.currentTextChanged.connect(self._on_window_chosen)
         for key, slot in ((Qt.Key.Key_PageDown, self.next_step), (Qt.Key.Key_PageUp, self.previous_step)):
             sc = QShortcut(QKeySequence(key), self)
             sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -231,6 +241,32 @@ class WindowInspector(QWidget):
     @property
     def views(self) -> list[_ChannelView]:
         return list(self._views)
+
+    @property
+    def window_name(self) -> str:
+        """Window shown: `default` (the window rule) or a named window."""
+        return self._window
+
+    def set_window_name(self, name: str) -> None:
+        if self.window_box.findText(name) < 0:
+            raise KeyError(f"No window {name!r}.")
+        self.window_box.setCurrentText(name)
+
+    def _on_window_chosen(self, name: str) -> None:
+        if name and name != self._window:
+            self._window = name
+            self.refresh()
+
+    def _fill_windows(self) -> None:
+        names = self._session.campaign.evaluation.window_names() if self._session is not None else [DEFAULT_WINDOW]
+        if self._window not in names:
+            self._window = DEFAULT_WINDOW
+        self.window_box.blockSignals(True)
+        self.window_box.clear()
+        self.window_box.addItems(names)
+        self.window_box.setCurrentText(self._window)
+        self.window_box.blockSignals(False)
+        self.window_box.setVisible(len(names) > 1)
 
     def set_session(self, session: CampaignSession | None) -> None:
         self._session = session
@@ -288,7 +324,9 @@ class WindowInspector(QWidget):
         self.table.setRowCount(0)
         self.checks.clear()
         self.assumptions.clear()
+        self._step_window = None
         self._update_buttons()
+        self._fill_windows()
         session = self._session
         iv = None
         if session is not None and self._step_id is not None:
@@ -302,13 +340,20 @@ class WindowInspector(QWidget):
             return
         i, n = self._index(), len(self._steps())
         params = ", ".join(f"{k} = {v}" for k, v in iv.params.items() if v is not None)
-        win = iv.window if iv.window is not None else (iv.start, iv.end)
-        how = "set by hand" if iv.window_override else "window rule"
+        head = f"Step {i + 1}/{n}: {iv.label}" + (f"  ({params})" if params else "")
+        sw = self._step_window = session.step_window(iv, self._window)
+        if not sw.applies:
+            self.title.setText(f"{head}  ·  {sw.note}")
+            self.btn_reset.setEnabled(False)
+            self.checks.addItem(QListWidgetItem(level_icon("warn"), f"No statistics: {sw.note}."))
+            return
+        win = sw.window if sw.window is not None else (iv.start, iv.end)
+        rule = "window rule" if sw.name == DEFAULT_WINDOW else f"window '{sw.name}'"
+        how = f"{rule}, set by hand" if sw.override and sw.name != DEFAULT_WINDOW else ("set by hand" if sw.override else rule)
         self.title.setText(
-            f"Step {i + 1}/{n}: {iv.label}" + (f"  ({params})" if params else "")
-            + f"  ·  window {win[0] - iv.start:.0f}–{win[1] - iv.start:.0f} s of {iv.duration_s:.0f} s ({how})"
+            f"{head}  ·  window {win[0] - iv.start:.0f}–{win[1] - iv.start:.0f} s of {iv.duration_s:.0f} s ({how})"
         )
-        self.btn_reset.setEnabled(iv.window_override)
+        self.btn_reset.setEnabled(sw.override)
         channels = [(s, c) for s, c in self._channels if session.master_time(s) is not None]
         if not channels:
             item = QListWidgetItem("Select channels in the Sources dock to evaluate them.")
@@ -316,7 +361,7 @@ class WindowInspector(QWidget):
             return
         assumptions: list[str] = []
         for k, (sid, ch) in enumerate(channels):
-            res = session.window_stats(iv, sid, ch)
+            res = session.window_stats(iv, sid, ch, window=self._window)
             self._results[(sid, ch)] = res
             for a in res.assumptions:
                 if a not in assumptions:
@@ -352,9 +397,10 @@ class WindowInspector(QWidget):
         p.addItem(step_band, ignoreBounds=True)
         view.curve = add_curve(p, x, y, gaps, curve_pen(color), tr.style)
 
-        win = iv.window if iv.window is not None else (iv.start, iv.end)  # as session.window_stats
+        sw = self._step_window
+        win = sw.window if sw.window is not None else (iv.start, iv.end)  # as session.window_stats
         w0, w1 = win[0] - iv.start, win[1] - iv.start
-        edge_pen = pg.mkPen(OVERRIDE_PEN if iv.window_override else QColor(220, 220, 220), width=1)
+        edge_pen = pg.mkPen(OVERRIDE_PEN if sw.override else QColor(220, 220, 220), width=1)
         region = pg.LinearRegionItem(
             (w0, w1), movable=True, brush=WINDOW_BRUSH, hoverBrush=WINDOW_HOVER, pen=edge_pen,
             bounds=(0, iv.duration_s),
@@ -454,14 +500,15 @@ class WindowInspector(QWidget):
         lo, hi = region.getRegion()
         if hi - lo <= 0:
             return
-        current = iv.window if iv.window is not None else (iv.start, iv.end)
+        sw = self._session.step_window(iv, self._window)
+        current = sw.window if sw.window is not None else (iv.start, iv.end)
         new = (iv.start + float(lo), iv.start + float(hi))
         if abs(new[0] - current[0]) < 1e-6 and abs(new[1] - current[1]) < 1e-6:
             return
         # later: redrawing deletes this region, which must not happen inside its own signal
-        step_id = self._step_id
-        QTimer.singleShot(0, lambda: self.override_changed.emit(step_id, *new))
+        step_id, window = self._step_id, self._window
+        QTimer.singleShot(0, lambda: self.override_changed.emit(step_id, *new, window))
 
     def _on_reset(self) -> None:
         if self._step_id is not None:
-            self.override_cleared.emit(self._step_id)
+            self.override_cleared.emit(self._step_id, self._window)

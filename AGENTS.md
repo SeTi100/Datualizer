@@ -121,6 +121,7 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
 - Plot-Export (`plot_export`): Jedes Gerät mit logisch 96 dpi bemalen und über den Painter skalieren. pyqtgraph zeichnet Achsen in ein `QPicture`, das Qt auf einem Gerät mit anderer Auflösung noch einmal skaliert (Achsen doppelt so gross). Die PNG-dpi erst nach dem Malen setzen, Item-Caches abschalten (sonst landen Bitmaps im PDF), Stifte kosmetisch lassen und ihre Breite in Gerätepixeln angeben. Qt-Rich-Text nimmt nur ganze `px`.
 - Qt gibt `str`-Enums aus `itemData`/`QAction.data()` als einfachen `str` zurück. Deshalb `.value` speichern und beim Lesen wieder in das Enum umwandeln.
 - **PySide6 6.12.0** bricht die GUI-Tests mit einem Speicherfehler ab („deallocating None“). `pyproject.toml` begrenzt deshalb auf `<6.12`. Vor dem Anheben die GUI-Tests mit der neuen Version mehrfach laufen lassen.
+- Ein Dialog mit eigenem `QTimer` (z. B. Debounce für Vorschauen) muss den Timer bei `closeEvent`, `accept`, `reject` und `_remove` stoppen (`self._timer.stop()`). Läuft ein Timer bei Prozessende weiter oder wird ein im Test erzeugter Dialog nicht per `deleteLater()` aufgeräumt, warnt Qt beim Pytest-Teardown („QObject: shared QObject was deleted directly“) und stürzt unter Linux mit Segfault (Exit-Code 139) bzw. unter Windows mit 0xC0000409 ab.
 - Änderungen an `.github/workflows/` brauchen beim Push den OAuth-Scope `workflow` (`gh auth refresh -s workflow`).
 
 ---

@@ -282,3 +282,35 @@ def test_hidden_coverage_strip_is_freed(qapp: QApplication, coverage_window: Cam
     first, *others = coverage_window.canvas.plot_items.values()
     assert first.getViewBox().linkedView(0) is None  # the first subplot is the x master again
     assert all(p.getViewBox().linkedView(0) is first.getViewBox() for p in others)
+
+
+def test_mask_and_derived_channel_in_gui(qapp: QApplication, window: CampaignWindow) -> None:
+    window.resize(1200, 700)
+    window.show()
+    qapp.processEvents()
+    s = window._session
+    fid_src = s.campaign.sources[0]
+
+    # 1. Add mask via session and refresh
+    span = s.span(fid_src.id)
+    s.add_mask(fid_src.id, span[0] + 10, span[0] + 50, channels=[], reason="Test mask")
+    window.refresh_plot()
+    qapp.processEvents()
+
+    assert len(window.canvas.masks) == 1
+    assert window.canvas.masks[0].reason == "Test mask"
+    assert len(window.canvas.masks_items) > 0
+
+    # Readout includes mask note
+    _, _, notes = window.canvas.readout_rows(span[0] + 20)
+    assert any("Test mask" in n for n in notes)
+
+    # 2. Add derived channel
+    from datualizer_core.campaign import DerivedChannel
+    s.add_derived(fid_src.id, DerivedChannel(name="fid_scaled", expr="signal * 2", unit="pA"))
+    window.sources_panel._changed(fid_src.id)
+    qapp.processEvents()
+
+    ds = s.datasets[fid_src.id]
+    assert "fid_scaled" in ds.channels
+    window.close()

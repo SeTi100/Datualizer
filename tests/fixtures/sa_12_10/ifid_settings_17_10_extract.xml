@@ -1,0 +1,26 @@
+<settings>
+    <calib_data>
+        <cal_status>1</cal_status>
+        <time_last_cal>17.10.2026 11:19:52</time_last_cal>
+        <std_gas>5.000000e+001</std_gas>
+        <sig_span>2.151918e+002</sig_span>
+        <sens>4.213281e+000</sens>
+        <zero>4.527784e+000</zero>
+    </calib_data>
+    <calib_init>
+        <cal_status>1</cal_status>
+        <time_last_cal>12.10.2026 08:59:41</time_last_cal>
+        <std_gas>5.000000e+001</std_gas>
+        <sig_span>2.173043e+002</sig_span>
+        <sens>4.293376e+000</sens>
+        <zero>2.635439e+000</zero>
+    </calib_init>
+    <rf-select>
+        <chem-id>211</chem-id>
+        <num-carbon>3</num-carbon>
+        <mol-weight>4.409000e+001</mol-weight>
+        <rsp-fac>1.000000e+000</rsp-fac>
+        <name-eng>Propane</name-eng>
+        <name-ger>Propan</name-ger>
+    </rf-select>
+</settings>

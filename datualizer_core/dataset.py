@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
@@ -160,6 +160,10 @@ class DualModeDataset:
         else:
             self._time_col = time_col
         self._column_kinds = self._derive_column_kinds(column_kinds or {})
+        # set by with_calculated: flags of the parent plus own detection on the new channels only
+        self._flag_parent: DualModeDataset | None = None
+        self._own_flag_channels: list[str] = []
+        self._extra_flags: pl.DataFrame | None = None
         self._cached_long_df: pl.DataFrame | None = None
         self._fill_ratio: dict[str, float] | None = None
         self._runs: pl.DataFrame | None = None
@@ -314,6 +318,49 @@ class DualModeDataset:
             source_meta=self._source_meta,
         )
 
+    def with_calculated(
+        self,
+        df: pl.DataFrame,
+        units: dict[str, str] | None = None,
+        channel_attrs: dict[str, dict[str, Any]] | None = None,
+        extra_flags: pl.DataFrame | None = None,
+    ) -> "DualModeDataset":
+        """Return a new dataset with calculated channels appended; this one is not changed.
+
+        `df` must be this dataset's `df` (same rows, same columns and values) plus new numeric
+        columns at the end; they become channels flagged like calculated ones (a null is
+        `missing_calculated`). `extra_flags` are further flag events (`row, channel, flag`), e.g.
+        masks set by the user. The flags of this dataset are kept as they are, only the new
+        channels are run through detection.
+        """
+        new = [c for c in df.columns if c not in self._df.columns]
+        if len(df) != len(self._df) or df.columns[: self._df.width] != self._df.columns:
+            raise ValueError("with_calculated needs the same rows and columns, with new columns at the end.")
+        quality = self._quality
+        if quality is not None:
+            quality = replace(quality, calculated_channels=[*quality.calculated_channels, *new])
+        out = DualModeDataset(
+            df=df,
+            audit_log=self._audit_log,
+            time_col=self._time_col,
+            column_kinds={**self._column_kinds, **{c: ColumnKind.NUMERIC for c in new}},
+            channel_attrs={**self._channel_attrs, **(channel_attrs or {})},
+            source_format=self._source_format,
+            ingestion_spec=self._ingestion_spec,
+            run_columns=self._run_columns,
+            aborted_run_fraction=self._aborted_run_fraction,
+            sources=self._sources,
+            quality=quality,
+            units={**self._units, **(units or {})},
+            time_origin=self._time_origin,
+            time_zone=self._time_zone,
+            source_meta=self._source_meta,
+        )
+        out._flag_parent = self
+        out._own_flag_channels = new
+        out._extra_flags = extra_flags
+        return out
+
     @property
     def time_origin(self) -> datetime | None:
         """Absolute time of `time_seconds == 0`; None if the source has no absolute time.
@@ -371,15 +418,29 @@ class DualModeDataset:
         or the dataset was built in memory without quality settings.
         """
         if self._quality_flags is None:
-            if self._quality is None:
-                self._quality_flags = _quality.empty_flags()
+            notes: list[dict] = []
+            if self._flag_parent is not None:
+                parts = [self._flag_parent.quality_flags]
+                note_parts = [self._flag_parent.quality_notes]
+                if self._quality is not None and self._own_flag_channels:
+                    own = _quality.detect_flags(
+                        self._df, self._time_col, self._run_columns, self._own_flag_channels, self._quality, notes
+                    )
+                    parts.append(own.filter(pl.col("channel").is_not_null()))  # row-level ones come from the parent
+                flags = pl.concat(parts)
+                self._quality_notes = pl.concat([*note_parts, pl.DataFrame(notes, schema=_quality.NOTES_SCHEMA)])
+            elif self._quality is None:
+                flags = _quality.empty_flags()
                 self._quality_notes = _quality.empty_notes()
             else:
-                notes: list[dict] = []
-                self._quality_flags = _quality.detect_flags(
+                flags = _quality.detect_flags(
                     self._df, self._time_col, self._run_columns, self.channels, self._quality, notes
                 )
                 self._quality_notes = pl.DataFrame(notes, schema=_quality.NOTES_SCHEMA)
+            if self._extra_flags is not None:
+                flags = pl.concat([flags, self._extra_flags.select(list(_quality.FLAGS_SCHEMA))]).unique()
+                flags = flags.sort("row", "channel", "flag", nulls_last=False)
+            self._quality_flags = flags
         return self._quality_flags
 
     @property

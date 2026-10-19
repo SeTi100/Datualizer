@@ -1,6 +1,6 @@
 {
   "name": "instrument_reader_db",
-  "description": "instrument_reader-Datenbank (SQLite): OCR-Messwerte je ROI mit Run und Experiment, als Long-Tabelle. readings.timestamp ist Lokalzeit; ungültige Lesungen (is_valid = 0) werden zu leeren Werten.",
+  "description": "instrument_reader-Datenbank (SQLite): OCR-Messwerte je ROI mit Run und Experiment, als Long-Tabelle. readings.timestamp ist Lokalzeit; ungültige Lesungen (is_valid = 0) werden zu leeren Werten. Die Run-Parameter (parameters_json) werden in Spalten zerlegt (V_MFC, Temperatur, Volumenstrom, f_Fan …).",
   "reader": "sqlite",
   "file_patterns": [
     "*.db",
@@ -14,7 +14,10 @@
     "experiments"
   ],
   "sqlite": {
-    "query": "SELECT r.timestamp, e.id AS experiment_id, e.name AS experiment_name, e.voc_type, r.run_id, ru.target_temperature, ru.parameters_json AS run_parameters, r.phase_status, r.roi_name, CASE WHEN r.is_valid = 1 THEN r.parsed_value END AS parsed_value, r.unit, r.is_calculated FROM readings r JOIN runs ru ON ru.id = r.run_id JOIN experiments e ON e.id = ru.experiment_id ORDER BY r.timestamp, r.id"
+    "query": "SELECT r.timestamp, e.id AS experiment_id, e.name AS experiment_name, e.voc_type, r.run_id, ru.target_temperature, ru.parameters_json AS run_parameters, r.phase_status, r.roi_name, CASE WHEN r.is_valid = 1 THEN r.parsed_value END AS parsed_value, r.unit, r.is_calculated FROM readings r JOIN runs ru ON ru.id = r.run_id JOIN experiments e ON e.id = ru.experiment_id ORDER BY r.timestamp, r.id",
+    "json_columns": [
+      "run_parameters"
+    ]
   },
   "ingestion": {
     "time_column": "timestamp",

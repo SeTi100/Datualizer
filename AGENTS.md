@@ -172,6 +172,7 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
   - Einstellungen des Kampagnenfensters, Teil 5: Export als PNG, SVG, PDF (`components/plot_export.py`, `canvas.export_copy()`, Dialog `components/export_dialog.py`)
   - Schritt 7 (PR 9 im Plan Auswertung): Uhrenabgleich in `campaign/sync.py`. Versatz aus Uhrenpaaren in Zellen (`ClockCells`/`CellPair` im `ClockModel.cells`, `session.clock_from_cells`, Median ± Streuung, `method="journal_pairs"`; Zellen sind Konfiguration, nie im Code), Kreuzkorrelation (`session.cross_correlate` → `XCorrResult`, maskiertes Pearson-r per FFT, Lücken nie überbrückt, Ampel in `checks`), `ClockModel.shifted`, `read_cells`/`sheet_names` im Excel-Reader, Dialog *Align Clock…* im Quellen-Dock
   - Schritt 8, PR 1 (siehe [Plan Auswertung](docs/PLAN_AUSWERTUNG_KAMPAGNE.md)): Formelkern `datualizer_core/calc/`. `compile_expr` prüft gegen eine Positivliste (nie `eval`), `Expr.to_polars()` und `Expr.evaluate()` rechnen dasselbe (NaN-Vergleiche nach IEEE auch in Polars); `UArray` pflanzt Unsicherheiten exakt linear fort (`budget`, `u_random`, `u_syst`, syst. Eingänge gleicher `group` voll korreliert); `Constant`
+  - Schritt 8, PR 2: Rechenkanäle (`DerivedChannel` mit `pieces` nach Master-Zeit), Masken (`Mask`, `CampaignSource.masks`, Flag `masked`, Schraffur im Kampagnenplot, Ausschluss in Statistik), XML-Reader für Testa-iFID `Settings*.xml` und `suggest_linear_calibration`, `SqliteOptions.json_columns` (`parameters_json` zerlegen)
 
 **Nächste offene Punkte:**
 

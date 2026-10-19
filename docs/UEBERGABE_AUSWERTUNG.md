@@ -385,10 +385,15 @@ docs/PLAN_AUSWERTUNG_KAMPAGNE.md vollständig (insbesondere 4 und 7) und
 C:\Users\timkl\OneDrive - OST\Dokumente\SA\auswertung\AUSWERTUNG_LIESMICH.md sowie
 …\auswertung\tage\2026-10-1{2,5,7}.json. Voraussetzung: PR 1–9 und 9b in main.
 
-Ausgangspunkt ist das Probeskript in …\SA\datualizer_probe\: Es baut die Kampagne mit der
+Ausgangspunkt ist das Probeskript …\SA\datualizer_probe\probe_kampagne.py (alle drei Tage): Es baut die Kampagne mit der
 API von main nach und vergleicht mit der Skript-Auswertung. Ergebnis 17.10. (Stand 19.10.):
 X ± 0.001, c_in ≤ 0.06 %, Blindwert ± 0.003 mgC, 9/9 Bewertungen gleich; u(X) kleiner, weil
-die Restdrift fehlt. Die dort markierten Workarounds sind die Aufgabenliste unten.
+die Restdrift fehlt. 12.10.: 24/24 Stufen X ± 0.005 und gleiche Bewertung (c_in nur bei Z14/Z23
+mit c_ein < 60 anders: andere Wahl der Massenquelle). 15.10.: 8/14 X ± 0.005, Bewertungen 14/14
+gleich; Run48–53 weichen bis 0.04 ab, weil der Blindwert ohne Luftstrom-Parameter auch eine
+Null-Phase bei 50 m³/h trifft (→ PR 9b parameter_defaults). T50 179/203 °C wie im Skript.
+Die im Skript mit WORKAROUND markierten Stellen und die Befundliste am Ende der Ausgabe sind die
+Aufgabenliste unten.
 
 Vorher die Referenz frisch rechnen (das Journal hat sich geändert), im SA-Ordner mit
 geschlossenem Excel: `python auswertung/katalyse_plots.py --roh`. Die Tageskonfigurationen
@@ -409,6 +414,11 @@ Aufgabe (PR 10 von 10):
       die Kampagne über mehrere Tage (je Tag andere Quellen).
    e) Konstanten je Tag (Raumluft 1.7 / 1.9 / 2.09 mgC als Rückfall des Blindwerts): über
       `CellValue` aus PR 9b (Journal-Zelle "Baseline mgC") oder `Constant` je scope.
+   f) Fehler: Eine NaN-Unsicherheit in einem nicht gewählten Zweig von `where` macht u NaN
+      (Beitrag = Ableitung 0 · u NaN). Beitrag mit Ableitung 0 muss 0 sein. Nachstellen:
+      where(c > 0, a, b) mit b = NaN ± NaN → u(a) erwartet, heute NaN. Folge im Probelauf:
+      u(X) am 12.10. überall NaN, danach bricht fit_line mit "SVD did not converge" ab.
+   g) fit_line/crossing: Zeilen mit NaN in x, y oder u auslassen und melden statt abzubrechen.
 2. examples/campaign_SA_ethanol.json: Quellen der drei Messtage (Pfade relativ zur Datei,
    Datenordner über die Umgebungsvariable `DATUALIZER_SA_DIR`); Uhren (17.10. aus den
    Journal-Paaren, 12.10. 970 s, 15.10. 975 s); Rechenkanäle für die FID-Skala je Tag

@@ -180,6 +180,32 @@ def read_cells(path: str | Path, sheet: str | int | None, cells: Sequence[str]) 
     return out
 
 
+def read_sheet(path: str | Path, sheet: str | int | None) -> tuple[str, list[str], list[list[Any]], int]:
+    """All rows of one sheet with typed values (also those above the header).
+
+    Returns the sheet name, all sheet names, the rows (row 1 first) and the 1-based row the
+    reader would take as header. Only this sheet is read (.xlsx), so it is quick for a large journal.
+    """
+    path = Path(path)
+    if path.suffix.lower() == ".xls":
+        names, sheets = _rows_xls(path)
+        name = _pick_sheet(path, names, sheet)
+        rows = sheets[name]
+    else:
+        import openpyxl
+
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        try:
+            names = list(wb.sheetnames)
+            name = _pick_sheet(path, names, sheet)
+            rows = [list(r) for r in wb[name].iter_rows(values_only=True)]
+        finally:
+            wb.close()
+    while rows and all(v is None or str(v).strip() == "" for v in rows[-1]):
+        rows.pop()
+    return name, names, rows, _detect_header(rows) + 1 if rows else 1
+
+
 def read_excel(path: str | Path, options: ExcelOptions | None = None) -> RawTable:
     """Read one sheet of a workbook as an all-String table; small sheets become metadata."""
     path = Path(path)

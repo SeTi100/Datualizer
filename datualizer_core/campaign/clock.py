@@ -16,6 +16,7 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from datualizer_core.dataset import DualModeDataset
+from datualizer_core.ingestion.steps import CellDirection, CellRef
 from datualizer_core.timebase import origin_epoch_us
 
 
@@ -48,20 +49,42 @@ class ClockAnchor(BaseModel):
 
 
 class CellPair(BaseModel):
-    """Two cells holding the same event on two clocks, e.g. journal 'Start FID' C3 and 'Start Real' C4."""
+    """Two cells holding the same event on two clocks, e.g. journal 'Start FID' D3 and 'Start Real' D4.
+
+    Each side is an A1 address, or found by the label next to it: the `nth` non-empty cell right of
+    (or below) the text `source_label` / `master_label`. Labels survive inserted columns and rows.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    source_cell: str = Field(description="A1 reference of the time on the source's clock, e.g. 'C3'.")
-    master_cell: str = Field(description="A1 reference of the same event on the master clock, e.g. 'C4'.")
+    source_cell: str | None = Field(None, description="A1 reference of the time on the source's clock, e.g. 'D3'.")
+    master_cell: str | None = Field(None, description="A1 reference of the same event on the master clock, e.g. 'D4'.")
+    source_label: str | None = Field(None, description="Text left of (or above) the source times, e.g. 'Start FID'.")
+    master_label: str | None = Field(None, description="Text left of (or above) the master times, e.g. 'Start Real'.")
+    nth: int = Field(1, ge=1, description="With labels: the n-th value next to the label (1 = first pair).")
+    direction: CellDirection = "right"
     note: str = ""
+
+    @model_validator(mode="after")
+    def _each_side_once(self) -> "CellPair":
+        for side in ("source", "master"):
+            cell, label = getattr(self, f"{side}_cell"), getattr(self, f"{side}_label")
+            if (cell is None) == (label is None):
+                raise ValueError(f"Cell pair: give the {side} time either as cell or as label.")
+        return self
+
+    def refs(self) -> tuple[CellRef, CellRef]:
+        def ref(cell: str | None, label: str | None) -> CellRef:
+            return CellRef(cell=cell) if cell is not None else CellRef(label=label, nth=self.nth, direction=self.direction)
+
+        return ref(self.source_cell, self.source_label), ref(self.master_cell, self.master_label)
 
 
 class ClockCells(BaseModel):
     """Where clock pairs are written down in a workbook of the campaign (e.g. the lab journal).
 
-    Which cells hold which clock differs from journal to journal, so all of it is configured,
-    nothing is looked up by label.
+    Which cells hold which clock differs from journal to journal, so all of it is configured:
+    by address or by the label next to the times (robust when the journal gains columns).
     """
 
     model_config = ConfigDict(extra="forbid")

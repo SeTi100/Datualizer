@@ -1,6 +1,6 @@
 {
   "name": "labjournal_xlsx",
-  "description": "Labjournal (Excel): ein Blatt pro Messtag, Messschritte mit Zeit_0/Zeit_1. Blatt und Datum (TimeConfig.clock_date) pro Tag angeben. Messschritte (Vorschlag): Start Zeit_0, Ende Zeit_1, Name aus der Blockspalte A (nur in der ersten Zeile eines Blocks), Sollwerte Temperatur und V_MFC.",
+  "description": "Labjournal (Excel): ein Blatt pro Messtag, Messschritte mit Zeit_0/Zeit_1. Blatt und Datum (TimeConfig.clock_date) pro Tag angeben. Messschritte (Vorschlag): Start Zeit_0, Ende Zeit_1, Name aus der Blockspalte A (nur in der ersten Zeile eines Blocks), Sollwerte Temperatur und V_MFC; das Lesen endet, wo die Startzeit zurückspringt (Block eines anderen Tages darunter). Spalten werden über die Überschrift gefunden.",
   "reader": "excel",
   "file_patterns": [
     "*.xlsx",
@@ -31,7 +31,10 @@
     "parameter_columns": [
       "Temperatur",
       "V_MFC"
-    ]
+    ],
+    "rows": {
+      "stop": "time_jump"
+    }
   },
   "plot_style": "step"
 }

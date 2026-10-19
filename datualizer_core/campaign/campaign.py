@@ -45,14 +45,18 @@ from datualizer_core.campaign.evaluation import (
     parameter_columns,
 )
 from datualizer_core.campaign.intervals import (
+    CellValue,
     Interval,
     IntervalConfigError,
     IntervalMapping,
     IntervalSet,
     ResolvedInterval,
+    StepDerivation,
     WindowOverride,
     WindowRule,
-    derive_intervals,
+    derive_steps,
+    diff_snapshot,
+    grid_from_dataset,
     master_datetime,
     resolve_manual,
     suggest_mapping,
@@ -60,6 +64,9 @@ from datualizer_core.campaign.intervals import (
 from datualizer_core.campaign.sync import XCorrResult, clock_from_cells, cross_correlate
 from datualizer_core.dataset import DualModeDataset
 from datualizer_core.ingestion.config import IngestionConfig
+from datualizer_core.ingestion.grid import Grid, GridError, Located, display_text, locate
+from datualizer_core.ingestion.readers.base import ReaderError
+from datualizer_core.ingestion.readers.excel import read_sheet
 from datualizer_core.ingestion.profiles import SourceProfile, detect_profile
 from datualizer_core.ingestion.source_loader import load_source
 from datualizer_core.schema import PlotStyle
@@ -258,8 +265,10 @@ class CampaignSession:
         self._coverage_cache: dict[tuple[str, tuple[str, ...] | None], tuple[np.ndarray | None, SourceCoverage]] = {}
         self._interval_cache: tuple[tuple, IntervalSet] | None = None
         self._class_cache: tuple[tuple, StepClassification] | None = None
+        self._grid_cache: dict[tuple, Grid] = {}
         for src in self.campaign.sources:
             self._load(src)
+        self._check_step_tables()
 
     # ---------------------------------------------------------------- sources
     def resolve(self, src: CampaignSource) -> Path:
@@ -271,9 +280,22 @@ class CampaignSession:
         if not path.is_file():
             self.warnings.append(f"{src.id}: file not found: {path}")
             return
-        if src.sha256 and _sha256(path) != src.sha256:
+        changed = bool(src.sha256) and _sha256(path) != src.sha256
+        if changed:
             self.warnings.append(f"{src.id}: file changed since it was added ({path.name})")
-        self._raw[src.id] = load_source(path, src.profile, config=src.spec)
+        try:
+            self._raw[src.id] = load_source(path, src.profile, config=src.spec)
+        except ValueError as exc:
+            if not changed or src.spec is None:
+                raise
+            # a changed file (e.g. a journal with a new column) may not fit the saved spec: read it
+            # anew with the profile, say so, and keep the new spec for the next replay
+            ds = load_source(path, src.profile)
+            self.warnings.append(
+                f"{src.id}: the saved reading spec does not fit the changed file ({exc}); read anew with the profile."
+            )
+            src.spec = ds.ingestion_spec
+            self._raw[src.id] = ds
 
     @property
     def datasets(self) -> dict[str, DualModeDataset]:
@@ -611,16 +633,31 @@ class CampaignSession:
         ds = self.datasets.get(source_id)
         if ds is None:
             raise IntervalConfigError(f"Source {source_id!r} is not loaded.")
-        return suggest_mapping(ds, source_id, src.profile.intervals if src.profile else None)
+        hints = src.profile.intervals if src.profile else None
+        if hints is not None:
+            m = IntervalMapping(source_id=source_id, **hints.model_dump())
+            try:
+                self.derive_mapping(m)
+                return m
+            except IntervalConfigError:
+                pass  # the profile does not fit this file: from the data shape
+        return suggest_mapping(ds, source_id, None)
 
     def set_mapping(self, mapping: IntervalMapping) -> None:
-        """Add or replace the step mapping of `mapping.source_id` (checked against the data first)."""
+        """Add or replace the step mapping of `mapping.source_id` (checked against the data first).
+
+        Windows set by hand follow their step if the mapping gives it another id (noted in `warnings`).
+        """
         self.campaign.source(mapping.source_id)
         if mapping.clock_source is not None:
             self.campaign.source(mapping.clock_source)
+        old = next((m for m in self.campaign.interval_mappings if m.source_id == mapping.source_id), None)
+        if mapping.resolved is None and old is not None:
+            mapping = mapping.model_copy(update={"resolved": old.resolved})
         self.preview_steps(mapping)  # unknown columns fail loudly here, not later in the plot
         others = [m for m in self.campaign.interval_mappings if m.source_id != mapping.source_id]
         self.campaign.interval_mappings = others + [mapping]
+        self.warnings += self.relink_overrides()
 
     def remove_mapping(self, source_id: str) -> None:
         self.campaign.interval_mappings = [m for m in self.campaign.interval_mappings if m.source_id != source_id]
@@ -723,7 +760,8 @@ class CampaignSession:
         start, end = sorted((start, end))
         zone = self.campaign.timezone
         ov = WindowOverride(
-            start=master_datetime(start, zone), end=master_datetime(end, zone), label=step.label, window=window
+            start=master_datetime(start, zone), end=master_datetime(end, zone), label=step.label,
+            step_start=master_datetime(step.start, zone), window=window,
         )
         self.campaign.window_overrides[override_key(step_id, window)] = ov
         return ov
@@ -777,13 +815,147 @@ class CampaignSession:
 
     def preview_steps(self, m: IntervalMapping):
         """Steps a mapping would give (without storing it); unknown columns raise IntervalConfigError."""
-        ds = self.datasets.get(m.source_id)
-        if ds is None:
+        if m.source_id not in self._raw:
             return [], [f"{m.source_id}: source not loaded, no steps."]
+        d = self.derive_mapping(m)
+        return d.intervals, d.problems
+
+    # ------------------------------------------------------------- step tables
+    def step_grid(self, source_id: str, sheet: str | None = None) -> Grid:
+        """Raw cells a step mapping of the source reads.
+
+        A workbook gives the whole sheet as in Excel (`sheet`, default the one the source was
+        loaded from); other sources give the loaded table (header in row 1, the time column as
+        date-times under its original header). Raises IntervalConfigError if not loaded.
+        """
+        src = self.campaign.source(source_id)
+        raw = self._raw.get(source_id)
+        if raw is None:
+            raise IntervalConfigError(f"Source {source_id!r} is not loaded.")
+        meta = raw.source_meta
+        if meta.get("reader") == "excel":
+            path = self.resolve(src)
+            sheet = sheet or meta.get("sheet")
+            key = ("sheet", source_id, str(path), path.stat().st_mtime_ns if path.exists() else 0, sheet)
+            grid = self._grid_cache.get(key)
+            if grid is None:
+                try:
+                    name, names, rows, detected = read_sheet(path, sheet)
+                except (ReaderError, OSError) as exc:
+                    raise IntervalConfigError(f"{source_id}: {exc}") from None
+                reader_row = meta.get("header_row") if name == meta.get("sheet") else detected
+                grid = Grid(rows=rows, kind="sheet", sheet=name, sheets=tuple(names), reader_header_row=reader_row)
+                self._grid_cache[key] = grid
+            return grid
+        ds = self.datasets[source_id]
+        key = ("table", source_id, id(ds), self.campaign.timezone, self._time_name(src))
+        grid = self._grid_cache.get(key)
+        if grid is None:
+            grid = grid_from_dataset(ds, self.campaign.timezone, self._time_name(src))
+            self._grid_cache = {k: v for k, v in self._grid_cache.items() if k[:2] != ("table", source_id)}
+            self._grid_cache[key] = grid
+        return grid
+
+    @staticmethod
+    def _time_name(src: CampaignSource) -> str:
+        cfg = src.spec or (src.profile.ingestion if src.profile is not None else None)
+        return (cfg.time_column if cfg is not None else None) or "time"
+
+    def cell_value(self, cv: CellValue, mapping: IntervalMapping | None = None) -> Located:
+        """The cell a `CellValue` names (in the mapping's source and sheet unless it says otherwise).
+
+        A missing or ambiguous label raises IntervalConfigError with a suggestion.
+        """
+        sid = cv.source_id or (mapping.source_id if mapping is not None else None)
+        if sid is None:
+            raise IntervalConfigError(f"Cell value {cv.name!r}: no source.")
+        sheet = cv.sheet or (mapping.sheet if mapping is not None and sid == mapping.source_id else None)
+        try:
+            return locate(self.step_grid(sid, sheet), cv)
+        except (GridError, ValueError) as exc:
+            raise IntervalConfigError(f"{sid}: cell value '{cv.name}': {exc}") from None
+
+    def derive_mapping(self, m: IntervalMapping) -> StepDerivation:
+        """Steps of a mapping with the state of every row of its table (for the mapping dialog).
+
+        Raises IntervalConfigError for a missing header, a `where` formula that does not fit, or a
+        labelled cell that is not found.
+        """
         src = self.campaign.source(m.source_id)
+        grid = self.step_grid(m.source_id, m.sheet)
         clock = self.campaign.source(m.clock_source or m.source_id).clock
-        formats = src.spec.time.datetime_formats if src.spec is not None else ()
-        return derive_intervals(ds, m, self.campaign.timezone, clock, self.campaign.window_rule, formats)
+        cfg = src.spec or (src.profile.ingestion if src.profile is not None else IngestionConfig())
+        extra, notes = {}, []
+        for cv in m.cell_values:
+            hit = self.cell_value(cv, m)
+            value = hit.value
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                value = display_text(value)
+            else:
+                value = float(value)
+            extra[cv.name] = value
+            where = f" ({cv.describe()})" if cv.label else ""
+            notes.append(f"{m.source_id}: '{cv.name}' = {display_text(hit.value)} from cell {hit.address}{where}.")
+        return derive_steps(
+            grid, m, self.campaign.timezone, clock, self.campaign.window_rule,
+            day=cfg.time.clock_date, datetime_formats=cfg.time.datetime_formats,
+            time_name=self._time_name(src), extra_params=extra, extra_notes=notes,
+        )
+
+    def _check_step_tables(self) -> None:
+        """On open: compare every step table with how it was saved; windows set by hand follow their steps."""
+        zone = self.campaign.timezone
+        for m in self.campaign.interval_mappings:
+            if m.resolved is None or m.source_id not in self._raw:
+                continue
+            try:
+                new = self.derive_mapping(m).snapshot(zone)
+            except (IntervalConfigError, KeyError) as exc:
+                self.warnings.append(f"{m.source_id}: steps cannot be read any more: {exc}")
+                continue
+            self.warnings += diff_snapshot(m.source_id, m.resolved, new)
+        self.warnings += self.relink_overrides()
+
+    def relink_overrides(self) -> list[str]:
+        """Move windows set by hand to their step if it now has another id (e.g. rows were inserted).
+
+        A step is the same if it has the override's step name and start (or contains its window,
+        for overrides saved without the start). Only a unique match is moved; what does not fit
+        stays and is reported by `intervals().problems`. Returns what was moved.
+        """
+        overrides = self.campaign.window_overrides
+        if not overrides:
+            return []
+        zone = self.campaign.timezone
+        steps = self.intervals().intervals
+        by_id = {iv.id: iv for iv in steps}
+        moved, out = [], dict(overrides)
+        for key, ov in overrides.items():
+            sid = key if ov.window is None else key[: -len(ov.window) - 1]
+            iv = by_id.get(sid)
+            if iv is not None and (not ov.label or ov.label == iv.label) and (
+                ov.step_start is None or abs(iv.start - to_epoch_s(ov.step_start, zone)) <= 1.0
+            ):
+                continue
+            hits = [s for s in steps if s.label == ov.label and not s.manual]
+            if ov.step_start is not None:
+                t0 = to_epoch_s(ov.step_start, zone)
+                hits = [s for s in hits if abs(s.start - t0) <= 1.0]
+            else:
+                lo, hi = to_epoch_s(ov.start, zone), to_epoch_s(ov.end, zone)
+                hits = [s for s in hits if s.start - 1.0 <= lo and hi <= s.end + 1.0]
+            if len(hits) != 1 or hits[0].id == sid:
+                continue
+            new_key = hits[0].id if ov.window is None else f"{hits[0].id}@{ov.window}"
+            if new_key in out:
+                continue
+            del out[key]
+            out[new_key] = ov
+            moved.append(f"{sid}: window set by hand moved to {hits[0].id} (same step '{ov.label}').")
+        if moved:
+            self.campaign.window_overrides = out
+            self._interval_cache = None
+        return moved
 
     # ---------------------------------------------------------- window statistics
     def set_stats_config(self, config: StatsConfig) -> None:
@@ -1267,6 +1439,12 @@ class CampaignSession:
         """Write campaign.json; source paths become relative to its folder where possible."""
         path = Path(path).resolve()
         out = self.campaign.model_copy(deep=True)
+        for i, m in enumerate(out.interval_mappings):  # how the steps were, to report changes on open
+            try:
+                snap = self.derive_mapping(m).snapshot(out.timezone)
+            except (IntervalConfigError, KeyError):
+                continue
+            out.interval_mappings[i] = m.model_copy(update={"resolved": snap})
         for src in out.sources:
             p = self.resolve(src).resolve()
             try:

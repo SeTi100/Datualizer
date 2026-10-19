@@ -169,10 +169,11 @@ def test_window_rule_from_the_panel(window: CampaignWindow) -> None:
 def test_mapping_dialog_prefilled_and_changeable(window: CampaignWindow) -> None:
     dialog = MappingDialog(window.session, window, source_id=JOURNAL.stem)
     m = dialog.mapping()
-    assert (m.end.column, m.label_columns, m.fill_down) == ("zeit_1", ["col_a"], ["col_a"])
+    assert (m.end.column, m.label_columns, m.fill_down) == ("Zeit_1", ["col_A"], ["col_A"])  # header texts
     assert "38 steps" in dialog.preview.text()
     dialog.end_kind.setCurrentIndex(dialog.end_kind.findText("Fixed length"))
     dialog.end_seconds.setValue(60)
+    dialog.refresh_now()  # the preview follows after a short pause while typing
     assert "38 steps" in dialog.preview.text()
     dialog.accept()
     assert window.session.intervals().intervals[0].duration_s == 60

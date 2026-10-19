@@ -554,7 +554,7 @@ def derive_steps(
     if stop_at is not None:
         after = [r for r in candidates if r >= stop_at]
         exclude(after, stop_why, report=False)
-        problems.append(f"{sid}: {stop_why}; {_rows_text([r for r in after])} not read.")
+        problems.append(f"{sid}: {stop_why}; {_rows_text(range(stop_at, max(after) + 1))} not read.")
         candidates = [r for r in candidates if r < stop_at]
 
     # formula over the row values

@@ -285,7 +285,11 @@ class CampaignWindow(QMainWindow):
         self._path = Path(path)
         self.canvas.set_time_axis(self.canvas.time_axis_mode, self._session.time_reference_s)
         self._refresh_all()
-        self.status_bar.showMessage(f"Opened {self._path.name}")
+        notes = len(self._session.warnings)
+        # changed files and step tables are listed in the Sources dock (session.warnings)
+        self.status_bar.showMessage(
+            f"Opened {self._path.name}" + (f" · {notes} notes on changed files, see Sources" if notes else "")
+        )
 
     def save_campaign(self, path: str | Path) -> None:
         self._session.save(path)

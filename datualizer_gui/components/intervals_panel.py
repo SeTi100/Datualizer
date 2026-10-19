@@ -1,5 +1,7 @@
 """Measurement steps of a campaign: table, step mapping dialog and window rule (Etappe 2b, step 5).
 
+The mapping dialog shows the sheet itself (`step_mapping_dialog.StepMappingDialog`, PR 9b).
+
 The column "Class" shows the step class from `Evaluation.step_classes` (PR 3); a step without a
 class or with several is marked and its hint is in the tooltip.
 """
@@ -12,14 +14,11 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDialog,
-    QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QTableWidget,
@@ -29,28 +28,12 @@ from PySide6.QtWidgets import (
 )
 
 from datualizer_core.calc import ExprError
-from datualizer_core.campaign import (
-    CampaignSession,
-    IntervalConfigError,
-    IntervalMapping,
-    WindowRule,
-    master_datetime,
-)
-from datualizer_core.campaign.intervals import resolve_column
-from datualizer_core.ingestion.steps import EndKind, EndRule
-from datualizer_core.schema import ColumnKind
+from datualizer_core.campaign import CampaignSession, WindowRule, master_datetime
+from datualizer_gui.components.step_mapping_dialog import StepMappingDialog
 
 ROLE_ID = Qt.ItemDataRole.UserRole
 COLUMNS = ["Step", "Class", "Start", "End", "Duration", "Origin", "Parameters"]
 HINT_COLOR = QColor("#ffb86c")  # a class cell with a hint (no class, or several)
-TIME_COLUMN = "(time column of the source)"
-OWN_CLOCK = "(clock of this source)"
-END_KINDS = [
-    (EndKind.COLUMN, "End time column"),
-    (EndKind.DURATION, "Duration column (s)"),
-    (EndKind.NEXT_START, "Until the next step starts"),
-    (EndKind.FIXED, "Fixed length"),
-]
 
 
 def _duration(seconds: float) -> str:
@@ -243,181 +226,10 @@ class IntervalsPanel(QWidget):
         if self._session is None or not self._session.datasets:
             QMessageBox.information(self, "No sources", "Add a source that lists the steps (e.g. a lab journal) first.")
             return
-        dialog = MappingDialog(self._session, self)
+        dialog = StepMappingDialog(self._session, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.changed.emit()
 
 
-class MappingDialog(QDialog):
-    """Choose which columns of a source give the steps; pre-filled with the suggestion, with a preview."""
-
-    def __init__(self, session: CampaignSession, parent: QWidget | None = None, source_id: str | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Steps from Source")
-        self.resize(560, 640)
-        self._session = session
-        self._filling = False
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        self.source = QComboBox()
-        for src in session.campaign.sources:
-            if src.id in session.datasets:
-                self.source.addItem(src.label or src.id, src.id)
-        self.start = QComboBox()
-        self.end_kind = QComboBox()
-        for kind, text in END_KINDS:
-            self.end_kind.addItem(text, kind.value)  # Qt hands str enums back as plain str
-        self.end_column = QComboBox()
-        self.end_seconds = QDoubleSpinBox()
-        self.end_seconds.setRange(0.1, 1e6)
-        self.end_seconds.setValue(300)
-        self.end_seconds.setSuffix(" s")
-        self.clock = QComboBox()
-        self.labels = QListWidget()
-        self.fill_down = QListWidget()
-        self.params = QListWidget()
-        for w in (self.labels, self.fill_down, self.params):
-            w.setMaximumHeight(110)
-        form.addRow("Source", self.source)
-        form.addRow("Start", self.start)
-        form.addRow("End", self.end_kind)
-        form.addRow("End column", self.end_column)
-        form.addRow("Length", self.end_seconds)
-        form.addRow("Times on clock of", self.clock)
-        form.addRow("Name from", self.labels)
-        form.addRow("Only in first row of a block", self.fill_down)
-        form.addRow("Set points", self.params)
-        layout.addLayout(form)
-        self.preview = QLabel()
-        self.preview.setWordWrap(True)
-        self.preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(self.preview, stretch=1)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        self.btn_remove = buttons.addButton("Remove Mapping", QDialogButtonBox.ButtonRole.DestructiveRole)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        self.btn_remove.clicked.connect(self._remove)
-        layout.addWidget(buttons)
-
-        self.source.currentIndexChanged.connect(self._fill)
-        for combo in (self.start, self.end_kind, self.end_column, self.clock):
-            combo.currentIndexChanged.connect(self._update_preview)
-        self.end_seconds.valueChanged.connect(self._update_preview)
-        for lw in (self.labels, self.fill_down, self.params):
-            lw.itemChanged.connect(self._update_preview)
-        if source_id is not None:
-            self.source.setCurrentIndex(max(0, self.source.findData(source_id)))
-        self._fill()
-
-    # ---------------------------------------------------------------- fill
-    def _fill(self) -> None:
-        sid = self.source.currentData()
-        if sid is None:
-            return
-        self._filling = True
-        ds = self._session.datasets[sid]
-        existing = next((m for m in self._session.campaign.interval_mappings if m.source_id == sid), None)
-        mapping = existing or self._session.suggest_mapping(sid)
-
-        def loaded(name: str | None) -> str | None:
-            try:
-                return resolve_column(ds, name) if name else None
-            except IntervalConfigError:
-                return None
-
-        cols = [c for c in ds.df.columns if ds.column_kinds.get(c) is not ColumnKind.TIME]
-        self.start.clear()
-        self.start.addItem(TIME_COLUMN, None)
-        for c in cols:
-            self.start.addItem(c, c)
-        self.start.setCurrentIndex(max(0, self.start.findData(loaded(mapping.start_column))))
-        self.end_kind.setCurrentIndex(self.end_kind.findData(mapping.end.kind.value))
-        self.end_column.clear()
-        for c in cols:
-            self.end_column.addItem(c, c)
-        if mapping.end.column:
-            self.end_column.setCurrentIndex(max(0, self.end_column.findData(loaded(mapping.end.column))))
-        if mapping.end.seconds:
-            self.end_seconds.setValue(mapping.end.seconds)
-        self.clock.clear()
-        self.clock.addItem(OWN_CLOCK, None)
-        for src in self._session.campaign.sources:
-            if src.id != sid:
-                self.clock.addItem(src.label or src.id, src.id)
-        self.clock.setCurrentIndex(max(0, self.clock.findData(mapping.clock_source)))
-        labels = {loaded(n) for n in mapping.label_columns}
-        fill = {loaded(n) for n in mapping.fill_down}
-        params = {loaded(n) for n in mapping.parameter_columns}
-        self._fill_list(self.labels, cols, labels)
-        self._fill_list(self.fill_down, cols, fill)
-        self._fill_list(self.params, [c for c in cols if c in ds.channels], params)
-        self._filling = False
-        self._update_preview()
-
-    @staticmethod
-    def _fill_list(lw: QListWidget, names: list[str], checked: set) -> None:
-        lw.clear()
-        for name in names:
-            item = QListWidgetItem(name)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked if name in checked else Qt.CheckState.Unchecked)
-            lw.addItem(item)
-
-    @staticmethod
-    def _checked(lw: QListWidget) -> list[str]:
-        return [lw.item(i).text() for i in range(lw.count()) if lw.item(i).checkState() == Qt.CheckState.Checked]
-
-    # ------------------------------------------------------------- mapping
-    def mapping(self) -> IntervalMapping:
-        """The mapping as currently chosen (raises ValueError if incomplete)."""
-        kind = EndKind(self.end_kind.currentData())
-        end = EndRule(
-            kind=kind,
-            column=self.end_column.currentData() if kind in (EndKind.COLUMN, EndKind.DURATION) else None,
-            seconds=self.end_seconds.value() if kind is EndKind.FIXED else None,
-        )
-        labels = self._checked(self.labels)
-        return IntervalMapping(
-            source_id=self.source.currentData(),
-            start_column=self.start.currentData(),
-            end=end,
-            label_columns=labels,
-            fill_down=[c for c in self._checked(self.fill_down) if c in labels],
-            parameter_columns=self._checked(self.params),
-            clock_source=self.clock.currentData(),
-        )
-
-    def _update_preview(self, *_args) -> None:
-        if self._filling:
-            return
-        kind = EndKind(self.end_kind.currentData())
-        self.end_column.setEnabled(kind in (EndKind.COLUMN, EndKind.DURATION))
-        self.end_seconds.setEnabled(kind is EndKind.FIXED)
-        try:
-            steps, problems = self._session.preview_steps(self.mapping())
-        except (ValueError, KeyError) as exc:
-            self.preview.setText(f"<span style='color:#ff6b6b'>{exc}</span>")
-            return
-        zone = self._session.campaign.timezone
-        lines = [f"<b>{len(steps)} steps</b>"]
-        for iv in steps[:6]:
-            lines.append(
-                f"{master_datetime(iv.start, zone):%H:%M:%S} – {master_datetime(iv.end, zone):%H:%M:%S}  {iv.label}"
-            )
-        if len(steps) > 6:
-            lines.append("…")
-        lines += [f"<span style='color:#ffb86c'>{p}</span>" for p in problems]
-        self.preview.setText("<br>".join(lines))
-
-    def accept(self) -> None:
-        try:
-            self._session.set_mapping(self.mapping())
-        except (ValueError, KeyError) as exc:
-            QMessageBox.critical(self, "Cannot use this mapping", str(exc))
-            return
-        super().accept()
-
-    def _remove(self) -> None:
-        self._session.remove_mapping(self.source.currentData())
-        super().accept()
+# The mapping dialog works on the sheet itself (PR 9b); kept under its old name for callers.
+MappingDialog = StepMappingDialog

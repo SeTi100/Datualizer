@@ -73,7 +73,7 @@ s.save("campaign.json")
 
 **Uhren abgleichen** (Etappe 2b, Schritt 7). Zwei Wege, beide schlagen nur vor; `set_clock` wendet an, das `ClockModel` nennt Methode, Unsicherheit und Annahme.
 
-*Uhrenpaare aus einer Arbeitsmappe:* Steht im Labjournal dasselbe Ereignis auf beiden Uhren („Start FID“ auf der FID-Uhr, „Start Real“ auf der PC-Uhr), beschreibt `ClockCells`, in welchen Zellen. Welche Zellen das sind, ist Konfiguration, nicht Code. Der Vorschlag ist der Median der Paar-Versätze, die Unsicherheit die mittlere absolute Abweichung (mindestens der halbe Ablese-Schritt). Die Konfiguration bleibt im Modell und steht in `campaign.json`.
+*Uhrenpaare aus einer Arbeitsmappe:* Steht im Labjournal dasselbe Ereignis auf beiden Uhren („Start FID“ auf der FID-Uhr, „Start Real“ auf der PC-Uhr), beschreibt `ClockCells`, in welchen Zellen. Welche Zellen das sind, ist Konfiguration, nicht Code: als Adresse (`source_cell="D3"`) oder robuster über die Beschriftung daneben (`source_label="Start FID", master_label="Start Real", nth=1` für den ersten Wert rechts davon, `nth=2` für den zweiten; leere Zellen werden übersprungen). So überstehen die Paare eingefügte Spalten (im Journal vom 17.10. wanderten sie mit der neuen Spalte „Index“ von C3/D3 nach D3/E3). Der Vorschlag ist der Median der Paar-Versätze, die Unsicherheit die mittlere absolute Abweichung (mindestens der halbe Ablese-Schritt). Die Konfiguration bleibt im Modell und steht in `campaign.json`.
 
 ```python
 from datetime import date
@@ -108,6 +108,37 @@ for step in s.intervals().intervals:
     print(step.label, step.window, step.params)
 ```
 
+**Robuste Schrittzuordnung (Journal, das sich ändert):** Ein Labjournal wächst während der Messung: Spalten werden eingefügt, ein Block eines anderen Tages landet darunter, Überschriften bekommen Einheiten. Die Zuordnung hält das aus oder scheitert laut, sie liefert nie still falsche Schritte.
+
+- *Spalten nur über die Überschrift*, nie über die Position. Gross/klein, Leerzeichen und ein Einheiten-Anhang zählen nicht (`V_MFC` findet `V_MFC [Nl/min]`, auch die bereinigte Schreibweise `v_mfc` passt). Fehlt eine Überschrift, scheitert die Zuordnung mit Vorschlag („no column 'Temperatur' (did you mean 'Temperatur_Soll'?)“). Spalten ohne Überschrift heissen wie beim Excel-Reader `col_<Buchstabe>`; nur sie hängen an der Position.
+- *Kopfzeile:* die erste Zeile, die alle zugeordneten Überschriften enthält, oder fest `rows.header_row`. Zeilennummern sind Blattzeilen wie in Excel (bei CSV und SQLite ist die Kopfzeile Zeile 1); `origin` und `problems` nennen sie.
+- *Zeilen* (`RowSelection` in `rows`): `first_row`/`last_row`, `stop` = `none`, `first_empty_start` oder `time_jump` (die Startzeit springt um mehr als `time_jump_min` Minuten zurück: anderer Tag oder Block darunter; Vorschlag des Profils `labjournal_xlsx`), `where` (Formel des Formelkerns über die Zeilenwerte, Namen bereinigt, Zahlen und Text, z. B. `index <= 20` oder `datum == '17.10.2026'`, dazu `row` für die Zeilennummer) und `skip_rows`. Jede ausgelassene Zeile steht mit Grund in `problems`.
+- *Ende mit Rückfall:* `EndRule(column="Zeit_1", fallback=EndRule(kind="next_start"))` nimmt die Endspalte und, wo sie leer ist, den nächsten Start; das steht je Zeile in `problems` und in `step.note`.
+- *Standardwerte:* `parameter_defaults={"luft": 100}` füllt einen Parameter, dessen Spalte (oder JSON-Schlüssel) fehlt oder dessen Zelle leer ist. Bezüge mit `match` scheitern dann nicht an NaN.
+- *Stabile Schritt-IDs:* `id_column="Index"` gibt die ID `<quelle>:<wert>` statt der Zeile. Ohne ID-Spalte folgen von Hand gesetzte Fenster (`WindowOverride`) ihrem Schritt über Name und Start, wenn sich die Zeilen verschieben; das steht in `session.warnings`.
+- *Zellwerte über ihre Beschriftung:* `CellValue(name="raumluft", label="Baseline mgC")` sucht die Zelle mit diesem Text und nimmt den ersten Wert rechts davon (`direction="below"`, `nth`, oder `cell="E5"`); der Wert hängt als Parameter an jedem Schritt der Zuordnung, aus einer anderen Quelle oder einem anderen Blatt über `source_id`/`sheet`.
+- *Geänderte Datei:* Beim Speichern merkt sich die Zuordnung Kopfzeile, Spalten und Schritte (`resolved`). Beim Öffnen meldet `session.warnings`, was sich geändert hat: neue oder fehlende Spalten, Kopfzeile verschoben, mehr Zeilen, neue, entfallene oder geänderte Schritte. Passt die gespeicherte Lese-Spec nicht mehr zur geänderten Datei, wird sie mit dem Profil neu gelesen (statt abzubrechen) und das gemeldet.
+
+```python
+from datualizer_core.campaign import CellValue, IntervalMapping
+from datualizer_core.ingestion.steps import EndRule, RowSelection
+
+s.set_mapping(IntervalMapping(
+    source_id="journal", start_column="Zeit_0",
+    end=EndRule(column="Zeit_1", fallback=EndRule(kind="next_start")),
+    label_columns=["col_A"], fill_down=["col_A"],
+    parameter_columns=["Temperatur", "V_MFC", "Masse_0", "Masse_1"], parameter_defaults={"luft": 100},
+    id_column="Index", rows=RowSelection(stop="time_jump"),
+    cell_values=[CellValue(name="raumluft", label="Baseline mgC")],
+))
+d = s.derive_mapping(s.campaign.interval_mappings[0])  # Schritte plus Zustand jeder Zeile
+print(d.header.row, len(d.intervals), d.problems)      # 10, 20, ['… stop: start in row 31 (09:49:00) is 436 min before row 30 …']
+```
+
+*Dialog „Steps from Source“:* zeigt das rohe Blatt als Raster (Excel-Buchstaben, Zeilennummern, auch die Zeilen über der Kopfzeile, Blattwahl). Ein Klick auf eine Zelle der Kopfzeile öffnet das Rollen-Menü (Start, Ende, Dauer, Name, Name als Block, Parameter, ID, ignorieren); zugeordnete Spalten sind farbig und tragen ihre Rolle im Spaltenkopf. Ein Klick auf eine Zeilennummer setzt die Kopfzeile, der Rechtsklick bietet „Table starts/ends here“ und „Leave out row“; Ziehen über die Zeilennummern wählt einen Bereich. Zeilen sind eingefärbt: wird Schritt (grün), ausgelassen (grau, Grund im Tooltip), Problem (orange). Unter dem Raster stehen Stop-Regel, `where`-Filter (geprüft beim Tippen), End-Rückfall und Standardwerte; im Reiter *Cells* landen Zellwerte und Uhrenpaare, die per Rechtsklick auf eine Zelle gesetzt werden (die Beschriftung links davon wird übernommen). Rechts die Vorschau als Tabelle und Zeitleiste, live aktualisiert. CSV- und SQLite-Schrittquellen erscheinen als Raster ihrer Tabelle.
+
+![Dialog Steps from Source mit dem Journal vom 17.10.2026](img/schrittzuordnung_dialog.png)
+
 **Fenster-Statistik** (Etappe 2b, Schritt 6, Paket A): `session.window_table([(quelle, kanal), …])` liefert pro Schritt × Kanal eine Zeile mit Schritt, Fenster, Sollwerten und den Kennwerten aus `datualizer_core.stats.window_stats`: Anzahl Punkte, ausgeschlossene (`StatsConfig.exclude_flags`, Standard `spike`, `dropout`, `masked`) und leere Werte, Abdeckungsgrad, Mittelwert, Median, SD, SEM, Min/Max, 5-/95-%-Quantil, OLS-Steigung pro Sekunde mit klassischem Standardfehler, R² und Residuen-SD, 2-Punkt-Differenz Δy/Δt mit Unsicherheit nach GUM (Ablesung aus `StatsConfig.reading_u`, Uhr aus `ClockModel.uncertainty_s`) und das Trapez-Integral. Lücken, leere und ausgeschlossene Werte werden nie überbrückt: Die nicht abgedeckte Zeit steht in `integral_gap_s`. `checks` nennt, was auffällt (zu wenige Punkte, geringe Abdeckung, 2-Punkt weicht von der Steigung ab), `assumptions`, worauf die Werte beruhen. SEM und klassischer Steigungs-SE setzen unabhängige Werte voraus und sind bei dicht abgetasteten Sensoren zu klein. Deshalb gibt es zusätzlich (Paket B): `rho1`, `n_eff` und `sem_eff` (AR(1)-Näherung), `slope_se_hac` (Newey-West, Lag `StatsConfig.hac_lag`, sonst ⌊4·(n/100)^(2/9)⌋), `slope_se_ar1`, `durbin_watson`, die robuste Theil-Sen-Steigung `slope_theil_sen` mit 95-%-Intervall `ts_ci_low`/`ts_ci_high` (Kendall, bei Autokorrelation verbreitert; ab 1000 Punkten aus einer festen Stichprobe von Paaren), `integral_u` und die Ampel `stationary` (Steigungstest und Hälftenvergleich `halves_diff`, Begründung in `checks`). Weichen OLS und Theil-Sen um mehr als 2 SE ab, steht das in `checks` (Ausreisser oder Knick). Die Einstellungen stehen als `stats` in `campaign.json`.
 
 ```python
@@ -121,7 +152,7 @@ t.select("step_label", "v_mfc", "n", "coverage", (t["slope"] * 3600).alias("g_h"
 
 Einen einzelnen Schritt liefert `s.window_stats(schritt, quelle, kanal)` als `WindowResult`. Jeder Eintrag in `checks` hat zusätzlich eine Stufe (`check.level`: `fail` bei keinen oder zu wenigen Punkten, sonst `warn`); `result.level` fasst sie zur Ampel zusammen (`ok` ohne Befund). Das Fenster eines einzelnen Schritts lässt sich von Hand setzen: `s.set_window_override(schritt_id, start, ende)` ersetzt dort die Fenster-Regel, `clear_window_override` hebt das wieder auf. Overrides stehen in `campaign.json` (`window_overrides`), in `window_table` zeigt die Spalte `window_override` sie an. Bekommt ein Journal-Schritt später einen anderen Namen oder fehlt er, steht das in `intervals().problems`.
 
-Im Kampagnenfenster zeigt das Dock *Steps* die Schritte (Doppelklick zoomt und öffnet den Fenster-Inspektor, Rechtsklick bietet beides einzeln), die Probleme und die Fenster-Regel; *Steps from Source…* öffnet die Zuordnung mit Vorschau. Als Bänder über allen Plots erscheinen die Schritte, wenn *Settings → Tools → Interval Bands* eingeschaltet ist (Standard: aus, die Wahl wird gemerkt). Eigene Schritte: Rechtsklick → *Marker ○ ○*; der erste Klick setzt den Start (erster Kreis grün, gestrichelte Linie), der zweite das Ende. Eigene Bänder lassen sich ziehen, umbenennen und löschen; Esc verwirft einen offenen Marker.
+Im Kampagnenfenster zeigt das Dock *Steps* die Schritte (Doppelklick zoomt und öffnet den Fenster-Inspektor, Rechtsklick bietet beides einzeln), die Probleme und die Fenster-Regel; *Steps from Source…* öffnet die Zuordnung am Tabellenblatt (siehe unten). Als Bänder über allen Plots erscheinen die Schritte, wenn *Settings → Tools → Interval Bands* eingeschaltet ist (Standard: aus, die Wahl wird gemerkt). Eigene Schritte: Rechtsklick → *Marker ○ ○*; der erste Klick setzt den Start (erster Kreis grün, gestrichelte Linie), der zweite das Ende. Eigene Bänder lassen sich ziehen, umbenennen und löschen; Esc verwirft einen offenen Marker.
 
 **Schrittarten, benannte Fenster, Schritt-Tabelle** (Etappe 2b, Schritt 8, PR 3) stehen in `campaign.json` unter `evaluation`:
 

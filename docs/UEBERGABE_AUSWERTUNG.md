@@ -307,7 +307,9 @@ Aufgabe (PR 9 von 10):
 
 ---
 
-## PR 9b – Robuste Schrittzuordnung und Tabellenansicht (vor PR 10)
+## PR 9b – Robuste Schrittzuordnung und Tabellenansicht (✅, Prompt nur noch zur Nachvollziehbarkeit)
+
+> Nachtrag für PR 10 (19.10.): Das Probeskript liest die Journal-Schritte jetzt über `IntervalMapping` (Überschriften, `stop="time_jump"`, Rückfall „nächster Start“ laut Tageskonfiguration, `parameter_defaults={"luft": 100}`), die Uhrenpaare über die Beschriftung und den 15.10. mit `parameter_defaults={"volumenstrom": 100}`. Parameter heissen wie die bereinigten Überschriften (`masse_0`, `masse_1` statt `m0`, `m1`). Die Raumluft des 17.10. steht als Parameter `raumluft` an jedem Schritt (`CellValue(label="Baseline mgC")`); der Rückfall des Blindwerts (`NearestReferenceRelation.fallback`) nimmt bisher nur eine Zahl, PR 10e muss ihn auf einen Parameter oder eine Konstante je Tag zeigen lassen. Die Referenz `ergebnisse_auto/*/schritte.csv` wurde am 19.10. um 16:42 mit geänderter Skript-Auswertung neu gerechnet (Massenstrom z. B. für Z16 aus „Journal Start-/Endmasse“), deshalb weichen c_in und X im Probelauf jetzt ab, obwohl die Schritte gleich sind.
 
 ```text
 Repo: C:\Users\timkl\Desktop\Coding\EEU\Datualizer. Lies AGENTS.md, CLAUDE.md,

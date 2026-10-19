@@ -21,7 +21,8 @@ Referenz-Implementierung (nur lesen, nicht kopieren):
 | Uhrversatz FID (+970/975 s), OCR-Video (−15 s) | ✅ `ClockModel.offset_s` |
 | PicoLog-Start = Speicherzeit − Dauer | ✅ `OriginRule.FILE_MTIME_END` |
 | Versatz aus Journal-Paaren („Start FID“/„Start Real“) | ✅ `ClockCells` → `session.clock_from_cells` (PR 9) |
-| Journal-Zeilen als Schritte, fehlendes Ende = nächster Start, Sollwerte als Parameter | ✅ `IntervalMapping`, `EndKind.NEXT_START` |
+| Journal-Zeilen als Schritte, fehlendes Ende = nächster Start, Sollwerte als Parameter | ✅ `IntervalMapping` mit `EndRule.fallback` (PR 9b) |
+| Journal ändert sich (Spalten eingefügt, anderer Tag darunter): Überschriften und Zeitsprung statt Buchstaben und Zeilen | ✅ Überschriften-Abgleich, `RowSelection(stop="time_jump")`, Uhrenpaare und Zellwerte über die Beschriftung (PR 9b) |
 | DB-Runs als Schritte, `V_MFC`/`Volumenstrom` aus `parameters_json` | ✅ `SqliteOptions.json_columns` (PR 2), Spalten `v_mfc`, `volumenstrom` |
 | OCR-Fehllesungen der Waage | ✅ `spike` (Hampel) |
 | FID-Skala aus dem Rohsignal: mgC = a·pA + b, a/b aus der Kalibrierung (Settings-XML: `sens`, `zero`; 1.616 mgC/ppm Propan), am 15.10. vor/nach 09:24 verschieden | ✗ Rechenkanal mit Zeitstücken, XML-Reader → PR 1, 2 |
@@ -249,7 +250,7 @@ Die Namen der Kanäle/Quellen sind Beispiele. Geladene Spalten stehen in bereini
 | 7 ✅ | Ergebnisfenster: Ansichten `table`, `xy`, `matrix`, Kleinvielfache | 5, 6 | 2b-8, Etappe 5 |
 | 8 ✅ | `aligned` + `broadcast_steps`, `bars`, Bericht als PDF | 2, 7 | 2b-8 |
 | 9 ✅ | Uhr-Anker aus Zellpaaren, Kreuzkorrelation, Dialog | – | 2b-7 |
-| 9b | Robuste Schrittzuordnung (Überschriften, Zeilenauswahl, End-Rückfall, Parameter-Standardwerte, stabile IDs, Zellwerte über Beschriftung) und Tabellenansicht zum Anklicken | 3, 9 | 2b-5 |
+| 9b ✅ | Robuste Schrittzuordnung (Überschriften, Zeilenauswahl, End-Rückfall, Parameter-Standardwerte, stabile IDs, Zellwerte über Beschriftung) und Tabellenansicht zum Anklicken | 3, 9 | 2b-5 |
 | 10 | SA-Kampagne (3 Tage) als Beispiel + Rezept, End-to-End-Orakel, Doku; Lücken aus dem Probelauf (Profil FID-.csv, `nan`, Unsicherheit aus Formel, Messgrösse aus mehreren Quellen, Konstanten je Tag) | 1–9, 9b | 2b-10 |
 
 Parallel möglich: PR 2, 3 und 9 (PR 1 ist in main).
@@ -261,5 +262,8 @@ Mit `examples/campaign_SA_ethanol.json` auf die echten Dateien (lokal, Test übe
 - Stichproben 17.10.: Z16 (200 °C, 10 Nl/min) c_in 144.4, X 0.560, u 0.047, gut; Z23 (150 °C) X 0.392; Z29 (220 °C) X 0.642, Blindwert „keiner“.
 - Light-off: T50 179 °C (10 Nl/min), 203 °C (20 Nl/min); Arrhenius Ea 21 ± 4 kJ/mol aus 8 Stufen.
 - Alle Ansichten aus Abschnitt 3.7 lassen sich aus der Kampagne erzeugen; der Bericht hat dieselben Seiten wie `katalyse_bericht.pdf`.
+
+### 3.9 Robuste Schrittzuordnung – PR 9b ✅
+Umgesetzt in `datualizer_core/ingestion/grid.py` (Raster, Überschriften, Beschriftung), `ingestion/steps.py` (`RowSelection`, `EndRule.fallback`, `CellRef`), `campaign/intervals.py` (`derive_steps`, `StepDerivation` mit Zustand jeder Zeile, `CellValue`, `MappingSnapshot`, `diff_snapshot`) und dem Dialog `datualizer_gui/components/step_mapping_dialog.py`. Probelauf 19.10. mit dem geänderten Journal: Schritte aus `IntervalMapping` gleich wie die Skript-Auswertung (12.10.: 37/37, 17.10.: 9/9 mit Start, Ende, T_soll, V_MFC); 15.10.: mit `parameter_defaults={"volumenstrom": 100}` passt der Blindwert-`match` über den Luftstrom (Run52 9,32 statt 7,36 mgC wie das Skript).
 
 Unterschiede zwischen Skript und Datualizer, die erwartet sind und dokumentiert werden: Massenstrom-SE (HAC statt ×√10), FID-u (`sem_eff` statt n/10).

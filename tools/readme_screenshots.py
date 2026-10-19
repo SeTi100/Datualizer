@@ -1,11 +1,13 @@
 r"""Render the README screenshots from the fixtures (docs/img/*.png).
 
-Run from the repository root:  .venv\Scripts\python.exe tools\readme_screenshots.py
+Run from the repository root:  .venv\Scripts\python.exe tools\readme_screenshots.py [--only NAME ...]
+(`--only schrittzuordnung` renders only the step mapping dialog.)
 Uses a temporary settings folder, so the user's GUI preferences stay untouched.
 """
 
 from __future__ import annotations
 
+import argparse
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -65,7 +67,39 @@ def shot(app: QApplication, widget, name: str) -> None:
     print("wrote", path.relative_to(ROOT))
 
 
-def main() -> None:
+def step_mapping_shot(app: QApplication) -> None:
+    """The step mapping dialog on the journal of 17.10.2026 (Index column, other day below row 30)."""
+    from datualizer_core.campaign import CampaignSession
+    from datualizer_core.ingestion.steps import EndKind
+    from datualizer_gui.components.step_mapping_dialog import StepMappingDialog
+
+    journal = SA / "labjournal_17_10_extract.xlsx"
+    s = CampaignSession()
+    profile = with_choices(journal, get_profile("labjournal_xlsx"), sheet="17.10.2026", clock_date=date(2026, 10, 17))
+    s.add_source(journal, profile, source_id="journal")
+    s.add_source(SA / "fid_ifid_12_10_extract.dat", source_id="fid")
+    d = StepMappingDialog(s, source_id="journal")
+    d.resize(1500, 860)
+    d.fallback_kind.setCurrentIndex(d.fallback_kind.findData(EndKind.NEXT_START.value))
+    d.set_role("Index", "id")
+    d.add_cell_value(5, 4, name="raumluft")
+    for row, side in ((3, "source"), (4, "master"), (3, "source"), (4, "master")):
+        d.add_pair_side(row, 3 if len(d.pairs) == 0 else 4, side)
+    d.pair_target.setCurrentIndex(d.pair_target.findData("fid"))
+    d.refresh_now()
+    d.tabs.setCurrentIndex(0)
+    d.show()
+    d.view.scrollTo(d.model.index(0, 0))
+    shot(app, d, "schrittzuordnung_dialog.png")
+    d.close()
+
+
+def main(only: list[str] | None = None) -> None:
+    if only:
+        app, _ = create_app()
+        if "schrittzuordnung" in only:
+            step_mapping_shot(app)
+        return
     app, main_win = create_app()
     main_win.resize(1500, 900)
     main_win.load_file(RUNS / "runs_export_20261004_123307_ALL_MESSY.csv")
@@ -142,8 +176,10 @@ def main() -> None:
     shot(app, res_win, "results_window.png")
     res_win.close()
     win.close()
-
+    step_mapping_shot(app)
 
 
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--only", nargs="*", help="render only these pictures (schrittzuordnung)")
+    main(ap.parse_args().only)

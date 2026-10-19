@@ -36,6 +36,7 @@ from datualizer_gui.components.export_dialog import ExportDialog, options_from_j
 from datualizer_gui.components.plot_export import ExportFormat, ExportOptions, export_plot
 from datualizer_gui.components.plot_groups import ColorBy, GroupBy
 from datualizer_gui.components.readout import AUTO_DECIMALS, ReadoutMode
+from datualizer_gui.components.results_panel import ResultsPanel
 from datualizer_gui.components.time_axis import TimeAxisMode
 from datualizer_gui.components.window_inspector import WindowInspector
 from datualizer_gui.settings import (
@@ -120,6 +121,14 @@ class CampaignWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.dock_window)
         self.dock_window.hide()
 
+        self.results_panel = ResultsPanel()
+        self.dock_results = QDockWidget("Results", self)
+        self.dock_results.setObjectName("dock_results")
+        self.dock_results.setWidget(self.results_panel)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.dock_results)
+        self.tabifyDockWidget(self.dock_window, self.dock_results)
+        self.dock_results.hide()
+
         self.sources_panel.selection_changed.connect(self.refresh_plot)
         self.sources_panel.clock_changed.connect(self._on_clock_changed)
         self.sources_panel.view_range = self.canvas.view_x_range
@@ -143,6 +152,8 @@ class CampaignWindow(QMainWindow):
         )
         self.canvas.mask_edit_requested.connect(self.sources_panel.edit_mask)
         self.canvas.mask_remove_requested.connect(self.sources_panel.remove_mask)
+        self.results_panel.step_double_clicked.connect(self.inspect_step)
+        self.results_panel.evaluation_changed.connect(self._on_evaluation_changed)
 
         menu = self.menuBar().addMenu("&Campaign")
         for text, key, slot in [
@@ -215,6 +226,10 @@ class CampaignWindow(QMainWindow):
         self.action_bands.setToolTip("Measurement steps as bands over all plots")
         self.action_bands.toggled.connect(self.set_bands_visible)
         tools_menu.addAction(self.action_bands)
+        self.action_results = self.dock_results.toggleViewAction()
+        self.action_results.setText("&Results Dock")
+        self.action_results.setToolTip("Results table, formulas, criteria and scenarios")
+        tools_menu.addAction(self.action_results)
         self.status_bar = QStatusBar(self)
         self.setStatusBar(self.status_bar)
         self._apply_view_settings()
@@ -436,6 +451,7 @@ class CampaignWindow(QMainWindow):
         self.canvas.set_intervals(self._session.intervals() if self.bands_visible else IntervalSet())
         if self.window_inspector.step_id is not None:
             self.window_inspector.refresh()
+        self.results_panel.refresh()
 
     # ------------------------------------------------------------------ steps
     def add_step(self, start: float, end: float) -> None:
@@ -497,9 +513,14 @@ class CampaignWindow(QMainWindow):
         self.sources_panel.set_session(self._session)
         self.intervals_panel.set_session(self._session)
         self.window_inspector.set_session(self._session)
+        self.results_panel.set_session(self._session)
         self.refresh_plot()
         name = self._session.campaign.name
         self.setWindowTitle(f"Datualizer – Campaign: {name}" + (f" ({self._path.name})" if self._path else ""))
+
+    def _on_evaluation_changed(self) -> None:
+        self.refresh_steps()
+        self.status_bar.showMessage("Evaluation settings updated")
 
     def _on_clock_changed(self, source_id: str) -> None:
         self.sources_panel.set_session(self._session)

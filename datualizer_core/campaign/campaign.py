@@ -19,6 +19,8 @@ import numpy as np
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from datualizer_core.calc.expr import compile_expr
+from datualizer_core.calc.uncertain import Constant, UArray
 from datualizer_core.campaign.clock import ClockAnchor, ClockCells, ClockModel, epoch_seconds, to_epoch_s
 from datualizer_core.campaign.coverage import SourceCoverage, coverage_intervals, value_rows
 from datualizer_core.campaign.derived import DerivedChannel, Mask, MaskSpan, apply_derived
@@ -27,8 +29,10 @@ from datualizer_core.campaign.evaluation import (
     DEFAULT_WINDOW,
     STEP_COLUMNS,
     Evaluation,
+    Scenario,
     StepClassification,
     StepWindow,
+    _truth,
     classify_steps,
     measure_value,
     override_key,
@@ -921,6 +925,157 @@ class CampaignSession:
         if ev.relations:
             from datualizer_core.calc.relations import apply_relations
             df = apply_relations(df, ev.relations)
+        return df
+
+    def results(
+        self,
+        scenario: str | Scenario | dict[str, Constant] | None = None,
+        spec: Evaluation | None = None,
+        config: StatsConfig | None = None,
+    ) -> pl.DataFrame:
+        """Step table plus calculated quantities with uncertainty and budget, criteria, rating and reason.
+
+        Order of evaluation: step_table -> relations -> calculations (in list order, each can use previous)
+        -> criteria -> ratings.
+
+        `scenario`: name of a scenario defined in `evaluation.scenarios`, a `Scenario` object, a dict of
+        `Constant` overrides, or None (use base constants from `evaluation.constants`).
+        `spec`: evaluation configuration (default: campaign's `evaluation`).
+        """
+        ev = spec if spec is not None else self.campaign.evaluation
+        df = self.step_table(spec=ev, config=config)
+
+        # 1. Resolve active constants with optional scenario overrides
+        constants = dict(ev.constants)
+        if scenario is not None:
+            if isinstance(scenario, str):
+                constants.update(ev.scenario(scenario).constants)
+            elif isinstance(scenario, Scenario):
+                constants.update(scenario.constants)
+            elif isinstance(scenario, dict):
+                constants.update(scenario)
+            else:
+                raise TypeError(f"scenario must be str, Scenario, dict or None, got {type(scenario)!r}")
+
+        for k, c in constants.items():
+            if not c.name:
+                constants[k] = c.model_copy(update={"name": k})
+
+        # 2. Build environment for expressions
+        n_steps = len(df)
+        env: dict[str, Any] = {}
+        numeric_types = {
+            pl.Float32,
+            pl.Float64,
+            pl.Int8,
+            pl.Int16,
+            pl.Int32,
+            pl.Int64,
+            pl.UInt8,
+            pl.UInt16,
+            pl.UInt32,
+            pl.UInt64,
+        }
+
+        for col in df.columns:
+            dtype = df[col].dtype
+            if dtype in numeric_types:
+                vals = df[col].to_numpy().astype(float)
+                u_col = f"u_{col}"
+                if u_col in df.columns and df[u_col].dtype in numeric_types:
+                    u_vals = df[u_col].to_numpy().astype(float)
+                    env[col] = UArray.input(col, vals, u_vals, kind="zufall")
+                else:
+                    env[col] = UArray(vals)
+            elif dtype == pl.Boolean:
+                env[col] = UArray(df[col].to_numpy().astype(bool))
+            else:
+                env[col] = np.array(df[col].to_list(), dtype=object)
+
+        # Constants override column of the same name if any
+        for k, c in constants.items():
+            env[k] = c.to_uarray()
+
+        new_cols: list[pl.Series] = []
+
+        # 3. Calculations in list order
+        for calc in ev.calculations:
+            text_names = [k for k, v in env.items() if isinstance(v, np.ndarray) and v.dtype == object]
+            expr = compile_expr(calc.expr, names=list(env.keys()), text_names=text_names)
+            res = expr.evaluate(env)
+            res_u = UArray.of(res)
+
+            if n_steps > 0:
+                val_arr = np.broadcast_to(np.asarray(res_u.value, dtype=float), (n_steps,)).copy()
+                u_arr = np.broadcast_to(np.asarray(res_u.u(), dtype=float), (n_steps,)).copy()
+                u_zuf = np.broadcast_to(np.asarray(res_u.u_random(), dtype=float), (n_steps,)).copy()
+                u_sys = np.broadcast_to(np.asarray(res_u.u_syst(), dtype=float), (n_steps,)).copy()
+                budget = res_u.budget()
+                b_arrs = {
+                    inp: np.broadcast_to(np.asarray(b_val, dtype=float), (n_steps,)).copy()
+                    for inp, b_val in budget.items()
+                }
+                grads = {
+                    k: np.broadcast_to(np.asarray(v, dtype=float), (n_steps,)).copy() for k, v in res_u.grads.items()
+                }
+                env[calc.name] = UArray(val_arr, grads, res_u.inputs)
+            else:
+                val_arr = np.array([], dtype=float)
+                u_arr = np.array([], dtype=float)
+                u_zuf = np.array([], dtype=float)
+                u_sys = np.array([], dtype=float)
+                budget = res_u.budget()
+                b_arrs = {inp: np.array([], dtype=float) for inp in budget}
+                env[calc.name] = res_u
+
+            new_cols.append(pl.Series(calc.name, val_arr, dtype=pl.Float64))
+            new_cols.append(pl.Series(f"u_{calc.name}", u_arr, dtype=pl.Float64))
+            new_cols.append(pl.Series(f"u_{calc.name}_zufall", u_zuf, dtype=pl.Float64))
+            new_cols.append(pl.Series(f"u_{calc.name}_syst", u_sys, dtype=pl.Float64))
+            for inp in sorted(budget.keys()):
+                col_b = f"b_{calc.name}__{inp}"
+                new_cols.append(pl.Series(col_b, b_arrs[inp], dtype=pl.Float64))
+
+        # 4. Criteria
+        crit_results: dict[str, np.ndarray] = {}
+        for cr in ev.criteria:
+            text_names = [k for k, v in env.items() if isinstance(v, np.ndarray) and v.dtype == object]
+            expr = compile_expr(cr.expr, names=list(env.keys()), text_names=text_names)
+            res = expr.evaluate(env)
+            passed = _truth(UArray.of(res).value, n_steps)
+            crit_results[cr.name] = passed
+            new_cols.append(pl.Series(cr.name, passed, dtype=pl.Boolean))
+            env[cr.name] = passed
+
+        # 5. Ratings and reasons (grund)
+        bewertungen: list[str | None] = []
+        gruende: list[str] = []
+        for i in range(n_steps):
+            violated = [cr.text for cr in ev.criteria if not crit_results[cr.name][i]]
+            gruende.append("; ".join(violated))
+
+            row_rating: str | None = None
+            for rat in ev.ratings:
+                match = True
+                if rat.all_of:
+                    if not all(crit_results[c][i] for c in rat.all_of):
+                        match = False
+                if match and rat.any_of:
+                    if not any(crit_results[c][i] for c in rat.any_of):
+                        match = False
+                if match and rat.none_of:
+                    if any(crit_results[c][i] for c in rat.none_of):
+                        match = False
+                if match:
+                    row_rating = rat.label
+                    break
+            bewertungen.append(row_rating)
+
+        new_cols.append(pl.Series("bewertung", bewertungen, dtype=pl.String))
+        new_cols.append(pl.Series("grund", gruende, dtype=pl.String))
+
+        if new_cols:
+            df = df.with_columns(new_cols)
         return df
 
     def _stats_input(self, source_id: str, channel: str, cfg: StatsConfig) -> "_StatsInput":

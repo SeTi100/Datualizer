@@ -1,6 +1,6 @@
 # Übergabeprompts: Auswertung einer Messkampagne (PR 1–10)
 
-> Zu [`PLAN_AUSWERTUNG_KAMPAGNE.md`](PLAN_AUSWERTUNG_KAMPAGNE.md). Ein Prompt pro PR, jeweils vollständig in eine neue Agent-Sitzung kopieren. Reihenfolge und Abhängigkeiten: Plan, Abschnitt 6. PR 1 ist in main (#36); PR 2, 3 und 9 können parallel starten.
+> Zu [`PLAN_AUSWERTUNG_KAMPAGNE.md`](PLAN_AUSWERTUNG_KAMPAGNE.md). Ein Prompt pro PR, jeweils vollständig in eine neue Agent-Sitzung kopieren. Reihenfolge und Abhängigkeiten: Plan, Abschnitt 6. PR 9b (robuste Schrittzuordnung) kommt vor PR 10. PR 1 ist in main (#36); PR 2, 3 und 9 können parallel starten.
 >
 > Nachtrag nach PR 1 (2026-10-19): `group` in `UArray` heisst gemeinsame Fehlerquelle innerhalb einer Zeile, nicht „gleicher Messtag“ (Plan 3.1). Text in Formeln kommt mit PR 3, die Korrelation zwischen Zeilen mit PR 6. Die Prompts unten sind darauf angepasst.
 
@@ -307,28 +307,127 @@ Aufgabe (PR 9 von 10):
 
 ---
 
+## PR 9b – Robuste Schrittzuordnung und Tabellenansicht (vor PR 10)
+
+```text
+Repo: C:\Users\timkl\Desktop\Coding\EEU\Datualizer. Lies AGENTS.md, CLAUDE.md,
+docs/PLAN_AUSWERTUNG_KAMPAGNE.md (3.3, 3.8), datualizer_core/campaign/intervals.py,
+datualizer_core/ingestion/steps.py, datualizer_core/ingestion/readers/excel.py,
+datualizer_gui/components/intervals_panel.py (MappingDialog) und das Probeskript in
+C:\Users\timkl\OneDrive - OST\Dokumente\SA\datualizer_probe\ (Workaround "Journal").
+
+Hintergrund: Das Labjournal ändert sich laufend. Seit dem 19.10. hat das Blatt 17.10.2026 eine
+neue Spalte C "Index" (Daten eine Spalte nach rechts), und ab Zeile 31 stehen Schritte des
+15.10. im selben Blatt. Weitere Spalten und Zeilen kommen dazu. Die Zuordnung muss das
+aushalten oder laut und verständlich scheitern, nie still falsche Schritte liefern. Und sie
+muss sich in der GUI direkt am Tabellenblatt einstellen lassen.
+
+Aufgabe (Kern):
+1. Spalten nur über die Überschrift (wie heute), robuster: Vergleich ohne Gross/klein,
+   Leerzeichen und Einheiten-Anhang ("V_MFC" passt auf "V_MFC [Nl/min]"). Fehlt eine
+   zugeordnete Überschrift: Problem mit Vorschlag (difflib), kein stiller Rückfall auf die
+   Position. Kopfzeile: erste Zeile, die alle zugeordneten Überschriften enthält (zusätzlich
+   zur heutigen Erkennung bzw. `ExcelOptions.header_row`).
+2. `RowSelection` in `IntervalMapping`: `first_row`/`last_row` (Blattzeilen, optional),
+   `stop` = "none" | "first_empty_start" | "time_jump" (Startzeit springt um mehr als
+   `time_jump_min`, Standard 5, zurück: anderer Tag oder Block), `where` (Formel des
+   Formelkerns über Zeilenwerten, Zahlen und Text, z. B. `index <= 20` oder
+   `datum == '17.10.2026'`), `skip_rows`. Jede ausgelassene Zeile steht mit Grund in
+   `problems`. Profil labjournal_xlsx: Vorschlag stop = "time_jump".
+3. `EndRule.fallback`: z. B. Endspalte, und wenn leer: nächster Start (Hinweis je Zeile).
+4. `parameter_defaults` in `IntervalMapping` (z. B. luft = 100, wenn Spalte oder
+   JSON-Schlüssel fehlt oder leer ist), damit Bezüge über `match` nicht an NaN scheitern.
+5. Stabile Schritt-IDs: optionale `id_column` (z. B. "Index") → ID "<quelle>:<wert>" statt
+   Zeilennummer; `WindowOverride`s hängen an der ID. Ohne id_column: nach geänderter Datei
+   (sha256) Overrides über (Start, Name) neu zuordnen und melden, was nicht mehr passt.
+6. Werte aus Zellen über ihre Beschriftung statt Adresse: `CellValue(source, sheet,
+   label="Baseline mgC", Richtung/Abstand oder Zelle)` → Konstante je Quelle (z. B. Raumluft
+   je Messtag für die Evaluation). `ClockCells` (PR 9) bekommt dieselbe Suche über die
+   Beschriftung ("Start FID" / "Start Real"), denn auch diese Zellen sind gewandert
+   (C3/D3 → D3/E3 nach der neuen Spalte).
+7. Beim Öffnen einer geänderten Datei: neu auflösen und den Unterschied melden (neue oder
+   fehlende Spalten, neue Zeilen, geänderte oder entfallene Schritte) in `session.warnings`
+   und in der GUI.
+
+Aufgabe (GUI):
+8. Dialog "Schritte zuordnen" mit Tabellenansicht: das rohe Blatt als Raster
+   (Excel-Buchstaben, Zeilennummern, alle Zellen inkl. der Zeilen über der Kopfzeile), Blattwahl.
+   - Klick auf eine Zelle der Kopfzeile → Menü: Start, Ende, Dauer, Name, Parameter, ID,
+     ignorieren; zugeordnete Spalten farbig mit Rollen-Kennzeichen.
+   - Zeilennummer anklicken → "Kopfzeile hier"; Rechtsklick → "Tabelle beginnt/endet hier",
+     "Zeile auslassen"; Ziehen über Zeilennummern wählt einen Bereich.
+   - Zeilen eingefärbt: wird Schritt (grün), ausserhalb oder gefiltert (grau, Grund im
+     Tooltip), Problem (orange).
+   - Felder für Stop-Regel, where-Filter (Prüfung beim Tippen), End-Rückfall und
+     Parameter-Standardwerte; Zellen anklicken für Uhrenpaare (PR 9) und Zellwerte (Punkt 6).
+   - Rechts die Vorschau der Schritte (Tabelle und kleine Zeitleiste), live aktualisiert.
+   - Derselbe Dialog für CSV- und SQLite-Schrittquellen (Raster der Tabelle).
+   Er ersetzt bzw. erweitert den heutigen MappingDialog; das Ergebnis steht in campaign.json.
+9. Tests mit Realdaten: neue Fixture als Ausschnitt des SA-Journals (Blatt 17.10.2026,
+   Spalten A–J, Zeilen 1–62, nur Werte) und Varianten, die der Test in tmp_path mit openpyxl
+   erzeugt: Spalten eingefügt, Zeilen über der Kopfzeile eingefügt, Spalte umbenannt
+   (→ Problem mit Vorschlag), Block eines anderen Tages darunter (→ Stop nach Zeile 30),
+   fehlende Endzeiten (→ Rückfall). Erwartet jeweils dieselben 20 Schritte (9 Dosierungen),
+   die Stufe 200 °C / 10 Nl/min von 13:04:16 bis 13:56:10. GUI-Smoke offscreen.
+10. Docs: BENUTZUNG.md (Abschnitt Messschritte mit Bild des Dialogs), Masterplan, Plan Tabelle 6.
+
+Abnahme: Im Probeskript entfällt der Workaround "Journal"; die Schritte des 17.10. kommen aus
+`IntervalMapping` und sind dieselben wie in der Skript-Auswertung.
+```
+
+---
+
 ## PR 10 – SA-Kampagne als Beispiel, End-to-End-Abnahme
 
 ```text
 Repo: C:\Users\timkl\Desktop\Coding\EEU\Datualizer. Lies AGENTS.md, CLAUDE.md,
 docs/PLAN_AUSWERTUNG_KAMPAGNE.md vollständig (insbesondere 4 und 7) und
 C:\Users\timkl\OneDrive - OST\Dokumente\SA\auswertung\AUSWERTUNG_LIESMICH.md sowie
-…\auswertung\tage\2026-10-1{2,5,7}.json. Voraussetzung: PR 1–9 in main.
+…\auswertung\tage\2026-10-1{2,5,7}.json. Voraussetzung: PR 1–9 und 9b in main.
+
+Ausgangspunkt ist das Probeskript in …\SA\datualizer_probe\: Es baut die Kampagne mit der
+API von main nach und vergleicht mit der Skript-Auswertung. Ergebnis 17.10. (Stand 19.10.):
+X ± 0.001, c_in ≤ 0.06 %, Blindwert ± 0.003 mgC, 9/9 Bewertungen gleich; u(X) kleiner, weil
+die Restdrift fehlt. Die dort markierten Workarounds sind die Aufgabenliste unten.
+
+Vorher die Referenz frisch rechnen (das Journal hat sich geändert), im SA-Ordner mit
+geschlossenem Excel: `python auswertung/katalyse_plots.py --roh`. Die Tageskonfigurationen
+lesen das Journal seit dem 19.10. über Überschriften und Zeitsprung, nicht mehr über
+Spaltenbuchstaben und Zeilennummern.
 
 Aufgabe (PR 10 von 10):
-1. examples/campaign_SA_ethanol.json: Quellen der drei Messtage (Pfade relativ, wie
-   campaign_SA.json), Uhren, Rechenkanäle (FID-Skala je Tag aus den Tageskonfigurationen),
-   Masken, Schritt-Zuordnung (12.10. und 17.10. Journal, 15.10. DB-Runs), zusätzliche
-   Null-Phasen des 12.10., vollständige `evaluation` (Konstanten, Fenster, Measures,
-   Relations, Calculations, Criteria, Ratings, Analyses, Views).
-2. examples/rezept_katalyse_voc.json: dieselbe `evaluation` ohne Quellen als Vorlage;
+1. Lücken aus dem Probelauf schliessen (je mit Test):
+   a) Profil `testa_ifid_csv` (Testa-iFID-Export als .csv ab 15.10., gleiche Spalten wie .dat).
+   b) `nan` und `inf` als Namen im Formelkern, z. B. `where(is_valid == 1, mass_g, nan)`.
+   c) Unsicherheit aus einer Formel als Eingang, z. B. `Calculation(name, expr, u_expr, kind)`
+      oder `UncertainInput(name, value="0", u="abs(dXdt)*10", kind="zufall")`. Gebraucht für
+      die Restdrift (|dX/dt|·10 min) und den Massenstrom aus zwei Journal-Ablesungen
+      (u nach GUM aus 0.01 g/√12 Auflösung und ±5 s Ablesezeit).
+   d) Eine Messgrösse aus mehreren Quellen: `Measure.sources: list[str]` (erste Quelle mit
+      genug Punkten im Fenster; Wahl in einer Spalte `<alias>_quelle`). Gebraucht für den FID
+      am 15.10. (zwei Dateien), die Masse am 12.10. (Datenbank + Video-OCR mit −15 s) und für
+      die Kampagne über mehrere Tage (je Tag andere Quellen).
+   e) Konstanten je Tag (Raumluft 1.7 / 1.9 / 2.09 mgC als Rückfall des Blindwerts): über
+      `CellValue` aus PR 9b (Journal-Zelle "Baseline mgC") oder `Constant` je scope.
+2. examples/campaign_SA_ethanol.json: Quellen der drei Messtage (Pfade relativ zur Datei,
+   Datenordner über die Umgebungsvariable `DATUALIZER_SA_DIR`); Uhren (17.10. aus den
+   Journal-Paaren, 12.10. 970 s, 15.10. 975 s); Rechenkanäle für die FID-Skala je Tag
+   (12.10.: 0.38384·pA − 2.36953, die Anzeige war 3× zu hoch; 15.10.: 0.38·pA − 1.786; 17.10.
+   aus Settings_17_10.xml); Masken (15.10. 09:05–09:25 Prüfgas; 17.10. Prüfgas-Ende bis
+   11:43:30); Schritte (12.10. und 17.10. Journal mit den Regeln aus PR 9b, 12.10. drei
+   Null-Phasen von Hand: 10:49:05–10:52:00 200 °C, 13:40–13:57 250 °C, 14:40–15:12 150 °C;
+   15.10. DB-Runs der Experimente 7 und 8 mit `json_columns`); vollständige `evaluation`
+   (wie im Probeskript, plus Restdrift, Analysen T50/T90 und Arrhenius, Ansichten, Bericht).
+3. examples/rezept_katalyse_voc.json: dieselbe `evaluation` ohne Quellen als Vorlage;
    Funktion/Menü „Auswertung aus Vorlage übernehmen“.
-3. Test tests/test_sa_end_to_end.py (übersprungen, wenn die SA-Daten fehlen): vergleicht
-   `session.results()` mit …\SA\auswertung\ergebnisse_auto\<tag>\schritte.csv
-   (X ± 0.005, c_in ± 0.5 %, u(X) ± 10 %, T_bett ± 0.2 K, Bewertung, Stationarität gleich)
-   und die Analysen (T50 179/203 °C, Ea 21 ± 4 kJ/mol). Jede Abweichung erklärt im PR-Text.
-4. Bericht aus der Kampagne erzeugen und mit katalyse_bericht.pdf vergleichen (Seiten,
+4. tests/test_sa_end_to_end.py (übersprungen ohne `DATUALIZER_SA_DIR`): je Messtag
+   `session.results()` gegen …\SA\auswertung\ergebnisse_auto\<tag>\schritte.csv
+   (X ± 0.005, c_in ± 0.5 %, u(X) ± 10 %, T_bett ± 0.2 K, Bewertung und Stationarität
+   gleich) und die Analysen über alle Tage (T50 bei 10 Nl/min 179 °C, bei 20 Nl/min 203 °C;
+   Ea 21 ± 4 kJ/mol aus 8 Stufen). Jede Abweichung im PR-Text erklären. Rohdaten kommen
+   nie ins Repo.
+5. Bericht aus der Kampagne erzeugen und mit katalyse_bericht.pdf vergleichen (Seiten,
    Werte); Screenshots in die Doku.
-5. Docs: BENUTZUNG.md (Rundgang Auswertung), DATENKATALOG_SA_KAMPAGNE.md,
-   MASTER_ETAPPEN_PLAN (Schritte 7, 8, 10 ✅), AGENTS.md Abschnitt 6.
+6. Docs: BENUTZUNG.md (Rundgang Auswertung mit echten Daten, DATUALIZER_SA_DIR setzen),
+   DATENKATALOG_SA_KAMPAGNE.md, MASTER_ETAPPEN_PLAN (Schritte 7, 8, 10 ✅), AGENTS.md Abschnitt 6.
 ```

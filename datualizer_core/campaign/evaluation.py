@@ -28,6 +28,7 @@ from datualizer_core.calc.analyses import Analysis
 from datualizer_core.calc.expr import FUNCTIONS, ExprError, compile_expr
 from datualizer_core.calc.relations import Relation
 from datualizer_core.calc.uncertain import Constant
+from datualizer_core.campaign.views import ViewSpec
 from datualizer_core.campaign.intervals import DEFAULT_WINDOW, ResolvedInterval, WindowRule
 from datualizer_core.stats.window import WindowResult
 
@@ -251,7 +252,7 @@ class Evaluation(BaseModel):
     ratings: list[Rating] = Field(default_factory=list)
     scenarios: list[Scenario] = Field(default_factory=list)
     analyses: list[Analysis] = Field(default_factory=list)
-    views: list[dict[str, Any]] = Field(default_factory=list)
+    views: list[ViewSpec] = Field(default_factory=list)
 
     @field_validator("constants", mode="before")
     @classmethod
@@ -266,6 +267,7 @@ class Evaluation(BaseModel):
         crit_names = [c.name for c in self.criteria]
         scen_names = [s.name for s in self.scenarios]
         analysis_names = [a.name for a in self.analyses]
+        view_names = [v.name for v in self.views]
 
         for what, names in (
             ("step class", classes),
@@ -274,6 +276,7 @@ class Evaluation(BaseModel):
             ("criterion", crit_names),
             ("scenario", scen_names),
             ("analysis", analysis_names),
+            ("view", view_names),
         ):
             dup = sorted({n for n in names if names.count(n) > 1})
             if dup:
@@ -360,6 +363,16 @@ class Evaluation(BaseModel):
 
     def analysis_names(self) -> list[str]:
         return [a.name for a in self.analyses]
+
+    def view(self, name: str) -> ViewSpec:
+        """View by name; KeyError if unknown."""
+        for v in self.views:
+            if v.name == name:
+                return v
+        raise KeyError(f"No view {name!r}; defined are {[v.name for v in self.views]}.")
+
+    def view_names(self) -> list[str]:
+        return [v.name for v in self.views]
 
 
 # ------------------------------------------------------------------ step parameters
@@ -489,6 +502,7 @@ __all__ = [
     "StepClass",
     "StepClassification",
     "StepWindow",
+    "ViewSpec",
     "classify_steps",
     "measure_value",
     "override_key",

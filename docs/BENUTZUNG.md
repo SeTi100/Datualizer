@@ -390,6 +390,102 @@ In der heterogenen Katalyse wird die Reaktionsgeschwindigkeit $k \propto \dot{V}
 - **Messpunkte stammen von mehreren verschiedenen Messtagen:**
   Wird die Arrhenius-Gerade über Messungen verschiedener Tage gelegt (z. B. 12.10. und 17.10.), so hatte jeder Messtag seine eigene, unabhängige Kalibrierung. Die Punkte von Tag 1 verschieben sich unabhängig von Tag 2. Dadurch kann die Gerade zwischen den Tagen kippen. Das GLS-Modell berücksichtigt diese Scope-Trennung automatisch: $u_m$ mit Korrelation wird **grösser** als die rein zufällige Unsicherheit.
 
+## Ergebnisfenster und Ansichten (Views)
+
+Für die wissenschaftliche Visualisierung und Berichterstellung bietet Datualizer das **Results Views Fenster** (`datualizer_gui/results_window.py`, Etappe 2b, Schritt 8, PR 7). Ansichten werden deklarativ als `ViewSpec` (discriminated union) in `Evaluation.views` konfiguriert und als Tabs mit nativer `pyqtgraph`-Performance dargestellt:
+
+```python
+from datualizer_core.campaign.views import TableViewSpec, XYViewSpec, MatrixViewSpec, RefLine, SecondaryAxis
+
+ev = Evaluation(
+    views=[
+        # 1. Tabelle mit Filter und Sortierung
+        TableViewSpec(
+            name="stationaer_tabelle",
+            title="Stationäre Stufen",
+            columns=["step_id", "tag", "T_bett", "V_MFC", "X", "u_X"],
+            filter="stationaer and bewertung != 'unsicher'",
+            sort_by=["T_bett"],
+        ),
+        # 2. XY-Diagramm (z. B. Light-off mit Fehlerbalken, Farbrampe und Verbindungslinien)
+        XYViewSpec(
+            name="light_off",
+            title="Light-off",
+            subtitle="Umsatz X gegen Bett-Temperatur je Dosierstufe",
+            x="T_bett",
+            y="X",
+            u_x="u_T_bett",
+            u_y="u_X",
+            color_by="V_MFC",
+            color_mode="ordinal",        # Blaue Farbrampe hell -> dunkel
+            marker_by="tag",             # Messtag als Markersymbol (o, s, ^, D, v)
+            filled="stationaer",         # Gefüllt = stationär, leer/offen = nicht stationär
+            connect_by="V_MFC",          # Linien verbinden Stufen gleicher Dosierung
+            ref_lines=[
+                RefLine(value=0.5, label="X = 0.5 (T50)"),
+                RefLine(value=0.9, label="X = 0.9 (T90)"),
+            ],
+            x_label="Bett-Temperatur [°C]",
+            y_label="Umsatz X",
+            y_lim=(-0.05, 1.05),
+        ),
+        # 3. XY-Diagramm mit Sekundärachse (z. B. Arrhenius mit oberer °C-Achse)
+        XYViewSpec(
+            name="arrhenius",
+            title="Arrhenius-Plot",
+            x_expr="1000 / (T_bett + 273.15)",
+            y_expr="log(k_1_s)",
+            u_y="u_lnk_zufall",
+            color_by="V_MFC",
+            marker_by="tag",
+            secondary_x=SecondaryAxis(
+                label="Bett-Temperatur [°C]",
+                forward_expr="1000 / x - 273.15",
+                inverse_expr="1000 / (x + 273.15)",
+            ),
+            x_label="1000 / T_bett [1/K]",
+            y_label="ln k [1/s]",
+        ),
+        # 4. Kleinvielfache / Faceting (z. B. Konzentration je Temperatur-Klasse)
+        XYViewSpec(
+            name="konzentration",
+            title="Konzentrationseinfluss",
+            x="c_in_mg_m3",
+            y="X",
+            u_y="u_X",
+            facet_by="T_klasse",        # Eigene Subplots je Klasse mit verlinkten Achsen
+            facet_cols=3,
+            marker_by="tag",
+            filled="stationaer",
+            x_label="c_ein [mg/Nm³]",
+            y_label="Umsatz X",
+        ),
+        # 5. Umsatz-Matrix / Heatmap
+        MatrixViewSpec(
+            name="umsatz_matrix",
+            title="Umsatz-Matrix",
+            subtitle="Mittlerer Umsatz X je Temperatur und Dosierstufe",
+            rows="T_klasse",
+            cols="V_MFC",
+            value="X",
+            status="stationaer",        # Bei Nichterfüllung: Zelle in Grau-Wash + '*'
+            subtext="{c_in_mg_m3:.0f} mg/Nm³",
+            cmap="seq",                 # Sequentielle 13-Stufen-Blauskala
+            vmin=0.0,
+            vmax=1.0,
+            x_label="Dosierstufe V_MFC [Nl/min]",
+            y_label="Bett-Temperatur (Bereich)",
+        ),
+    ]
+)
+```
+
+### Ergonomie und Interaktion
+- **Öffnen**: Über das Kampagnen-Menü *Tools → Results Views...* oder die Schaltfläche *Views...* im Results-Dock.
+- **Klick-to-Inspect**: Ein Klick auf einen Messpunkt im XY-Plot, eine Matrix-Zelle oder ein Doppelklick auf eine Tabellenzeile springt sofort im Fenster-Inspektor auf den exakten Messschritt (`step_inspected`).
+- **Szenario-Umschalter**: Wechselt das Szenario (z. B. alternative Kalibrierungen); alle Diagramme und Tabellen aktualisieren sich live.
+- **Vektor- und Bildexport**: Jede Ansicht lässt sich über die Schaltfläche *Export Current View...* als PNG (mit definierter Auflösung/DPI), SVG oder PDF (in millimetergenauen Druckmaßen) exportieren.
+
 ## Absolute Zeit
 
 **Absolute Zeit** bleibt erhalten: `time_seconds` zählt ab dem ersten gültigen Sample, `ds.time_origin` ist der absolute Zeitpunkt dazu, `ds.time_abs` die absolute Zeit jeder Zeile und `ds.with_time_abs()` die Tabelle mit Spalte `time_abs`. Damit lassen sich später mehrere Geräte einer Messkampagne auf eine Zeitachse legen (Etappe 2b). Datums- und Zeitwerte ohne Zeitzone gelten als Wanduhrzeit. Mit `IngestionConfig(time=TimeConfig(timezone="Europe/Zurich"))` werden sie in dieser Zone gelesen, dann bleiben die Sekunden auch über die Sommerzeitumstellung korrekt (doppelte oder fehlende Uhrzeiten stehen im Audit). Logger, die nur die verstrichene Zeit exportieren (z. B. PicoLog `00:00:00`), bekommen ihren Startzeitpunkt über `TimeConfig(origin=datetime(...))`. Uhrzeiten ohne Datum (z. B. im Labjournal) bekommen ihr Datum über `TimeConfig(clock_date=date(...))`. Weitere Datumsformate: `TimeConfig(datetime_formats=[...])`; ein erzwungenes `TimeConfig(format=TimeFormat.DATETIME)`, das nicht passt, schlägt laut fehl (`TimeConfigError`).

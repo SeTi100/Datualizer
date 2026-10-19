@@ -140,6 +140,66 @@ def export_plot(canvas: CampaignPlotCanvas, path: str | Path, options: ExportOpt
     return path
 
 
+def export_graphics_layout(
+    layout_widget: pg.GraphicsLayoutWidget,
+    path: str | Path,
+    options: ExportOptions = ExportOptions(),
+) -> Path:
+    """Export any pg.GraphicsLayoutWidget into a PNG, SVG or PDF file."""
+    path = Path(path)
+    fmt = ExportFormat.from_path(path)
+    height_mm = options.height_mm if options.height_mm > 0 else 120.0
+    w = mm_to_scene(options.width_mm)
+    h = mm_to_scene(height_mm)
+    scene = layout_widget.scene()
+    for item in scene.items():
+        item.setCacheMode(QGraphicsItem.CacheMode.NoCache)
+
+    orig_geo = layout_widget.ci.geometry()
+    orig_rect = scene.sceneRect()
+
+    layout_widget.ci.setGeometry(QRectF(0, 0, w, h))
+    scene.setSceneRect(QRectF(0, 0, w, h))
+    for _ in range(3):
+        layout_widget.ci.layout.activate()
+        QApplication.processEvents()
+    source = QRectF(0, 0, w, h)
+
+    if fmt is ExportFormat.PNG:
+        scale = options.dpi / SCENE_DPI
+        image = QImage(round(w * scale), round(h * scale), QImage.Format.Format_ARGB32)
+        image.fill(QColor(_theme(options).background))
+        _render(scene, image, QRectF(0, 0, image.width(), image.height()), source)
+        dots_per_m = round(options.dpi / MM_PER_INCH * 1000)
+        image.setDotsPerMeterX(dots_per_m)
+        image.setDotsPerMeterY(dots_per_m)
+        if not image.save(str(path)):
+            raise OSError(f"Cannot write {path}")
+    elif fmt is ExportFormat.SVG:
+        from PySide6.QtSvg import QSvgGenerator
+
+        gen = QSvgGenerator()
+        gen.setFileName(str(path))
+        gen.setSize(QSize(round(w), round(h)))
+        gen.setViewBox(source)
+        gen.setResolution(SCENE_DPI)
+        gen.setTitle("Datualizer view export")
+        _render(scene, gen, source, source)
+    else:
+        writer = QPdfWriter(str(path))
+        writer.setPageSize(QPageSize(QSizeF(options.width_mm, height_mm), QPageSize.Unit.Millimeter))
+        writer.setPageMargins(QMarginsF(0, 0, 0, 0))
+        writer.setResolution(SCENE_DPI)
+        writer.setTitle("Datualizer view export")
+        _render(scene, writer, QRectF(0, 0, writer.width(), writer.height()), source)
+
+    layout_widget.ci.setGeometry(orig_geo)
+    scene.setSceneRect(orig_rect)
+    layout_widget.ci.layout.activate()
+    QApplication.processEvents()
+    return path
+
+
 def _theme(options: ExportOptions) -> Theme:
     return LIGHT if options.light else DARK
 

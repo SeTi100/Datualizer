@@ -63,9 +63,9 @@ class TestJournal:
         assert second.label == "Referenz 1" and second.params == {"temperatur": 200.0, "v_mfc": 1.0}
         third = steps.intervals[2]  # block name written only in the first row of the block
         assert third.label == "Referenz 1" and third.params["v_mfc"] == 10.0
-        assert not first.manual and first.origin == "journal:row 0"
+        assert not first.manual and first.origin == "journal:row 11"  # row of the sheet, as in Excel
         # "clearing" rows and empty template rows have no start: reported, not dropped silently
-        assert steps.problems == ["journal: rows 18, 36, 40–49: no start time (skipped)."]
+        assert steps.problems == ["journal: rows 29, 47, 51–60: no start time (skipped)."]
 
     def test_times_on_another_clock(self, session: CampaignSession) -> None:
         """The journal also lists the FID clock's times; they follow the FID clock model."""
@@ -78,7 +78,7 @@ class TestJournal:
         before = session.intervals()
         assert before.intervals[0].label == "Referenz 1"  # the conditioning row has no FID times
         assert before.intervals[0].start == zurich(2026, 10, 12, 10, 36, 50)
-        assert "rows 0, 18, 36, 40–49: no start time" in before.problems[0]
+        assert "rows 11, 29, 47, 51–60: no start time" in before.problems[0]
         session.set_clock(fid.id, ClockModel(offset_s=970))
         after = session.intervals()
         assert after.intervals[0].start == before.intervals[0].start + 970
@@ -144,14 +144,14 @@ class TestEndRules:
         ivs, problems = self.derive(EndRule(column="end"))
         assert ivs[0].end - ivs[0].start == 20 * 60
         assert [i.label for i in ivs] == ["a", "b"]
-        assert problems == ["x: row 2: no readable end (skipped)."]
+        assert problems == ["x: row 4: no readable end (skipped)."]  # header is row 1
 
     def test_duration_next_start_and_fixed(self) -> None:
         ivs, _ = self.derive(EndRule(kind=EndKind.DURATION, column="dur"))
         assert [(i.label, i.duration_s) for i in ivs] == [("a", 60.0), ("c", 30.0)]
         ivs, problems = self.derive(EndRule(kind=EndKind.NEXT_START))
         assert [i.duration_s for i in ivs] == [30 * 60, 20 * 60]
-        assert problems == ["x: row 2: last step has no next start, no end."]
+        assert problems == ["x: row 4: last step has no next start, no end."]
         ivs, _ = self.derive(EndRule(kind=EndKind.FIXED, seconds=90))
         assert [i.duration_s for i in ivs] == [90.0] * 3
 

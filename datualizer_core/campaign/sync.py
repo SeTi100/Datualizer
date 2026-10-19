@@ -21,7 +21,8 @@ from typing import Any
 import numpy as np
 
 from datualizer_core.campaign.clock import ClockAnchor, ClockCells, ClockModel, to_epoch_s
-from datualizer_core.ingestion.readers.excel import read_cells
+from datualizer_core.ingestion.grid import Grid, GridError, locate
+from datualizer_core.ingestion.readers.excel import read_sheet
 from datualizer_core.stats.window import Check
 
 JOURNAL_PAIRS = "journal_pairs"
@@ -78,17 +79,29 @@ def cell_datetime(value: Any, day: date | None, ref: str) -> datetime:
 
 
 def anchors_from_cells(path: str | Path, cells: ClockCells) -> list[ClockAnchor]:
-    """One anchor per configured cell pair (source time, master time) of the workbook at `path`."""
-    refs = [ref for p in cells.pairs for ref in (p.source_cell, p.master_cell)]
-    values = read_cells(path, cells.sheet, refs)
+    """One anchor per configured cell pair (source time, master time) of the workbook at `path`.
+
+    Cells given by label are looked up in the sheet; a missing or ambiguous label fails loudly.
+    """
+    name, names, rows, _ = read_sheet(path, cells.sheet)
+    grid = Grid(rows=rows, sheet=name, sheets=tuple(names))
     anchors = []
     for p in cells.pairs:
-        note = p.note or f"{p.source_cell} → {p.master_cell}"
-        anchors.append(ClockAnchor(
-            source_time=cell_datetime(values[p.source_cell], cells.day, p.source_cell),
-            master_time=cell_datetime(values[p.master_cell], cells.day, p.master_cell),
-            note=note,
-        ))
+        found = []
+        for ref in p.refs():
+            try:
+                found.append(locate(grid, ref))
+            except (GridError, ValueError) as exc:
+                raise ClockCellsError(str(exc)) from None
+        times = []
+        for ref, hit in zip(p.refs(), found):
+            try:
+                times.append(cell_datetime(hit.value, cells.day, hit.address))
+            except ClockCellsError as exc:
+                raise ClockCellsError(f"{exc} ({ref.describe()})" if ref.label else str(exc)) from None
+        src, mst = found
+        note = p.note or f"{src.address} → {mst.address}"
+        anchors.append(ClockAnchor(source_time=times[0], master_time=times[1], note=note))
     return anchors
 
 

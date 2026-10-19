@@ -56,7 +56,7 @@ Eine Messkampagne mit vier Quellen in vier Formaten: Waage per OCR in SQLite, La
 
 ### 3. Messschritte aus dem Labjournal
 
-Im Bild ganz oben sind die Schritte aus dem Labjournal als Bänder über allen Plots eingeblendet, links steht die Liste mit Problemen (Journalzeilen ohne Startzeit) und der Regel, welcher Teil jedes Schritts ausgewertet wird (z. B. „die letzten 2 Minuten“). Welche Spalten Start, Ende, Name und Sollwerte sind, kommt aus dem Profil oder wird aus der Datenform erraten, nie aus dem Code. Eigene Schritte setzt man per Rechtsklick → *Marker ○ ○*.
+Im Bild ganz oben sind die Schritte aus dem Labjournal als Bänder über allen Plots eingeblendet, links steht die Liste mit Problemen (Journalzeilen ohne Startzeit) und der Regel, welcher Teil jedes Schritts ausgewertet wird (z. B. „die letzten 2 Minuten“). Welche Spalten Start, Ende, Name und Sollwerte sind, kommt aus dem Profil oder wird aus der Datenform erraten, nie aus dem Code. Ändert sich das Journal (neue Spalte, ein anderer Tag darunter), findet die Zuordnung die Spalten über ihre Überschrift und hört beim Zeitsprung auf; was nicht mehr passt, meldet sie laut. Eingestellt wird das direkt am Tabellenblatt: Spalte anklicken, Rolle wählen ([Details und Bild](docs/BENUTZUNG.md)). Eigene Schritte setzt man per Rechtsklick → *Marker ○ ○*.
 
 ### 4. Jeden Schritt ehrlich auswerten
 

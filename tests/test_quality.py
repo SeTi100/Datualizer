@@ -181,6 +181,17 @@ class TestSynthetic:
         ds = load_csv(text, config=IngestionConfig(quality=QualityConfig(stuck_min_duration_s=10)))
         assert _rows(ds, "stuck", "x") == list(range(20))
 
+    def test_channel_names_like_internal_columns(self) -> None:
+        # channels named "b" or "p" broke stuck detection or were overwritten by the jump detector
+        values = [1.0] * 40 + [50.0] * 5 + [1.0] * 15 + [float(i) for i in range(60)]
+        rows = "".join(f"{s},{v},{v},{v},{v}\n" for s, v in enumerate(values))
+        cfg = IngestionConfig(quality=QualityConfig(jump_thresholds={ch: 10.0 for ch in ("x", "b", "p", "lvl")}))
+        ds = load_csv("time,x,b,p,lvl\n" + rows, config=cfg)
+        flags = ds.quality_flags.filter(pl.col("channel").is_not_null())
+        per = {ch: set(flags.filter(pl.col("channel") == ch).select("row", "flag").rows()) for ch in "x b p lvl".split()}
+        assert per["x"] and {f for _, f in per["x"]} >= {"stuck", "dropout"}
+        assert per["b"] == per["x"] and per["p"] == per["x"] and per["lvl"] == per["x"]
+
     def test_gap_inside_run(self) -> None:
         text = "time,x\n00:00:00,1\n00:00:01,2\n00:00:02,3\n00:01:00,4\n00:01:01,5\n"
         assert _rows(load_csv(text), "gap") == [3]

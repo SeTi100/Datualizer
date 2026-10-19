@@ -2,6 +2,15 @@
 
 from datualizer_core.campaign.campaign import Campaign, CampaignSession, CampaignSource, Track
 from datualizer_core.campaign.clock import CellPair, ClockAnchor, ClockCells, ClockModel, epoch_seconds, to_epoch_s
+from datualizer_core.campaign.derived import (
+    MASKED,
+    DerivedChannel,
+    Mask,
+    MaskSpan,
+    Piece,
+    apply_derived,
+    calibration_channel,
+)
 from datualizer_core.campaign.coverage import (
     NO_VALUES,
     TIME_GAP,
@@ -45,6 +54,13 @@ from datualizer_core.campaign.sync import (
 
 __all__ = [
     "CROSS_CORRELATION",
+    "MASKED",
+    "DerivedChannel",
+    "Mask",
+    "MaskSpan",
+    "Piece",
+    "apply_derived",
+    "calibration_channel",
     "Campaign",
     "CampaignSession",
     "CampaignSource",

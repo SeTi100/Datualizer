@@ -13,7 +13,7 @@ from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import QScrollArea, QToolTip, QVBoxLayout, QWidget
 
-from datualizer_core.campaign import IntervalSet, ResolvedInterval, SourceCoverage, Track
+from datualizer_core.campaign import IntervalSet, MaskSpan, ResolvedInterval, SourceCoverage, Track
 from datualizer_gui.components import curves
 from datualizer_gui.components.curves import (
     FastCurve,
@@ -34,6 +34,7 @@ from datualizer_gui.components.coverage_strip import (
     left_axis_width,
 )
 from datualizer_gui.components.interval_bands import PENDING_PEN, StepBand, StepsItem, marker_icon, marker_text
+from datualizer_gui.components.mask_bands import MasksItem, mask_text, masks_for
 from datualizer_gui.components.plot_canvas import CHANNEL_COLORS
 from datualizer_gui.components.plot_groups import ColorBy, GroupBy, PlotGroup, group_tracks, track_colors, track_key
 from datualizer_gui.components.readout import VALUE_WIDTH, ReadoutLabel, ReadoutMode, ReadoutTable, format_value
@@ -69,6 +70,8 @@ class CampaignPlotCanvas(QWidget):
 
     Measurement steps are drawn as bands over all subplots. Right click → "Marker ○ ○" sets a
     step by hand: the first click its start (first circle green), the second its end.
+    Masked spans are hatched in the subplots of the channels they concern; right click →
+    "Mask Range..." asks to mask the started marker's span or the visible time span.
     """
 
     interval_marked = Signal(float, float)  # master start, end of a step set with the marker
@@ -76,6 +79,9 @@ class CampaignPlotCanvas(QWidget):
     interval_rename_requested = Signal(str)
     interval_delete_requested = Signal(str)
     interval_inspect_requested = Signal(str)  # open the window inspector on this step
+    mask_requested = Signal(float, float, object)  # master start, end, [(source, channel)] of the subplot
+    mask_edit_requested = Signal(str, int)  # source id, index of the mask in the source
+    mask_remove_requested = Signal(str, int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -113,6 +119,10 @@ class CampaignPlotCanvas(QWidget):
         self._pending_lines: list[tuple[pg.PlotItem, pg.InfiniteLine]] = []
         self._menu_x: float | None = None  # master time of the last right click
         self._menu_step: ResolvedInterval | None = None  # step under the last right click
+        self._masks: list[MaskSpan] = []
+        self._masks_items: list[tuple[pg.PlotItem, MasksItem]] = []  # subplots with masks
+        self._menu_key: str | None = None  # subplot of the last right click (None: coverage strip)
+        self._menu_mask: MaskSpan | None = None  # mask under the last right click
 
         self.action_marker = QAction(marker_icon(0), marker_text(0), self)
         self.action_marker.setToolTip("First click: start of a step, second click: its end")
@@ -134,9 +144,24 @@ class CampaignPlotCanvas(QWidget):
         self.action_delete_step.triggered.connect(
             lambda: self._menu_step and self.interval_delete_requested.emit(self._menu_step.id)
         )
+        self.action_mask_range = QAction("Mask Range...", self)
+        self.action_mask_range.setToolTip(
+            "Flag a time span as masked (left out of the statistics): from the started marker to here, "
+            "else the visible time span"
+        )
+        self.action_mask_range.triggered.connect(self._on_mask_range)
+        self.action_edit_mask = QAction("Edit Mask...", self)
+        self.action_edit_mask.triggered.connect(
+            lambda: self._menu_mask and self.mask_edit_requested.emit(self._menu_mask.source_id, self._menu_mask.index)
+        )
+        self.action_remove_mask = QAction("Remove Mask", self)
+        self.action_remove_mask.triggered.connect(
+            lambda: self._menu_mask and self.mask_remove_requested.emit(self._menu_mask.source_id, self._menu_mask.index)
+        )
         self._step_actions = [
             self.action_marker, self.action_marker_cancel, self.action_inspect_step, self.action_zoom_step,
             self.action_rename_step, self.action_delete_step,
+            self.action_mask_range, self.action_edit_mask, self.action_remove_mask,
         ]
         esc = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
         esc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -290,6 +315,7 @@ class CampaignPlotCanvas(QWidget):
         for p in self._all_plots():
             self._install_step_menu(p)
         self._draw_bands()
+        self._draw_masks()
         self._draw_pending()
         if not self._tracks and not self._coverage:
             self.crosshair_label.setText("Add sources and select channels to plot them on one time axis.")
@@ -383,6 +409,7 @@ class CampaignPlotCanvas(QWidget):
                 p.enableAutoRange(axis="y", enable=False)
                 p.setYRange(*shown.getViewBox().viewRange()[1], padding=0)
         c.set_intervals(self._intervals)  # step bands as shown (empty if switched off)
+        c.set_masks(self._masks)
         for line in [*c._crosshair_lines.values(), c._coverage_line]:
             if line is not None:
                 line.hide()
@@ -416,6 +443,57 @@ class CampaignPlotCanvas(QWidget):
         """Draw these steps as bands over all subplots."""
         self._intervals = intervals
         self._draw_bands()
+
+    # ------------------------------------------------------------------ masks
+    @property
+    def masks(self) -> list[MaskSpan]:
+        return list(self._masks)
+
+    @property
+    def masks_items(self) -> dict[str, MasksItem]:
+        """The items painting the masks, per subplot key (only subplots with masks)."""
+        keys = {id(p): k for k, p in self._plot_items.items()}
+        return {keys[id(p)]: item for p, item in self._masks_items if id(p) in keys}
+
+    def set_masks(self, masks: Sequence[MaskSpan]) -> None:
+        """Hatch these masks in the subplots of the channels they concern."""
+        self._masks = list(masks)
+        self._draw_masks()
+
+    def masks_at(self, x: float, key: str | None = None) -> list[MaskSpan]:
+        """Masks at master time `x` that concern the subplot `key` (default: any track shown)."""
+        tracks = self._group_tracks.get(key, ()) if key is not None else self._tracks
+        return [m for m in masks_for(self._masks, tracks) if m.start <= x <= m.end]
+
+    def request_mask(self, x: float, key: str | None = None) -> None:
+        """What "Mask Range..." does after a right click at master time `x` in subplot `key`."""
+        if self._marker_start is not None:
+            start, end = sorted((self._marker_start, x))
+            self.cancel_marker()
+        else:
+            rng = self.view_x_range()
+            if rng is None:
+                return
+            start, end = rng
+        tracks = self._group_tracks.get(key, ()) if key is not None else self._tracks
+        self.mask_requested.emit(start, end, [(tr.source_id, tr.channel) for tr in tracks])
+
+    def _on_mask_range(self) -> None:
+        if self._menu_x is not None:
+            self.request_mask(self._menu_x, self._menu_key)
+
+    def _draw_masks(self) -> None:
+        for p, item in self._masks_items:
+            p.removeItem(item)
+        self._masks_items = []
+        if not self._masks:
+            return
+        for key, p in self._plot_items.items():
+            hits = masks_for(self._masks, self._group_tracks.get(key, ()))
+            if hits:
+                item = MasksItem(hits, self._source_labels)
+                p.addItem(item, ignoreBounds=True)
+                self._masks_items.append((p, item))
 
     def place_marker(self, x: float) -> None:
         """The "Marker ○ ○" action at master time `x` (what a right click does)."""
@@ -456,10 +534,19 @@ class CampaignPlotCanvas(QWidget):
         self.action_marker.setIcon(marker_icon(state))
         self.action_marker.setText(marker_text(state))
 
-    def _prepare_step_menu(self, x: float) -> None:
-        """Set up the step entries for a right click at master time `x`."""
+    def _prepare_step_menu(self, x: float, key: str | None = None) -> None:
+        """Set up the step and mask entries for a right click at master time `x` in subplot `key`."""
         self._menu_x = x
+        self._menu_key = key
         self._menu_step = self.step_at(x)
+        hits = self.masks_at(x, key) if key is not None else []
+        self._menu_mask = hits[0] if hits else None
+        self.action_edit_mask.setVisible(self._menu_mask is not None)
+        self.action_remove_mask.setVisible(self._menu_mask is not None)
+        if self._menu_mask is not None:
+            reason = self._menu_mask.reason or "no reason"
+            self.action_edit_mask.setText(f"Edit Mask '{reason}'...")
+            self.action_remove_mask.setText(f"Remove Mask '{reason}'")
         self.action_marker_cancel.setVisible(self._marker_start is not None)
         on_step = self._menu_step is not None
         self.action_zoom_step.setVisible(on_step)
@@ -492,7 +579,8 @@ class CampaignPlotCanvas(QWidget):
             canvas, view = canvas_ref(), vb_ref()
             if canvas is None or view is None:
                 return
-            canvas._prepare_step_menu(view.mapSceneToView(ev.scenePos()).x())
+            key = next((k for k, p in canvas._plot_items.items() if p.getViewBox() is view), None)
+            canvas._prepare_step_menu(view.mapSceneToView(ev.scenePos()).x(), key)
             type(view).raiseContextMenu(view, ev)
 
         vb.raiseContextMenu = raise_menu
@@ -648,7 +736,7 @@ class CampaignPlotCanvas(QWidget):
             self.update_crosshair(self.crosshair_x)
 
     def readout_rows(self, x: float) -> tuple[str, list[tuple[str, str, str]], list[str]]:
-        """(time text, rows of (track label, value, unit), notes: gaps and the current step) at master time `x`."""
+        """(time text, rows of (track label, value, unit), notes: gaps, masks and the current step) at master time `x`."""
         rows = []
         for tr in self._tracks:
             curve = self._curves.get(track_key(tr))
@@ -657,6 +745,7 @@ class CampaignPlotCanvas(QWidget):
             # what the curve draws there: steps hold their value, nothing in a break ("—")
             rows.append((tr.label, format_value(curve.value_at(x), self._decimals).strip(), tr.unit))
         notes = [g for g in (describe_gap(c, x) for c in self._coverage) if g]
+        notes += [mask_text(m, self._source_labels.get(m.source_id, "")) for m in self.masks_at(x)]
         step = self.step_at(x)
         if step is not None:
             notes.append(f"step: {step.label}")

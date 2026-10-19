@@ -124,6 +124,7 @@ class CampaignWindow(QMainWindow):
         self.sources_panel.clock_changed.connect(self._on_clock_changed)
         self.sources_panel.view_range = self.canvas.view_x_range
         self.sources_panel.display_changed.connect(self._on_display_changed)
+        self.sources_panel.data_changed.connect(lambda sid: self.refresh_plot())
         self.sources_panel.add_requested.connect(self._on_add)
         self.sources_panel.remove_requested.connect(self.remove_source)
         self.intervals_panel.changed.connect(self.refresh_steps)
@@ -137,6 +138,11 @@ class CampaignWindow(QMainWindow):
         self.canvas.interval_moved.connect(self.move_step)
         self.canvas.interval_rename_requested.connect(self._on_rename_step)
         self.canvas.interval_delete_requested.connect(self.delete_step)
+        self.canvas.mask_requested.connect(
+            lambda lo, hi, chans: self.sources_panel.new_mask(start=lo, end=hi, channels=chans)
+        )
+        self.canvas.mask_edit_requested.connect(self.sources_panel.edit_mask)
+        self.canvas.mask_remove_requested.connect(self.sources_panel.remove_mask)
 
         menu = self.menuBar().addMenu("&Campaign")
         for text, key, slot in [
@@ -420,6 +426,7 @@ class CampaignWindow(QMainWindow):
             tracks, self._session.campaign.timezone, coverage,
             source_order=[s.id for s in sources], source_labels={s.id: s.label or s.id for s in sources},
         )
+        self.canvas.set_masks(self._session.mask_spans())
         self.window_inspector.set_channels(self.sources_panel.checked_channels())
         self.refresh_steps()
 

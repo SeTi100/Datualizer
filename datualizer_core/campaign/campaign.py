@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from datualizer_core.campaign.clock import ClockAnchor, ClockCells, ClockModel, epoch_seconds, to_epoch_s
 from datualizer_core.campaign.coverage import SourceCoverage, coverage_intervals, value_rows
+from datualizer_core.campaign.derived import DerivedChannel, Mask, MaskSpan, apply_derived
 from datualizer_core.campaign.display import ChannelDisplay, YScale
 from datualizer_core.campaign.evaluation import (
     DEFAULT_WINDOW,
@@ -72,6 +73,15 @@ class CampaignSource(BaseModel):
     display: dict[str, ChannelDisplay] = Field(
         default_factory=dict, description="Display settings per channel (style, y scale, alias); display only."
     )
+    derived: list[DerivedChannel] = Field(
+        default_factory=list, description="Calculated channels from this source's channels; the raw channels stay as loaded."
+    )
+    masks: list[Mask] = Field(
+        default_factory=list, description="Master time spans whose values are flagged 'masked' (nothing is deleted)."
+    )
+
+    def derived_channel(self, name: str) -> DerivedChannel | None:
+        return next((d for d in self.derived if d.name == name), None)
 
     def channel_display(self, channel: str) -> ChannelDisplay:
         """Stored display settings of a channel, or the defaults."""
@@ -228,7 +238,9 @@ class CampaignSession:
         self.campaign = campaign if campaign is not None else Campaign()
         check_zone(self.campaign.timezone)
         self.base_dir = Path(base_dir) if base_dir is not None else Path.cwd()
-        self.datasets: dict[str, DualModeDataset] = {}
+        self._raw: dict[str, DualModeDataset] = {}  # as loaded
+        self._datasets: dict[str, DualModeDataset] = {}  # plus calculated channels and mask flags
+        self._derived_state: dict[str, tuple[tuple, list[str]]] = {}  # per source: inputs, problems
         self.warnings: list[str] = []
         # Derived per source, dropped when the source or its clock changes
         self._master_cache: dict[str, tuple[ClockModel, str, np.ndarray | None]] = {}
@@ -251,7 +263,54 @@ class CampaignSession:
             return
         if src.sha256 and _sha256(path) != src.sha256:
             self.warnings.append(f"{src.id}: file changed since it was added ({path.name})")
-        self.datasets[src.id] = load_source(path, src.profile, config=src.spec)
+        self._raw[src.id] = load_source(path, src.profile, config=src.spec)
+
+    @property
+    def datasets(self) -> dict[str, DualModeDataset]:
+        """Dataset per loaded source: as loaded plus its calculated channels and mask flags.
+
+        Rebuilt when the source's calculated channels, masks or clock or the campaign zone change
+        (pieces and masks are placed on master time). The raw channels keep the values they were
+        loaded with; `raw_dataset` gives the dataset exactly as loaded. Read only: change sources
+        with the session's methods.
+        """
+        for sid in list(self._raw):
+            self._refresh(sid)
+        return self._datasets
+
+    def raw_dataset(self, source_id: str) -> DualModeDataset | None:
+        """The dataset of a source exactly as loaded (without calculated channels and masks)."""
+        return self._raw.get(source_id)
+
+    def derived_problems(self, source_id: str) -> list[str]:
+        """Calculated channels and masks of a source that could not be applied, and why."""
+        if source_id not in self._raw:
+            return []
+        self._refresh(source_id)
+        return list(self._derived_state[source_id][1])
+
+    def _refresh(self, source_id: str) -> None:
+        raw = self._raw[source_id]
+        src = self.campaign.source(source_id)
+        key = (
+            id(raw), self.campaign.timezone, src.clock.model_dump_json(),
+            json.dumps([d.model_dump(mode="json") for d in src.derived]),
+            json.dumps([m.model_dump(mode="json") for m in src.masks]),
+        )
+        state = self._derived_state.get(source_id)
+        if state is not None and state[0] == key:
+            return
+        if src.derived or src.masks:
+            ds, problems = apply_derived(raw, self.master_time(source_id), src.derived, src.masks, self.campaign.timezone)
+        else:
+            ds, problems = raw, []
+        # tracks of calculated channels may hold old values; raw channels and master times stay valid
+        for k in [k for k in self._track_cache if k[0] == source_id and k[1] not in raw.columns]:
+            del self._track_cache[k]
+        for k in [k for k in self._coverage_cache if k[0] == source_id]:
+            del self._coverage_cache[k]
+        self._datasets[source_id] = ds
+        self._derived_state[source_id] = (key, problems)
 
     def add_source(
         self,
@@ -283,7 +342,7 @@ class CampaignSession:
             sha256=_sha256(path),
         )
         self.campaign.sources.append(src)
-        self.datasets[sid] = ds
+        self._raw[sid] = ds
         self._forget(sid)
         return src
 
@@ -292,7 +351,9 @@ class CampaignSession:
         self.campaign.interval_mappings = [
             m for m in self.campaign.interval_mappings if source_id not in (m.source_id, m.clock_source)
         ]
-        self.datasets.pop(source_id, None)
+        self._raw.pop(source_id, None)
+        self._datasets.pop(source_id, None)
+        self._derived_state.pop(source_id, None)
         self._forget(source_id)
 
     def set_clock(self, source_id: str, clock: ClockModel) -> None:
@@ -353,7 +414,7 @@ class CampaignSession:
         Cached per source while its clock model and the campaign zone stay the same; the array
         is read-only.
         """
-        ds = self.datasets.get(source_id)
+        ds = self._raw.get(source_id)
         if ds is None:
             return None
         clock, zone = self.campaign.source(source_id).clock, self.campaign.timezone
@@ -422,6 +483,116 @@ class CampaignSession:
             cov = SourceCoverage(source_id, label, self.span(source_id), segments, gaps)
         self._coverage_cache[key] = (t, cov)
         return cov
+
+    # ------------------------------------------------- calculated channels, masks
+    def add_derived(self, source_id: str, channel: DerivedChannel) -> DerivedChannel:
+        """Add a calculated channel to a source; a name in use or a broken formula raises ValueError."""
+        src = self.campaign.source(source_id)
+        if src.derived_channel(channel.name) is not None:
+            raise ValueError(f"Source {source_id!r} already has a calculated channel {channel.name!r}.")
+        self._check_derived(source_id, [*src.derived, channel])
+        src.derived.append(channel.model_copy(deep=True))
+        return channel
+
+    def update_derived(self, source_id: str, name: str, channel: DerivedChannel) -> DerivedChannel:
+        """Replace the calculated channel `name` (it may be renamed if nothing uses the old name)."""
+        src = self.campaign.source(source_id)
+        idx = next((i for i, d in enumerate(src.derived) if d.name == name), None)
+        if idx is None:
+            raise KeyError(f"Source {source_id!r} has no calculated channel {name!r}.")
+        if channel.name != name:
+            self._check_unused(source_id, name)
+        new = [*src.derived[:idx], channel, *src.derived[idx + 1:]]
+        self._check_derived(source_id, new)
+        src.derived = [d.model_copy(deep=True) for d in new]
+        if channel.name != name and name in src.display:
+            src.display[channel.name] = src.display.pop(name)
+        return channel
+
+    def remove_derived(self, source_id: str, name: str) -> None:
+        """Remove a calculated channel; raises ValueError while another one or a mask uses it."""
+        src = self.campaign.source(source_id)
+        if src.derived_channel(name) is None:
+            raise KeyError(f"Source {source_id!r} has no calculated channel {name!r}.")
+        self._check_unused(source_id, name)
+        src.derived = [d for d in src.derived if d.name != name]
+        src.display.pop(name, None)
+
+    def _check_unused(self, source_id: str, name: str) -> None:
+        src = self.campaign.source(source_id)
+        users = [d.name for d in src.derived if d.name != name and name in d.inputs()]
+        users += [f"mask {i + 1}" for i, m in enumerate(src.masks) if name in m.channels]
+        if users:
+            raise ValueError(f"{name!r} is used by {', '.join(users)}.")
+
+    def _check_derived(self, source_id: str, channels: Sequence[DerivedChannel]) -> None:
+        """Build the channels on the loaded data; any problem raises ValueError (fail loudly, principle 3)."""
+        names = [d.name for d in channels]
+        double = sorted({n for n in names if names.count(n) > 1})
+        if double:
+            raise ValueError(f"Calculated channel names used twice: {double}.")
+        raw = self._raw.get(source_id)
+        if raw is None:
+            return  # file missing: checked when it is loaded
+        _ds, problems = apply_derived(raw, self.master_time(source_id), channels, [], self.campaign.timezone)
+        if problems:
+            raise ValueError("; ".join(problems))
+
+    def add_mask(
+        self, source_id: str, start: float, end: float, channels: Sequence[str] = (), reason: str = ""
+    ) -> Mask:
+        """Flag the values of a source between master epoch seconds `start` and `end` as `masked`.
+
+        `channels`: the channels concerned (also calculated ones), empty = all. Start and end may be
+        swapped. Unknown channels raise KeyError. Nothing is deleted; the window statistics leave
+        the values out while `masked` is in `StatsConfig.exclude_flags` (the default).
+        """
+        src = self.campaign.source(source_id)
+        mask = self._make_mask(source_id, start, end, channels, reason)
+        src.masks.append(mask)
+        return mask
+
+    def update_mask(
+        self, source_id: str, index: int, start: float, end: float, channels: Sequence[str] = (), reason: str = ""
+    ) -> Mask:
+        """Replace mask number `index` (0-based position in the source's masks)."""
+        src = self.campaign.source(source_id)
+        if not 0 <= index < len(src.masks):
+            raise KeyError(f"Source {source_id!r} has no mask {index + 1}.")
+        mask = self._make_mask(source_id, start, end, channels, reason)
+        src.masks[index] = mask
+        return mask
+
+    def remove_mask(self, source_id: str, index: int) -> None:
+        src = self.campaign.source(source_id)
+        if not 0 <= index < len(src.masks):
+            raise KeyError(f"Source {source_id!r} has no mask {index + 1}.")
+        del src.masks[index]
+
+    def _make_mask(self, source_id: str, start: float, end: float, channels: Sequence[str], reason: str) -> Mask:
+        start, end = sorted((float(start), float(end)))
+        ds = self.datasets.get(source_id)
+        if ds is not None:
+            unknown = [c for c in channels if c not in ds.channels]
+            if unknown:
+                raise KeyError(f"Source {source_id!r} has no channels {unknown}.")
+        zone = self.campaign.timezone
+        return Mask(
+            start=master_datetime(start, zone), end=master_datetime(end, zone), channels=list(channels), reason=reason
+        )
+
+    def mask_spans(self, source_ids: Sequence[str] | None = None) -> list[MaskSpan]:
+        """Masks on master time (epoch seconds), of all sources or the given ones."""
+        zone = self.campaign.timezone
+        out = []
+        for src in self.campaign.sources:
+            if source_ids is not None and src.id not in source_ids:
+                continue
+            for i, m in enumerate(src.masks):
+                out.append(MaskSpan(
+                    src.id, i, to_epoch_s(m.start, zone), to_epoch_s(m.end, zone), tuple(m.channels), m.reason
+                ))
+        return out
 
     # ---------------------------------------------------------------- intervals
     def suggest_mapping(self, source_id: str) -> IntervalMapping:

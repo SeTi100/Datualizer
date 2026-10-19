@@ -2,16 +2,21 @@
 
 The database is opened read-only. Besides the table, the reader reports which tables exist and
 which AUTOINCREMENT ids are missing, so deleted experiments or runs become visible.
+
+Columns holding JSON objects as text (`SqliteOptions.json_columns`, e.g. run parameters
+`{"Temperatur": "150", "V_MFC": "1"}`) are split into one column per key; the JSON column stays.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sqlite3
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from datualizer_core.ingestion.readers.base import RawTable, ReaderError, string_frame, unique_headers
+from datualizer_core.ingestion.readers.base import RawTable, ReaderError, cell_to_text, string_frame, unique_headers
 
 
 class SqliteOptions(BaseModel):
@@ -21,6 +26,10 @@ class SqliteOptions(BaseModel):
 
     table: str | None = Field(None, description="Table to read completely.")
     query: str | None = Field(None, description="Read-only SELECT, e.g. a join of readings with their runs.")
+    json_columns: list[str] = Field(
+        default_factory=list,
+        description="Columns of the result holding JSON objects as text; each key becomes a column (missing key = empty).",
+    )
 
     @model_validator(mode="after")
     def _one_source(self) -> "SqliteOptions":
@@ -98,4 +107,64 @@ def read_sqlite(path: str | Path, options: SqliteOptions | None = None) -> RawTa
     finally:
         con.close()
     headers = unique_headers(names, [f"col_{i}" for i in range(len(names))])
+    if opts.json_columns:
+        headers, rows, meta["json_columns"] = _split_json(path, headers, rows, opts.json_columns)
     return RawTable(string_frame(headers, rows), ".", meta)
+
+
+def _json_text(value: Any) -> Any:
+    """A JSON value as the cell the loader reads: scalars as they are, objects and lists as JSON text."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return value
+
+
+def _split_json(
+    path: Path, headers: list[str], rows: list[tuple], columns: list[str]
+) -> tuple[list[str], list[list[Any]], dict[str, dict[str, Any]]]:
+    """Add one column per key of each JSON column, right after it.
+
+    New columns are named after the key, or `<column>_<key>` if that name is taken. A row without
+    the key, with an empty cell or with text that is not a JSON object gets empty cells; the
+    latter are counted in the metadata (`invalid_rows`, first few in `invalid_examples`).
+    """
+    unknown = [c for c in columns if c not in headers]
+    if unknown:
+        raise ReaderError(f"{path.name}: json_columns {unknown} are not in the result; columns: {headers}")
+    out_rows = [list(r) for r in rows]
+    out_headers = list(headers)
+    report: dict[str, dict[str, Any]] = {}
+    for col in columns:
+        idx = out_headers.index(col)
+        parsed: list[dict] = []
+        invalid: list[int] = []
+        for i, r in enumerate(out_rows):
+            cell = r[idx] if idx < len(r) else None
+            obj: Any = {}
+            if cell is not None and str(cell).strip():
+                try:
+                    obj = json.loads(cell)
+                except (TypeError, ValueError):
+                    obj = None
+                if not isinstance(obj, dict):
+                    invalid.append(i)
+                    obj = {}
+            parsed.append(obj)
+        keys: list[str] = []
+        for obj in parsed:
+            keys += [k for k in obj if k not in keys]
+        taken = set(out_headers)
+        names = []
+        for k in keys:
+            name = k if k not in taken else f"{col}_{k}"
+            n = 2
+            while name in taken:
+                name, n = f"{col}_{k}_{n}", n + 1
+            taken.add(name)
+            names.append(name)
+        out_headers[idx + 1:idx + 1] = names
+        for r, obj in zip(out_rows, parsed):
+            r += [None] * (idx + 1 - len(r))
+            r[idx + 1:idx + 1] = [cell_to_text(_json_text(obj.get(k))) for k in keys]
+        report[col] = {"keys": keys, "columns": names, "invalid_rows": len(invalid), "invalid_examples": invalid[:5]}
+    return out_headers, out_rows, report

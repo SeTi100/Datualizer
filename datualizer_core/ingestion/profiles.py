@@ -15,15 +15,18 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from datualizer_core.ingestion.calibration import CalibrationFields
 from datualizer_core.ingestion.config import IngestionConfig
 from datualizer_core.ingestion.readers.excel import ExcelOptions, _detect_header, _rows_xls, _rows_xlsx
 from datualizer_core.ingestion.readers.sqlite import SqliteOptions
+from datualizer_core.ingestion.readers.xml_meta import XmlOptions
 from datualizer_core.schema import PlotStyle
 from datualizer_core.ingestion.steps import StepColumns
 
 PROFILE_DIR = Path(__file__).resolve().parents[1] / "profiles"
 SQLITE_MAGIC = b"SQLite format 3\x00"
 EXCEL_SUFFIXES = {".xls", ".xlsx", ".xlsm"}
+XML_SUFFIXES = {".xml"}
 HINT_SCAN_BYTES = 16384
 
 
@@ -31,6 +34,7 @@ class ReaderKind(str, Enum):
     DELIMITED = "delimited"
     EXCEL = "excel"
     SQLITE = "sqlite"
+    XML = "xml"  # settings files: metadata blocks only, no table
 
 
 class OriginRule(str, Enum):
@@ -55,6 +59,7 @@ class SourceProfile(BaseModel):
     )
     excel: ExcelOptions = Field(default_factory=ExcelOptions)
     sqlite: SqliteOptions = Field(default_factory=SqliteOptions)
+    xml: XmlOptions = Field(default_factory=XmlOptions)
     ingestion: IngestionConfig = Field(default_factory=IngestionConfig)
     origin_rule: OriginRule = Field(
         OriginRule.NONE,
@@ -62,6 +67,9 @@ class SourceProfile(BaseModel):
     )
     intervals: StepColumns | None = Field(
         None, description="Suggested column roles if the source lists measurement steps (lab journal)."
+    )
+    calibration: CalibrationFields | None = Field(
+        None, description="Where the metadata holds a linear device calibration (for suggest_linear_calibration)."
     )
     plot_style: PlotStyle = Field(
         PlotStyle.LINE,
@@ -77,6 +85,8 @@ def reader_for(path: str | Path) -> ReaderKind:
             return ReaderKind.SQLITE
     if path.suffix.lower() in EXCEL_SUFFIXES:
         return ReaderKind.EXCEL
+    if path.suffix.lower() in XML_SUFFIXES:
+        return ReaderKind.XML
     return ReaderKind.DELIMITED
 
 

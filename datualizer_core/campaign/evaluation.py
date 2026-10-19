@@ -25,6 +25,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from datualizer_core.calc.expr import FUNCTIONS, ExprError, compile_expr
+from datualizer_core.calc.relations import Relation
 from datualizer_core.campaign.intervals import DEFAULT_WINDOW, ResolvedInterval, WindowRule
 from datualizer_core.stats.window import WindowResult
 
@@ -147,6 +148,7 @@ class Evaluation(BaseModel):
     step_classes: list[StepClass] = Field(default_factory=list)
     windows: list[NamedWindow] = Field(default_factory=list)
     measures: list[Measure] = Field(default_factory=list)
+    relations: list[Relation] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _consistent(self) -> "Evaluation":
@@ -168,6 +170,11 @@ class Evaluation(BaseModel):
                 if col in taken:
                     raise ValueError(f"Measure {m.alias!r}: column {col!r} is already {taken[col]}.")
                 taken[col] = f"a column of measure {m.alias!r}"
+        for r in self.relations:
+            for col in r.columns():
+                if col in taken:
+                    raise ValueError(f"Relation {r.name!r}: column {col!r} is already {taken[col]}.")
+                taken[col] = f"a column of relation {r.name!r}"
         return self
 
     def window(self, name: str) -> NamedWindow | None:

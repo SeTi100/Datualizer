@@ -229,6 +229,44 @@ b = Constant(name="b", value=3.0, u=0.2, kind="syst", group="waage")
 evaluate("a - b", {"a": a, "b": b}).u()     # 0.0: derselbe Fehler hebt sich in der Differenz auf
 ```
 
+## Bezüge zwischen Schritten
+
+`datualizer_core/calc/relations.py` stellt Beziehungen zwischen Zeilen der Schritt-Tabelle her (Etappe 2b, Schritt 8, PR 4):
+
+- **Nächster Referenzschritt (`nearest_reference`)**: Sucht für jeden Schritt den zeitlich nächsten passenden Bezugsschritt davor und/oder danach (z. B. Blindwert-Nullphasen).
+  - `where`: Filterformel für Kandidaten (z. B. `klasse == 'null' and abs(dS*60) <= 0.1`).
+  - `match`: Spalten, die zwischen Schritt und Referenz übereinstimmen müssen (z. B. `["T_soll", "luft"]`).
+  - `combine`: Wenn davor und danach ein Schritt gefunden wird (`art == "eingeklammert"`): Mittelwert beider Schritte, Unsicherheit nach Rechteckverteilung $u = \max(|\Delta| / (2\sqrt{3}), u_{\min})$.
+  - Wenn nur einseitig gefunden (`art == "einseitig"`): Wert dieses Schritts, $u = u_{\text{one}}$.
+  - Wenn keiner gefunden (`art == "keiner"`): Konfigurierter `fallback: FallbackValue(value, u)` oder `NaN`.
+  - Erzeugt 6 Spalten: `<name>`, `u_<name>`, `<name>_quelle` (Schritt-IDs), `<name>_art`, `<name>_vor`, `<name>_nach`.
+
+- **Laufende Summe (`cumulative`)**: Berechnet eine kumulative Summe in Zeitreihenfolge (z. B. Katalysator-Beladung $\Sigma \dot{m} \cdot \Delta t$).
+  - `expr`: Zuwachs pro Schritt (z. B. `-mdot * dauer_s`).
+  - `gap_s`: Zeitliche Lücke zwischen zwei Schritten $\ge \text{gap\_s}$ setzt die Summe vor dem aktuellen Schritt auf 0 zurück.
+  - `reset_when`: Formelbedingung für das Zurücksetzen. Unterstützt die Spezialfunktion `changed(spalte)`, die genau dann wahr ist, wenn sich der Wert der Spalte gegenüber der *vorherigen Dosierzeile* geändert hat (intervenierende Nullphasen verändern den getrackten Dosierwert nicht).
+
+- **Gitter-Rundung (`bin`)**: Rundet Werte auf das nächste Vielfache einer Schrittweite (`round(x / width) * width`), z. B. `bin(table, "T_bett", 25.0, name="T_klasse")`.
+
+- **Pydantic-Modelle und Replay**: `NearestReferenceRelation`, `CumulativeRelation` und `BinRelation` als discriminated union `Relation` nach `kind`. Über `apply_relations(table, relations)` werden mehrere Bezüge nacheinander angewendet; in Kampagnen stehen sie unter `Evaluation.relations` in `campaign.json`.
+
+```python
+from datualizer_core.calc import NearestReferenceRelation, CumulativeRelation, BinRelation, apply_relations
+
+relations = [
+    NearestReferenceRelation(
+        name="B", value="S_b", where="klasse == 'null' and abs(dS*60) <= 0.1",
+        match=["T_soll", "luft"], u_min=0.3, u_one=1.0, fallback={"value": 2.09, "u": 2.0},
+    ),
+    CumulativeRelation(
+        name="beladung", expr="-mdot * dauer_s",
+        reset_when="(klasse == 'null' and dauer_s >= 300) or changed(T_soll)", gap_s=300.0,
+    ),
+    BinRelation(name="T_klasse", expr="T_bett", width=25.0),
+]
+table_with_relations = apply_relations(step_table, relations)
+```
+
 ## Absolute Zeit
 
 **Absolute Zeit** bleibt erhalten: `time_seconds` zählt ab dem ersten gültigen Sample, `ds.time_origin` ist der absolute Zeitpunkt dazu, `ds.time_abs` die absolute Zeit jeder Zeile und `ds.with_time_abs()` die Tabelle mit Spalte `time_abs`. Damit lassen sich später mehrere Geräte einer Messkampagne auf eine Zeitachse legen (Etappe 2b). Datums- und Zeitwerte ohne Zeitzone gelten als Wanduhrzeit. Mit `IngestionConfig(time=TimeConfig(timezone="Europe/Zurich"))` werden sie in dieser Zone gelesen, dann bleiben die Sekunden auch über die Sommerzeitumstellung korrekt (doppelte oder fehlende Uhrzeiten stehen im Audit). Logger, die nur die verstrichene Zeit exportieren (z. B. PicoLog `00:00:00`), bekommen ihren Startzeitpunkt über `TimeConfig(origin=datetime(...))`. Uhrzeiten ohne Datum (z. B. im Labjournal) bekommen ihr Datum über `TimeConfig(clock_date=date(...))`. Weitere Datumsformate: `TimeConfig(datetime_formats=[...])`; ein erzwungenes `TimeConfig(format=TimeFormat.DATETIME)`, das nicht passt, schlägt laut fehl (`TimeConfigError`).

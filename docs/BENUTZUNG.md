@@ -322,6 +322,73 @@ df_scen = session.results(scenario="Luft 115 m³/h", spec=ev)
 - **Inspektor per Doppelklick**: Ein Doppelklick auf eine Zeile öffnet direkt den Fenster-Inspektor für diesen Schritt.
 - **Szenario-Umschalter**: Wechselt sofort zwischen Grundwerten und Szenarien und aktualisiert alle berechneten Kennwerte in Echtzeit.
 - **Formeleditor mit Live-Syntaxprüfung**: Beim Eintippen einer Rechen- oder Kriterienformel wird die Syntax sofort geprüft und mit Fehlerstelle oder grünem Häkchen angezeigt.
+- **Tab „Analyses“**: Zeigt die Ergebnisse aller konfigurierten Auswertungen (T50/T90-Durchgänge, Arrhenius-Geradenfits, Umsatz-Matrizen) in einer Tabelle mit CSV-Export.
+
+## Auswertungen über Schritte (Analyses) und Zeilenkorrelation
+
+`datualizer_core/calc/analyses.py` wertet Kennwerte über mehrere Schritte aus (Etappe 2b, Schritt 8, PR 6). In `campaign.json` stehen sie unter `Evaluation.analyses`, berechnet werden sie über `session.analyses()`:
+
+```python
+from datualizer_core.calc import CrossingAnalysis, FitLineAnalysis, AggregateAnalysis
+from datualizer_core.campaign import Evaluation
+
+ev = Evaluation(
+    constants={
+        "luft_m3_h": Constant(value=100.0, u=7.2, kind="syst", scope="tag"),
+    },
+    analyses=[
+        CrossingAnalysis(name="T50", x="T_bett", y="X", level=0.5, group="V_MFC", unit="°C", where="stationaer and bewertung != 'unsicher'"),
+        FitLineAnalysis(
+            name="arrhenius",
+            x_expr="1000 / (T_bett + 273.15)",
+            y_expr="log(k)",
+            u_x="1000 * u_T_bett / (T_bett + 273.15)**2",
+            where="stationaer and bewertung != 'unsicher' and X > 0.05 and X < 0.80 and isfinite(k)",
+            derived={"Ea": "-m * 8.314462"},
+        ),
+        AggregateAnalysis(name="umsatz_matrix", rows="T_klasse", cols="V_MFC", value="X", how="mean", where="stationaer and bewertung != 'unsicher'"),
+    ]
+)
+results = session.analyses()
+```
+
+1. **Schwellenwert-Durchgang (`crossing`)**: Lineare Interpolation für Übergänge (z. B. Light-off $T_{50}, T_{90}$ aus Umsatz $X$ gegen Temperatur).
+   - Liefert den Schnittpunkt (`wert`, z. B. `179 °C`).
+   - Liefert den Unsicherheitsbereich aus $y \pm u_y$ (`bereich`, z. B. `162 °C … 195 °C`).
+   - Findet kein Durchgang statt, liefert die Funktion sprechende Texte: `< x_min` (wenn bereits der kleinste Punkt oberhalb der Schwelle liegt) bzw. `> x_max` (wenn die Schwelle im gemessenen Bereich nicht erreicht wird), z. B. `< 185 °C` oder `> 240 °C`.
+   - `bereich_syst`: Berechnet den Bereich, wenn alle systematischen Fehler desselben `scope` gemeinsam verschoben werden.
+
+2. **Geradenfit mit effektiver Varianz und GLS (`fit_line`)**: Passt $y = m \cdot x + b$ an Punkte an, deren Unsicherheiten auf beiden Achsen liegen.
+   - Effektive Varianz $\sigma_i^2 = u_{y, i}^2 + m^2 \cdot u_{x, i}^2$ über 5 Iterationen.
+   - Berechnet reduziertes $\chi^2_{\text{red}}$ und den Birge-Faktor $\max(1, \sqrt{\chi^2_{\text{red}}})$, der die Unsicherheit vergrössert, wenn Punkte stärker streuen, als ihre Fehlerbudgets erklären.
+   - Weist $m$, $u_m$ (nur zufällig), $u_m$ (mit Korrelation) und $u_b$ aus.
+   - `derived`: Berechnet abgeleitete Grössen als Formel (z. B. scheinbare Aktivierungsenergie $E_a = -m \cdot 8.314$).
+   - Optional Monte Carlo (`mc_samples`): Zieht multivariate Zufallsstichproben aus der Kovarianzmatrix.
+
+3. **Aggregation und Pivot-Matrix (`aggregate`)**:
+   - 1D-Aggregation (`cols=None`): Verdichtet Werte nach Zeilengruppen (z. B. Mittelwert je Klasse).
+   - 2D-Pivot-Matrix: Kreuzt zwei Grössen (z. B. Zeilen $T_{\text{klasse}}$, Spalten $V_{\text{MFC}}$, Werte $X$).
+   - Funktionen: `mean`, `median`, `n`, `min`, `max`, `sum`, `std`.
+
+### Unterschied: `group` innerhalb einer Zeile vs. `scope` zwischen Zeilen
+
+In realen Messungen wirken Fehler auf zwei völlig unterschiedlichen Ebenen:
+
+| Begriff | Gültigkeit | Bedeutung | Verhalten in der Rechnung |
+|---|---|---|---|
+| **`group`** (PR 1) | **Innerhalb einer Zeile** | Gemeinsame Fehlerquelle verschiedener Eingangsgrössen (z. B. dieselbe Prüfgasflasche oder dieselbe Waagenkalibrierung) | Die Beiträge addieren sich linear ($r = 1$), bevor sie quadriert werden: bei Differenzen $a - b$ heben sich Fehler gleicher Gruppe auf. |
+| **`scope`** (PR 6) | **Zwischen verschiedenen Zeilen** | Persistenz einer Konstante über mehrere Schritte (z. B. `scope="tag"`: derselbe Kalibrierwert für alle Schritte eines Messtags; `scope="campaign"`: für die ganze Kampagne) | Bildet die Kovarianzmatrix $V_{ij}$ zwischen den Schritten $i$ und $j$. Punkte desselben Scopes korrelieren mit $c_i \cdot c_j$; über Scope-Grenzen hinweg sind sie unabhängig. |
+
+**Praktisches Beispiel (Arrhenius-Auswertung $E_a$):**
+In der heterogenen Katalyse wird die Reaktionsgeschwindigkeit $k \propto \dot{V}_N \cdot (-\ln(1-X))$ bestimmt. Der Luftstrom $\dot{V}_N$ hat eine systematische Kalibrierunsicherheit von $7.2\%$. Seine Konstante wird mit `scope="tag"` konfiguriert:
+
+- **Alle Messpunkte stammen von demselben Messtag:**
+  Ein systematischer Fehler im Luftstrom skaliert alle $k$-Werte des Tages um denselben Faktor $(1 + \delta)$. Im Arrhenius-Plot $\ln(k) = m \cdot (1000/T) + b$ verschiebt sich jeder Punkt um exakt denselben Betrag $\ln(1 + \delta) \approx \delta$. Die Gerade wird also rein parallel nach oben oder unten verschoben:
+  $$b \to b + \delta, \quad m \text{ bleibt exakt unverändert!}$$
+  Das GLS-Modell erkennt dies über die Kovarianzmatrix: Die Unsicherheit der Steigung mit Korrelation $u_m$ ist **identisch** zur rein zufälligen Unsicherheit $u_{m, \text{zufall}}$. Nur der Achsenabschnitt $b$ erhält die vergrösserte Unsicherheit $u_b$. Die Aktivierungsenergie $E_a = -m \cdot R$ hängt somit physikalisch korrekt nicht vom systematischen Luftstromfehler ab.
+
+- **Messpunkte stammen von mehreren verschiedenen Messtagen:**
+  Wird die Arrhenius-Gerade über Messungen verschiedener Tage gelegt (z. B. 12.10. und 17.10.), so hatte jeder Messtag seine eigene, unabhängige Kalibrierung. Die Punkte von Tag 1 verschieben sich unabhängig von Tag 2. Dadurch kann die Gerade zwischen den Tagen kippen. Das GLS-Modell berücksichtigt diese Scope-Trennung automatisch: $u_m$ mit Korrelation wird **grösser** als die rein zufällige Unsicherheit.
 
 ## Absolute Zeit
 

@@ -24,6 +24,7 @@ from typing import Any, Sequence
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from datualizer_core.calc.analyses import Analysis
 from datualizer_core.calc.expr import FUNCTIONS, ExprError, compile_expr
 from datualizer_core.calc.relations import Relation
 from datualizer_core.calc.uncertain import Constant
@@ -249,7 +250,7 @@ class Evaluation(BaseModel):
     criteria: list[Criterion] = Field(default_factory=list)
     ratings: list[Rating] = Field(default_factory=list)
     scenarios: list[Scenario] = Field(default_factory=list)
-    analyses: list[dict[str, Any]] = Field(default_factory=list)
+    analyses: list[Analysis] = Field(default_factory=list)
     views: list[dict[str, Any]] = Field(default_factory=list)
 
     @field_validator("constants", mode="before")
@@ -264,6 +265,7 @@ class Evaluation(BaseModel):
         calc_names = [c.name for c in self.calculations]
         crit_names = [c.name for c in self.criteria]
         scen_names = [s.name for s in self.scenarios]
+        analysis_names = [a.name for a in self.analyses]
 
         for what, names in (
             ("step class", classes),
@@ -271,6 +273,7 @@ class Evaluation(BaseModel):
             ("calculation", calc_names),
             ("criterion", crit_names),
             ("scenario", scen_names),
+            ("analysis", analysis_names),
         ):
             dup = sorted({n for n in names if names.count(n) > 1})
             if dup:
@@ -347,6 +350,16 @@ class Evaluation(BaseModel):
 
     def scenario_names(self) -> list[str]:
         return [s.name for s in self.scenarios]
+
+    def analysis(self, name: str) -> Analysis:
+        """Analysis by name; KeyError if unknown."""
+        for a in self.analyses:
+            if a.name == name:
+                return a
+        raise KeyError(f"No analysis {name!r}; defined are {[a.name for a in self.analyses]}.")
+
+    def analysis_names(self) -> list[str]:
+        return [a.name for a in self.analyses]
 
 
 # ------------------------------------------------------------------ step parameters
@@ -465,6 +478,7 @@ __all__ = [
     "MEASURE_STATS",
     "MEASURE_U",
     "STEP_COLUMNS",
+    "Analysis",
     "Calculation",
     "Criterion",
     "Evaluation",

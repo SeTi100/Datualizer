@@ -71,6 +71,32 @@ cov = s.coverage(pico.id)                                # wann die Quelle Werte
 s.save("campaign.json")
 ```
 
+**Uhren abgleichen** (Etappe 2b, Schritt 7). Zwei Wege, beide schlagen nur vor; `set_clock` wendet an, das `ClockModel` nennt Methode, Unsicherheit und Annahme.
+
+*Uhrenpaare aus einer Arbeitsmappe:* Steht im Labjournal dasselbe Ereignis auf beiden Uhren („Start FID“ auf der FID-Uhr, „Start Real“ auf der PC-Uhr), beschreibt `ClockCells`, in welchen Zellen. Welche Zellen das sind, ist Konfiguration, nicht Code. Der Vorschlag ist der Median der Paar-Versätze, die Unsicherheit die mittlere absolute Abweichung (mindestens der halbe Ablese-Schritt). Die Konfiguration bleibt im Modell und steht in `campaign.json`.
+
+```python
+from datetime import date
+from datualizer_core.campaign import CellPair, ClockCells
+journal = s.add_source("SA_Labjournal.xlsx", source_id="journal")
+cells = ClockCells(source_id="journal", sheet="17.10.2026", day=date(2026, 10, 17), pairs=[
+    CellPair(source_cell="C3", master_cell="C4", note="Punkt 1"),
+    CellPair(source_cell="D3", master_cell="D4", note="Punkt 2"),
+])
+model, anchors = s.clock_from_cells(cells)   # offset_s = 974.5, uncertainty_s = 0.5, method "journal_pairs"
+s.set_clock(fid.id, model)
+```
+
+*Kreuzkorrelation:* `s.cross_correlate((ref_quelle, kanal), (quelle, kanal), start, ende, lag_min, lag_max, derivative=False)` legt beide Spuren im Ausschnitt [start, ende] (Master-Epoch-Sekunden) auf ein gemeinsames Raster und rechnet für jeden Versatz im Suchbereich Pearsons r über die Punkte, die beide haben. Lücken werden nie überbrückt. Das Ergebnis (`XCorrResult`) enthält den besten Versatz `lag_s`, die Kurve `lags_s`/`r_curve`, `r`, die Überlappung und `checks` mit Ampel (`level`): Spitze am Rand des Suchbereichs, schwache Ähnlichkeit, zweite fast gleich hohe Spitze. `derivative=True` vergleicht die Ableitungen (unterschiedliche Nullpunkte und langsame Drift stören dann nicht). Der Versatz gilt relativ zur aktuellen Uhr der Quelle:
+
+```python
+res = s.cross_correlate(("pico", "K1"), (fid.id, "tempcat"), t0, t1, -1800, 1800, derivative=True)
+s.set_clock(fid.id, s.campaign.source(fid.id).clock.shifted(res.lag_s, method="cross_correlation",
+            uncertainty_s=res.uncertainty_s, note=res.summary()))
+```
+
+In der GUI öffnet *Align Clock…* (Knopf unter dem Uhren-Editor oder Rechtsklick auf eine Quelle) den Dialog für die gewählte Quelle. Reiter *Cross-correlation*: Referenzspur einer anderen Quelle und ein Kanal dieser Quelle, normiert überlagert (nur Anzeige); der helle Bereich ist der verglichene Ausschnitt (ziehbar, zu Beginn der sichtbare Zeitbereich), der Schieber verschiebt die Quelle von Hand, *Correlate* sucht im Suchbereich und zeigt die Kurve r(Versatz) mit dem besten Versatz und den Befunden. Reiter *Journal pairs*: Arbeitsmappe der Kampagne, Blatt, Datum (Vorschlag aus dem Blattnamen), Ablese-Schritt und die Zellpaare; *Read Pairs* listet die Anker mit ihren Versätzen. *Apply* schreibt das Modell des offenen Reiters mit Methode und Notiz (`cross_correlation`, `journal_pairs` oder, nach Verschieben von Hand, `manual`).
+
 **Abdeckung:** `session.coverage(quelle)` liefert pro Quelle die Zeitspanne (`span`), die Abschnitte mit Werten (`segments`) und die Lücken (`gaps`) auf Master-Zeit. Eine Lücke ist entweder ein als `gap` markierter Zeitsprung (`time_gap`, Schwelle `QualityConfig.gap_factor`) oder eine Strecke, in der die Zeit weiterläuft, aber kein Kanal einen Wert hat (`no_values`, z. B. Logger-Aussetzer oder ungültige OCR-Lesungen), auch am Anfang oder Ende. `coverage(quelle, ["kanal"])` zählt nur die genannten Kanäle. Quellen ohne absolute Zeit haben keine Spanne. Die Daten selbst bleiben unverändert.
 
 **Messschritte:** Welche Spalten einer Quelle (z. B. des Labjournals) Start, Ende, Name und Sollwerte eines Schritts sind, beschreibt eine `IntervalMapping` (Ende als Zeitspalte, Dauerspalte, „bis zum nächsten Start“ oder feste Länge; Blocknamen, die nur in der ersten Zeile stehen, über `fill_down`; Zeiten optional auf der Uhr einer anderen Quelle). Nichts davon steht im Code: `session.suggest_mapping(quelle)` nimmt den Vorschlag des Profils (`SourceProfile.intervals`) oder errät die Rollen aus der Datenform. `session.intervals()` liefert alle Schritte auf Master-Zeit, dazu `problems` (Zeilen ohne Start, unlesbares Ende …). Schritte von Hand: `session.add_interval(start, ende, "Blindwert")`. `WindowRule` legt fest, welcher Teil jedes Schritts ausgewertet wird (Einschwingzeit abschneiden, nur die letzten N Sekunden). Alles steht in `campaign.json`.

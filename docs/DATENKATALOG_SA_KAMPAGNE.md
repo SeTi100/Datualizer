@@ -19,7 +19,7 @@ Katalytische Oxidation von Ethanol in einer Versuchsanlage. Pro Solltemperatur w
 
 | # | Befund | Anforderung | Status |
 |---|---|---|---|
-| P21 | Jede Quelle hat ihre eigene Uhr: FID-Versatz 16:10, PicoLog nur relativ, Waagen-Uhr im Video −69 min | Absolute Zeit pro Datensatz, Uhrenmodell pro Quelle, Abgleich | ✅ absolute Zeit (`time_origin`, `TimeConfig`), Uhrenmodell (`ClockModel`: Versatz, Drift, Anker), gemeinsame Master-Zeit; ⏳ automatischer Abgleich (Schritt 7) |
+| P21 | Jede Quelle hat ihre eigene Uhr: FID-Versatz 16:10, PicoLog nur relativ, Waagen-Uhr im Video −69 min | Absolute Zeit pro Datensatz, Uhrenmodell pro Quelle, Abgleich | ✅ absolute Zeit (`time_origin`, `TimeConfig`), Uhrenmodell (`ClockModel`: Versatz, Drift, Anker), gemeinsame Master-Zeit; ✅ Abgleich (Schritt 7): Versatz aus Uhrenpaaren im Journal („Start FID“/„Start Real“, 17.10.: 974,5 s ± 0,5 s) und Kreuzkorrelation zweier Spuren, Dialog *Align Clock…* |
 | P22 | Gemischte Zeitbasen in einer Datenbank (`started_at` UTC, `timestamp` lokal) | Zeitzone pro Zeitspalte; Zeitzonen DST-sicher | ✅ Zeitzonen über `TimeConfig.timezone`; ⏳ pro Spalte |
 | P23 | Logger exportiert nur verstrichene Zeit | Start aus Speicherzeit der Datei oder Vorgabe, als Annahme markiert | ✅ `TimeConfig.origin`, Profilregel `file_mtime_end` mit Hinweis in `source_meta` |
 | P24 | Logger-Aussetzer: Zeit läuft weiter, Werte leer (78 min) | Leere Zeilen behalten, nicht als Footer verwerfen | ✅ in der Mitte; ⚠ am Dateiende verwirft der Pre-Scanner sie als Footer (Warnung bei der Startzeit-Regel); ✅ als schraffierte Lücke (`no_values`) in der Abdeckungsspur |

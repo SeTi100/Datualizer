@@ -19,7 +19,7 @@ import numpy as np
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field
 
-from datualizer_core.campaign.clock import ClockModel, epoch_seconds, to_epoch_s
+from datualizer_core.campaign.clock import ClockAnchor, ClockCells, ClockModel, epoch_seconds, to_epoch_s
 from datualizer_core.campaign.coverage import SourceCoverage, coverage_intervals, value_rows
 from datualizer_core.campaign.display import ChannelDisplay, YScale
 from datualizer_core.campaign.intervals import (
@@ -35,6 +35,7 @@ from datualizer_core.campaign.intervals import (
     resolve_manual,
     suggest_mapping,
 )
+from datualizer_core.campaign.sync import XCorrResult, clock_from_cells, cross_correlate
 from datualizer_core.dataset import DualModeDataset
 from datualizer_core.ingestion.config import IngestionConfig
 from datualizer_core.ingestion.profiles import SourceProfile, detect_profile
@@ -591,6 +592,40 @@ class CampaignSession:
             )
             excluded[ev["row"].unique().to_numpy()] = True
         return source_id, channel, unit, (tr.x, tr.y, tr.gap_rows, excluded), reading_u, src.clock.uncertainty_s
+
+    # ---------------------------------------------------------- clock alignment
+    def clock_from_cells(self, cells: ClockCells) -> tuple[ClockModel, list[ClockAnchor]]:
+        """Offset suggested by cell pairs in the file of source `cells.source_id` (not applied).
+
+        Apply it to the source whose clock the pairs describe with `set_clock`.
+        """
+        src = self.campaign.source(cells.source_id)
+        return clock_from_cells(self.resolve(src), cells, self.campaign.timezone)
+
+    def cross_correlate(
+        self,
+        reference: tuple[str, str],
+        moving: tuple[str, str],
+        start: float,
+        end: float,
+        lag_min: float,
+        lag_max: float,
+        *,
+        derivative: bool = False,
+        step_s: float | None = None,
+    ) -> XCorrResult:
+        """Shift of the moving track (source, channel) onto the reference track, on master time.
+
+        The lag is relative to the moving source's current clock: apply it with
+        `clock.shifted(result.lag_s)`.
+        """
+        if reference[0] == moving[0]:
+            raise ValueError("Both tracks belong to the same source; its clock cannot be aligned to itself.")
+        ref, mov = self.track(*reference), self.track(*moving)
+        return cross_correlate(
+            ref.x, ref.y, mov.x, mov.y, start, end, lag_min, lag_max,
+            step_s=step_s, derivative=derivative, ref_gaps=ref.gap_rows, mov_gaps=mov.gap_rows,
+        )
 
     # ------------------------------------------------------------- persistence
     def save(self, path: str | Path) -> None:

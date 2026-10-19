@@ -98,7 +98,7 @@ Dazu pro Kanal: Anzeigename, Stil (Linie, Punkte, Treppe), Farbe und Y-Skalierun
 
 Alles mit Code-Beispielen: **[ausführliche Anleitung](docs/BENUTZUNG.md)**.
 
-**Geplant:** Pydantic-Recipe-AST mit Undo/Redo und Replay · `join_asof` für asynchrone Sensoren · Abgleich-Werkzeuge und Rechengrössen für Kampagnen · Video-Spur · visueller Recipe-Editor · Code-Export (Polars / DuckDB-SQL / R Tidyverse) · portable Windows-`.exe`. Details in der [Roadmap](#roadmap).
+**Geplant:** Pydantic-Recipe-AST mit Undo/Redo und Replay · `join_asof` für asynchrone Sensoren · Rechengrössen für Kampagnen · Video-Spur · visueller Recipe-Editor · Code-Export (Polars / DuckDB-SQL / R Tidyverse) · portable Windows-`.exe`. Details in der [Roadmap](#roadmap).
 
 ---
 
@@ -250,7 +250,7 @@ Datualizer/
 |:---:|---|:---:|
 | 1 | Minimal End-to-End Tracer Bullet | ✅ |
 | 2 | Ingestion-Festung für chaotische Realdaten | 🔜 grösstenteils fertig |
-| 2b | Messkampagne: mehrere Geräte, Uhren, Schritte, Fenster-Statistik, Rechengrössen | 🔜 Schritte 1–6 fertig, Schritt 8 begonnen |
+| 2b | Messkampagne: mehrere Geräte, Uhren, Schritte, Fenster-Statistik, Rechengrössen | 🔜 Schritte 1–7 fertig, Schritt 8 begonnen |
 | 3 | Tidy- & Reshaping-DSL (JSON-AST, 10 Operatoren, `join_asof`) | ⏳ |
 | 4 | Tidy-Axiom-Validierung & KI-gestützte Recipe-Reparatur | ⏳ |
 | 5 | High-Performance-Visualisierung (LTTB, Multi-Y, ROI) | ⏳ |

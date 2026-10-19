@@ -6,7 +6,7 @@ long-format pivot, quality flags and spec replay work identically for every file
 
 from datualizer_core.ingestion.readers.base import RawTable, ReaderError, cell_to_text
 from datualizer_core.ingestion.readers.delimited import read_delimited
-from datualizer_core.ingestion.readers.excel import ExcelOptions, read_excel
+from datualizer_core.ingestion.readers.excel import ExcelOptions, parse_cell, read_cells, read_excel, sheet_names
 from datualizer_core.ingestion.readers.sqlite import SqliteOptions, read_sqlite
 
 __all__ = [
@@ -15,7 +15,10 @@ __all__ = [
     "ReaderError",
     "SqliteOptions",
     "cell_to_text",
+    "parse_cell",
+    "read_cells",
     "read_delimited",
     "read_excel",
     "read_sqlite",
+    "sheet_names",
 ]

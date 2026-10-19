@@ -9,7 +9,7 @@ Times are handled as epoch seconds (float). Date-times without zone are read in 
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import polars as pl
@@ -47,6 +47,36 @@ class ClockAnchor(BaseModel):
     note: str = ""
 
 
+class CellPair(BaseModel):
+    """Two cells holding the same event on two clocks, e.g. journal 'Start FID' C3 and 'Start Real' C4."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_cell: str = Field(description="A1 reference of the time on the source's clock, e.g. 'C3'.")
+    master_cell: str = Field(description="A1 reference of the same event on the master clock, e.g. 'C4'.")
+    note: str = ""
+
+
+class ClockCells(BaseModel):
+    """Where clock pairs are written down in a workbook of the campaign (e.g. the lab journal).
+
+    Which cells hold which clock differs from journal to journal, so all of it is configured,
+    nothing is looked up by label.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: str = Field(description="Campaign source whose file holds the cells.")
+    sheet: str | None = Field(None, description="Sheet name; None = the only sheet of the file.")
+    day: date | None = Field(
+        None, description="Date of times written without date (read in the campaign zone)."
+    )
+    pairs: list[CellPair] = Field(min_length=1)
+    resolution_s: float = Field(
+        1.0, gt=0.0, description="Reading step of the written times; half of it is the smallest uncertainty."
+    )
+
+
 class ClockModel(BaseModel):
     """Correction from source time to master time.
 
@@ -64,9 +94,14 @@ class ClockModel(BaseModel):
         None, description="Time at which the drift term is zero. None = first sample of the source."
     )
     anchors: list[ClockAnchor] = Field(default_factory=list)
-    method: str = Field("none", description="How the model was found: manual, cross_correlation, anchors, …")
+    method: str = Field(
+        "none", description="How the model was found: manual, cross_correlation, journal_pairs, anchors, …"
+    )
     uncertainty_s: float | None = Field(None, ge=0.0, description="Estimated uncertainty of the mapping.")
     note: str = Field("", description="Assumption behind the model, shown next to results.")
+    cells: ClockCells | None = Field(
+        None, description="Cell pairs the offset was read from (method 'journal_pairs'), kept for replay."
+    )
 
     @model_validator(mode="after")
     def _distinct_anchors(self) -> "ClockModel":
@@ -77,6 +112,17 @@ class ClockModel(BaseModel):
 
     def is_identity(self) -> bool:
         return not self.anchors and self.offset_s == 0.0 and self.drift_ppm == 0.0
+
+    def shifted(self, lag_s: float, **changes) -> "ClockModel":
+        """The same mapping moved by `lag_s` seconds on master time (anchors move with it)."""
+        update: dict = dict(changes)
+        if self.anchors:
+            update["anchors"] = [
+                a.model_copy(update={"master_time": a.master_time + timedelta(seconds=lag_s)}) for a in self.anchors
+            ]
+        else:
+            update["offset_s"] = self.offset_s + lag_s
+        return self.model_copy(update=update)
 
     def apply(self, source_s: np.ndarray, zone: str) -> np.ndarray:
         """Master epoch seconds for source epoch seconds (NaN stays NaN)."""

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
@@ -23,6 +25,7 @@ from PySide6.QtWidgets import (
 from datualizer_core.campaign import ChannelDisplay, CampaignSession, ClockModel
 from datualizer_core.schema import PlotStyle
 from datualizer_gui.components.channel_display_dialog import STYLE_NAMES, ChannelDisplayDialog
+from datualizer_gui.components.clock_sync_dialog import ClockSyncDialog
 
 ROLE_SOURCE = Qt.ItemDataRole.UserRole
 ROLE_CHANNEL = Qt.ItemDataRole.UserRole + 1
@@ -48,6 +51,8 @@ class SourcesPanel(QWidget):
         super().__init__(parent)
         self._session: CampaignSession | None = None
         self._updating = False
+        # Visible master time span of the plot (set by the campaign window), default span of the align dialog
+        self.view_range: Callable[[], tuple[float, float] | None] = lambda: None
 
         layout = QVBoxLayout(self)
         buttons = QHBoxLayout()
@@ -85,10 +90,15 @@ class SourcesPanel(QWidget):
         self.note_edit = QLineEdit()
         self.note_edit.setPlaceholderText("Assumption, e.g. 'FID clock behind PC, incl. transport delay'")
         self.anchor_label = QLabel()
+        self.method_label = QLabel()
+        self.btn_align = QPushButton("Align Clock...")
+        self.btn_align.setToolTip("Find the offset by cross-correlation with another source or from journal clock pairs")
         form.addRow("Offset", self.offset_spin)
         form.addRow("Drift", self.drift_spin)
         form.addRow("Note", self.note_edit)
         form.addRow("Anchors", self.anchor_label)
+        form.addRow("Found by", self.method_label)
+        form.addRow("", self.btn_align)
         layout.addWidget(box)
         self.clock_box = box
 
@@ -97,6 +107,7 @@ class SourcesPanel(QWidget):
         self.offset_spin.editingFinished.connect(self._apply_clock)
         self.drift_spin.editingFinished.connect(self._apply_clock)
         self.note_edit.editingFinished.connect(self._apply_clock)
+        self.btn_align.clicked.connect(lambda: self.align_clock())
 
     # ------------------------------------------------------------------ state
     def set_session(self, session: CampaignSession | None) -> None:
@@ -113,8 +124,9 @@ class SourcesPanel(QWidget):
                     if span else "no absolute time"
                 )
                 clock = src.clock
+                u = f" ± {clock.uncertainty_s:.3g}" if clock.uncertainty_s is not None else ""
                 clock_txt = "—" if clock.is_identity() else (
-                    f"{len(clock.anchors)} anchors" if clock.anchors else f"{clock.offset_s:+.1f} s"
+                    f"{len(clock.anchors)} anchors" if clock.anchors else f"{clock.offset_s:+.1f}{u} s"
                 )
                 item = QTreeWidgetItem([src.label or src.id, src.profile.name if src.profile else "-", span_txt, clock_txt])
                 item.setData(0, ROLE_SOURCE, src.id)
@@ -218,9 +230,35 @@ class SourcesPanel(QWidget):
         )
         return menu
 
+    def align_dialog(self, source_id: str) -> ClockSyncDialog:
+        """Align dialog for a source (not shown yet), starting on the visible time span."""
+        assert self._session is not None
+        return ClockSyncDialog(self._session, source_id, self.view_range(), self)
+
+    def align_clock(self, source_id: str | None = None) -> bool:
+        """Open the align dialog; True if a clock model was applied."""
+        sid = source_id or self.current_source()
+        if sid is None or self._session is None:
+            return False
+        dialog = self.align_dialog(sid)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        model = dialog.clock_model()
+        if model is None:
+            return False
+        self._session.set_clock(sid, model)
+        self.clock_changed.emit(sid)
+        return True
+
     def _on_context_menu(self, pos: QPoint) -> None:
         item = self.tree.itemAt(pos)
-        if item is None or item.data(0, ROLE_CHANNEL) is None or self._session is None:
+        if item is None or self._session is None:
+            return
+        if item.data(0, ROLE_CHANNEL) is None:
+            sid = item.data(0, ROLE_SOURCE)
+            menu = QMenu(self)
+            menu.addAction("Align Clock...", lambda: self.align_clock(sid))
+            menu.exec(self.tree.viewport().mapToGlobal(pos))
             return
         self.channel_menu(item.data(0, ROLE_SOURCE), item.data(0, ROLE_CHANNEL)).exec(
             self.tree.viewport().mapToGlobal(pos)
@@ -253,6 +291,8 @@ class SourcesPanel(QWidget):
         self.anchor_label.setText(
             f"{len(clock.anchors)} (offset and drift ignored)" if clock.anchors else "none"
         )
+        u = f", ± {clock.uncertainty_s:g} s" if clock.uncertainty_s is not None else ""
+        self.method_label.setText(f"{clock.method}{u}")
         self._updating = False
 
     def _apply_clock(self) -> None:

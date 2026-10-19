@@ -1,7 +1,7 @@
 """Measurement campaigns: several sources, one master time axis (Etappe 2b)."""
 
 from datualizer_core.campaign.campaign import Campaign, CampaignSession, CampaignSource, Track
-from datualizer_core.campaign.clock import ClockAnchor, ClockModel, epoch_seconds, to_epoch_s
+from datualizer_core.campaign.clock import CellPair, ClockAnchor, ClockCells, ClockModel, epoch_seconds, to_epoch_s
 from datualizer_core.campaign.coverage import (
     NO_VALUES,
     TIME_GAP,
@@ -20,30 +20,52 @@ from datualizer_core.campaign.intervals import (
     WindowRule,
     master_datetime,
 )
+from datualizer_core.campaign.sync import (
+    CROSS_CORRELATION,
+    JOURNAL_PAIRS,
+    ClockCellsError,
+    PairOffsets,
+    XCorrResult,
+    anchors_from_cells,
+    clock_from_cells,
+    cross_correlate,
+    pair_offsets,
+)
 
 __all__ = [
+    "CROSS_CORRELATION",
     "Campaign",
     "CampaignSession",
     "CampaignSource",
     "ChannelDisplay",
+    "CellPair",
     "ClockAnchor",
+    "ClockCells",
+    "ClockCellsError",
     "ClockModel",
     "CoverageGap",
     "Interval",
     "IntervalConfigError",
     "IntervalMapping",
     "IntervalSet",
+    "JOURNAL_PAIRS",
     "ResolvedInterval",
     "WindowOverride",
     "WindowRule",
     "master_datetime",
     "NO_VALUES",
+    "PairOffsets",
     "SourceCoverage",
     "TIME_GAP",
     "Track",
     "YScale",
+    "XCorrResult",
     "YScaleMode",
+    "anchors_from_cells",
+    "clock_from_cells",
     "coverage_intervals",
+    "cross_correlate",
     "epoch_seconds",
+    "pair_offsets",
     "to_epoch_s",
 ]

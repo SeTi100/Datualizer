@@ -20,7 +20,7 @@ Referenz-Implementierung (nur lesen, nicht kopieren):
 | FID (`.dat`/`.csv`), PicoLog, OCR-Datenbank, Journal lesen | ✅ Reader + Profile |
 | Uhrversatz FID (+970/975 s), OCR-Video (−15 s) | ✅ `ClockModel.offset_s` |
 | PicoLog-Start = Speicherzeit − Dauer | ✅ `OriginRule.FILE_MTIME_END` |
-| Versatz aus Journal-Paaren („Start FID“/„Start Real“) | ✗ → PR 9 |
+| Versatz aus Journal-Paaren („Start FID“/„Start Real“) | ✅ `ClockCells` → `session.clock_from_cells` (PR 9) |
 | Journal-Zeilen als Schritte, fehlendes Ende = nächster Start, Sollwerte als Parameter | ✅ `IntervalMapping`, `EndKind.NEXT_START` |
 | DB-Runs als Schritte, `V_MFC`/`Volumenstrom` aus `parameters_json` | ◐ JSON-Spalte wird nicht zerlegt → PR 2 |
 | OCR-Fehllesungen der Waage | ✅ `spike` (Hampel) |
@@ -155,9 +155,14 @@ Dock „Results“: Konstanten, Formeln (mit Prüfung beim Tippen), Kriterien, S
 
 Farben nach `docs`-Konvention des Kampagnenfensters; Ordinal-Rampe (Dosierstufe) blau hell → dunkel, Messtag als Form, stationär gefüllt.
 
-### 3.8 Abgleich-Werkzeuge – PR 9
+### 3.8 Abgleich-Werkzeuge – PR 9 ✅
 - Uhr-Anker aus Zellpaaren einer Quelle (Journal: „Start FID“/„Start Real“): `ClockAnchor` aus konfigurierbaren Zellen (Blatt, Zeile, Spalte), Median und Streuung als `offset_s` und `uncertainty_s`.
 - Kreuzkorrelation zweier Spuren (Signal oder Ableitung) auf gemeinsamem Raster → Versatz, Kurve, Güte. Dialog mit Überlagerung, Schieber, „Übernehmen“.
+
+Umgesetzt (`datualizer_core/campaign/sync.py`, Dialog `datualizer_gui/components/clock_sync_dialog.py`):
+- `ClockCells` (Quelle mit der Arbeitsmappe, Blatt, Datum, Paare `CellPair(source_cell, master_cell)`, Ablese-Schritt) steht im `ClockModel` (`cells`) und damit in `campaign.json`. Ergebnis: reiner Versatz `offset_s` = Median, `uncertainty_s` = max(Median der absoluten Abweichungen, halber Ablese-Schritt), `method="journal_pairs"`. Die Anker selbst werden nur angezeigt, nicht als `anchors` gespeichert: Ein falsch abgeschriebenes Paar soll die Abbildung nicht verbiegen. Journal 17.10.2026: 975 s und 974 s → 974,5 s ± 0,5 s. Leere oder unlesbare Zellen und Uhrzeiten ohne Datum schlagen laut fehl (`ClockCellsError`).
+- `cross_correlate`: beide Spuren linear auf ein Raster (Standard: die gröbere mittlere Abtastung im Ausschnitt), Lücken und fehlende Werte werden nie überbrückt. Pearson-r für jeden Versatz im Suchbereich, nur über gemeinsame Punkte (maskierte Summen per FFT); Versätze mit weniger als 50 % Überlappung bleiben leer. Bester Versatz mit Parabel zwischen den Rasterpunkten. Prüfungen mit Ampel: Spitze am Rand des Suchbereichs (fail), r < 0,3 (fail), r < 0,7 (warn), zweite Spitze innerhalb 0,05 von r (warn, periodisches Signal), wenig Überlappung (warn). Die Unsicherheit ist der halbe Rasterschritt; eine falsche Spitze deckt sie nicht ab.
+- Grenze: Zufallsartige, driftende Signale korrelieren auch bei falschem Versatz deutlich (r ≈ 0,7), wenn der wahre Versatz ausserhalb des Suchbereichs liegt. Dann Ableitung vergleichen und den Ausschnitt um ein klares Ereignis (Sprung, Spitze) legen.
 
 ## 4. Die SA-Auswertung als Konfiguration (Auszug, Zielbild)
 
@@ -240,7 +245,7 @@ Die Namen der Kanäle/Quellen sind Beispiele. Die Restdrift (|dX/dt|·10 min) is
 | 6 | Auswertungen: Durchgang, Geradenfit, Aggregation, Korrelation zwischen Zeilen (`scope`) | 5 | 2b-8 |
 | 7 | Ergebnisfenster: Ansichten `table`, `xy`, `matrix`, Kleinvielfache | 5, 6 | 2b-8, Etappe 5 |
 | 8 | `aligned` + `broadcast_steps`, `bars`, Bericht als PDF | 2, 7 | 2b-8 |
-| 9 | Uhr-Anker aus Zellpaaren, Kreuzkorrelation, Dialog | – | 2b-7 |
+| 9 ✅ | Uhr-Anker aus Zellpaaren, Kreuzkorrelation, Dialog | – | 2b-7 |
 | 10 | SA-Kampagne (3 Tage) als Beispiel + Rezept, End-to-End-Orakel, Doku | 1–9 | 2b-10 |
 
 Parallel möglich: PR 2, 3 und 9 (PR 1 ist in main).

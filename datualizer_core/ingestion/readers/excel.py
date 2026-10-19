@@ -7,7 +7,8 @@ of an analyzer export) become source metadata instead of being lost.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+import re
+from typing import Any, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -110,33 +111,81 @@ def _meta_from_sheet(rows: list[list[Any]]) -> dict[str, str]:
     return meta
 
 
-def read_excel(path: str | Path, options: ExcelOptions | None = None) -> RawTable:
-    """Read one sheet of a workbook as an all-String table; small sheets become metadata."""
-    path = Path(path)
-    opts = options or ExcelOptions()
-    if path.suffix.lower() == ".xls":
-        names, sheets = _rows_xls(path)
-    else:
-        names, sheets = _rows_xlsx(path)
+def _workbook_rows(path: Path) -> tuple[list[str], dict[str, list[list[Any]]]]:
+    return _rows_xls(path) if path.suffix.lower() == ".xls" else _rows_xlsx(path)
 
-    if opts.sheet is None:
+
+def sheet_names(path: str | Path) -> list[str]:
+    """Sheet names of a workbook, without reading the cells."""
+    path = Path(path)
+    if path.suffix.lower() == ".xls":
+        import xlrd
+
+        return xlrd.open_workbook(str(path), on_demand=True).sheet_names()
+    import openpyxl
+
+    wb = openpyxl.load_workbook(path, read_only=True)
+    try:
+        return list(wb.sheetnames)
+    finally:
+        wb.close()
+
+
+def _pick_sheet(path: Path, names: list[str], sheet: str | int | None) -> str:
+    """Name of the requested sheet; a ReaderError with the sheet names as choice otherwise."""
+    if sheet is None:
         if len(names) != 1:
             raise ReaderError(
                 f"{path.name} has several sheets, choose one of: {names}", choice="excel.sheet", options=names
             )
-        sheet = names[0]
-    elif isinstance(opts.sheet, int):
-        if not 0 <= opts.sheet < len(names):
+        return names[0]
+    if isinstance(sheet, int):
+        if not 0 <= sheet < len(names):
             raise ReaderError(
-                f"{path.name} has no sheet #{opts.sheet}; sheets: {names}", choice="excel.sheet", options=names
+                f"{path.name} has no sheet #{sheet}; sheets: {names}", choice="excel.sheet", options=names
             )
-        sheet = names[opts.sheet]
-    elif opts.sheet in sheets:
-        sheet = opts.sheet
-    else:
-        raise ReaderError(
-            f"{path.name} has no sheet {opts.sheet!r}; sheets: {names}", choice="excel.sheet", options=names
-        )
+        return names[sheet]
+    if sheet in names:
+        return sheet
+    raise ReaderError(f"{path.name} has no sheet {sheet!r}; sheets: {names}", choice="excel.sheet", options=names)
+
+
+_CELL = re.compile(r"^\s*([A-Za-z]{1,3})\s*(\d+)\s*$")
+
+
+def parse_cell(ref: str) -> tuple[int, int]:
+    """0-based (row, column) of an A1 reference such as 'C3'; ValueError otherwise."""
+    m = _CELL.match(ref)
+    if m is None or int(m.group(2)) < 1:
+        raise ValueError(f"Not a cell reference: {ref!r} (expected e.g. 'C3').")
+    col = 0
+    for ch in m.group(1).upper():
+        col = col * 26 + ord(ch) - 64
+    return int(m.group(2)) - 1, col - 1
+
+
+def read_cells(path: str | Path, sheet: str | int | None, cells: Sequence[str]) -> dict[str, Any]:
+    """Raw values of single cells (A1 references) of one sheet; empty cells are None.
+
+    Values come as Excel stores them (number, text, date-time, time), not as text, so the caller
+    decides how to read them.
+    """
+    path = Path(path)
+    names, sheets = _workbook_rows(path)
+    rows = sheets[_pick_sheet(path, names, sheet)]
+    out: dict[str, Any] = {}
+    for ref in cells:
+        r, c = parse_cell(ref)
+        out[ref] = rows[r][c] if r < len(rows) and c < len(rows[r]) else None
+    return out
+
+
+def read_excel(path: str | Path, options: ExcelOptions | None = None) -> RawTable:
+    """Read one sheet of a workbook as an all-String table; small sheets become metadata."""
+    path = Path(path)
+    opts = options or ExcelOptions()
+    names, sheets = _workbook_rows(path)
+    sheet = _pick_sheet(path, names, opts.sheet)
 
     rows = sheets[sheet]
     width = _used_width(rows)

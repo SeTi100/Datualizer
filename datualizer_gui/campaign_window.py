@@ -122,6 +122,7 @@ class CampaignWindow(QMainWindow):
 
         self.sources_panel.selection_changed.connect(self.refresh_plot)
         self.sources_panel.clock_changed.connect(self._on_clock_changed)
+        self.sources_panel.view_range = self.canvas.view_x_range
         self.sources_panel.display_changed.connect(self._on_display_changed)
         self.sources_panel.add_requested.connect(self._on_add)
         self.sources_panel.remove_requested.connect(self.remove_source)

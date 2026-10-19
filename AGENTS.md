@@ -47,7 +47,7 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 ├── runs.py                       # Run-Übersicht, Kanalverfügbarkeit, Zeit pro Run
 ├── quality.py                    # Qualitäts-Flags als Ereignistabelle (markieren, nie ändern), inkl. Hampel-`spike`
 ├── timebase.py                   # Absolute Zeit: Datumsformate, Zeitzonen, Sommerzeit (über Polars, importzyklusfrei)
-├── campaign/                     # Messkampagne: Campaign (JSON), CampaignSession, ClockModel (Versatz, Drift, Anker), Track, Abdeckung (coverage.py), Messschritte (intervals.py), Darstellung pro Kanal (display.py)
+├── campaign/                     # Messkampagne: Campaign (JSON), CampaignSession, ClockModel (Versatz, Drift, Anker, ClockCells), Uhrenabgleich (sync.py: Zellpaare, Kreuzkorrelation), Track, Abdeckung (coverage.py), Messschritte (intervals.py), Darstellung pro Kanal (display.py)
 ├── calc/                         # Formelkern: expr.py (sicherer Parser, Polars + numpy), uncertain.py (UArray/Dual-Zahlen, Constant); ohne Kampagnen- und GUI-Import
 ├── stats/window.py               # Fenster-Statistik eines Messschritts: StatsConfig, window_stats, theil_sen (ohne Kampagnen- und GUI-Import; numpy, scipy nur für Quantile)
 ├── ingestion/
@@ -70,6 +70,7 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 datualizer_gui/                   # PySide6-App, Einstieg: python -m datualizer_gui.app
                                   # campaign_window.py: Kampagnenansicht (Quellen-Dock, Uhren-Editor, Plot auf Master-Zeit)
                                   # components/interval_bands.py + intervals_panel.py: Schritt-Bänder, Marker ○ ○, Steps-Dock
+                                  # components/clock_sync_dialog.py: Dialog „Align Clock“ (Kreuzkorrelation, Journal-Paare)
                                   # components/window_inspector.py: Dock „Window“ (Fenster-Inspektor, Kennwerte, Override pro Schritt)
                                   # components/coverage_strip.py: Abdeckungsspur (Lücken schraffiert, in Pixeln gezeichnet)
                                   # components/time_axis.py: Zeitachsen (Uhrzeit, Datum + Uhrzeit, t − t0), Mausrad nur auf der Zeit
@@ -169,12 +170,13 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
   - Einstellungen des Kampagnenfensters, Teil 3: Subplots pro Kanal, nach Einheit oder nach Quelle mit Legende, Farben nach Kanal, Quelle oder manuell (`components/plot_groups.py`, `ChannelDisplay.color`). `canvas.plot_items` ist nach Subplot geschlüsselt (bei „pro Kanal“ gleich dem Spur-Schlüssel `quelle/kanal`), `canvas.curves` und `edge_markers` immer nach Spur
   - Einstellungen des Kampagnenfensters, Teil 4: Werte unter dem Mauszeiger als Leiste, Tooltip oder Tabelle im Dock (`readout.ReadoutMode`, `ReadoutTable`), Nachkommastellen. Angezeigt wird, was die Kurve zeichnet (`FastCurve.value_at`): Treppen halten ihren Wert bis zum nächsten Punkt, sonst der nächste Messpunkt, in einer Unterbrechung „—“
   - Einstellungen des Kampagnenfensters, Teil 5: Export als PNG, SVG, PDF (`components/plot_export.py`, `canvas.export_copy()`, Dialog `components/export_dialog.py`)
+  - Schritt 7 (PR 9 im Plan Auswertung): Uhrenabgleich in `campaign/sync.py`. Versatz aus Uhrenpaaren in Zellen (`ClockCells`/`CellPair` im `ClockModel.cells`, `session.clock_from_cells`, Median ± Streuung, `method="journal_pairs"`; Zellen sind Konfiguration, nie im Code), Kreuzkorrelation (`session.cross_correlate` → `XCorrResult`, maskiertes Pearson-r per FFT, Lücken nie überbrückt, Ampel in `checks`), `ClockModel.shifted`, `read_cells`/`sheet_names` im Excel-Reader, Dialog *Align Clock…* im Quellen-Dock
   - Schritt 8, PR 1 (siehe [Plan Auswertung](docs/PLAN_AUSWERTUNG_KAMPAGNE.md)): Formelkern `datualizer_core/calc/`. `compile_expr` prüft gegen eine Positivliste (nie `eval`), `Expr.to_polars()` und `Expr.evaluate()` rechnen dasselbe (NaN-Vergleiche nach IEEE auch in Polars); `UArray` pflanzt Unsicherheiten exakt linear fort (`budget`, `u_random`, `u_syst`, syst. Eingänge gleicher `group` voll korreliert); `Constant`
 
 **Nächste offene Punkte:**
 
 1. **Später zu den Einstellungen** (mit Etappe 2b, Schritt 5/6): Qualitäts-Flags als Marker, Lücken-Schwelle, Standardauswahl der Kanäle beim Hinzufügen einer Quelle.
-2. **Etappe 2b, Schritte 7–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md) und [Plan Auswertung](docs/PLAN_AUSWERTUNG_KAMPAGNE.md), PR 2–10): Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
+2. **Etappe 2b, Schritte 8–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md) und [Plan Auswertung](docs/PLAN_AUSWERTUNG_KAMPAGNE.md), PR 2–8, 10): Rechengrössen und Szenarien, Video-Spur.
 3. **Wert und Einheit in einer Zelle (P6)** (`Konzentration = "20 °C"`) und widersprüchliche Metadaten anzeigen (P8).
 4. Danach: Block-Segmentation und Ragged-Healer (ursprünglicher Etappe-2-Plan), sobald Gerätedaten mit Kopfblöcken vorliegen.
 

@@ -86,6 +86,7 @@ class ResultsPanel(QWidget):
         super().__init__(parent)
         self._session: CampaignSession | None = None
         self._results_df: pl.DataFrame | None = None
+        self._analyses_results: dict[str, Any] = {}
         self._updating = False
 
         layout = QVBoxLayout(self)
@@ -105,6 +106,9 @@ class ResultsPanel(QWidget):
 
         # Tab 3: Criteria & Ratings
         self._build_criteria_tab()
+
+        # Tab 4: Analyses
+        self._build_analyses_tab()
 
     # ------------------------------------------------------------------ Tab 0: Results
     def _build_results_tab(self) -> None:
@@ -395,6 +399,42 @@ class ResultsPanel(QWidget):
         layout.addWidget(splitter)
         self.tabs.addTab(tab, "Criteria & Ratings")
 
+    # ------------------------------------------------------------------ Tab 4: Analyses
+    def _build_analyses_tab(self) -> None:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(4, 4, 4, 4)
+
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(QLabel("Analysis:"))
+        self.analysis_combo = QComboBox()
+        self.analysis_combo.currentIndexChanged.connect(self._on_analysis_changed)
+        toolbar.addWidget(self.analysis_combo, stretch=1)
+
+        self.btn_export_analysis = QPushButton("Export CSV...")
+        self.btn_export_analysis.setToolTip("Export the current analysis table to a CSV file")
+        self.btn_export_analysis.clicked.connect(self.export_analysis_csv)
+        toolbar.addWidget(self.btn_export_analysis)
+
+        self.btn_recompute_analysis = QPushButton("Recompute")
+        self.btn_recompute_analysis.setToolTip("Recalculate analyses")
+        self.btn_recompute_analysis.clicked.connect(self.refresh)
+        toolbar.addWidget(self.btn_recompute_analysis)
+
+        layout.addLayout(toolbar)
+
+        self.analysis_table = QTableWidget(0, 0)
+        self.analysis_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.analysis_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.analysis_table.setAlternatingRowColors(True)
+        self.analysis_table.horizontalHeader().setSectionsMovable(True)
+        layout.addWidget(self.analysis_table, stretch=1)
+
+        self.analysis_status = ReadoutLabel("No analyses computed.")
+        layout.addWidget(self.analysis_status)
+
+        self.tabs.addTab(tab, "Analyses")
+
     # ------------------------------------------------------------------ State & Refresh
     def set_session(self, session: CampaignSession | None) -> None:
         self._session = session
@@ -483,6 +523,11 @@ class ResultsPanel(QWidget):
             self.table.setColumnCount(0)
             self.status_label.setText("No campaign session.")
             self._results_df = None
+            self._analyses_results = {}
+            self.analysis_combo.blockSignals(True)
+            self.analysis_combo.clear()
+            self.analysis_combo.blockSignals(False)
+            self._populate_analysis_table()
             return
 
         scenario = self.current_scenario_name()
@@ -492,6 +537,11 @@ class ResultsPanel(QWidget):
             self.table.setRowCount(0)
             self.status_label.setText(f"Error evaluating results: {exc}")
             self._results_df = None
+            self._analyses_results = {}
+            self.analysis_combo.blockSignals(True)
+            self.analysis_combo.clear()
+            self.analysis_combo.blockSignals(False)
+            self._populate_analysis_table()
             return
 
         self._results_df = df
@@ -518,6 +568,76 @@ class ResultsPanel(QWidget):
 
         scen_text = f"Scenario: {scenario}" if scenario else "Scenario: (Base)"
         self.status_label.setText(f"Showing {len(df)} steps. {scen_text}")
+
+        # Compute and populate analyses
+        try:
+            self._analyses_results = session.analyses(scenario=scenario)
+        except Exception as exc:
+            self._analyses_results = {}
+
+        curr_ana = self.analysis_combo.currentText()
+        self.analysis_combo.blockSignals(True)
+        self.analysis_combo.clear()
+        for a_name in sorted(self._analyses_results.keys()):
+            self.analysis_combo.addItem(a_name)
+        if curr_ana in self._analyses_results:
+            self.analysis_combo.setCurrentText(curr_ana)
+        self.analysis_combo.blockSignals(False)
+        self._populate_analysis_table()
+
+    def _on_analysis_changed(self) -> None:
+        self._populate_analysis_table()
+
+    def _populate_analysis_table(self) -> None:
+        name = self.analysis_combo.currentText()
+        if not name or name not in self._analyses_results:
+            self.analysis_table.setRowCount(0)
+            self.analysis_table.setColumnCount(0)
+            self.analysis_status.setText("No analysis selected.")
+            return
+
+        res = self._analyses_results[name]
+        if hasattr(res, "table"):
+            df = res.table
+        elif isinstance(res, pl.DataFrame):
+            df = res
+        else:
+            df = pl.DataFrame()
+
+        self.analysis_table.setSortingEnabled(False)
+        self.analysis_table.setRowCount(len(df))
+        self.analysis_table.setColumnCount(len(df.columns))
+        self.analysis_table.setHorizontalHeaderLabels(df.columns)
+
+        for r_idx in range(len(df)):
+            for c_idx, col in enumerate(df.columns):
+                raw_val = df[col][r_idx]
+                item_text = _fmt(raw_val)
+                item = NumericTableWidgetItem(item_text, raw_val)
+                self.analysis_table.setItem(r_idx, c_idx, item)
+
+        self.analysis_table.setSortingEnabled(True)
+        self.analysis_table.resizeColumnsToContents()
+        self.analysis_status.setText(f"Analysis '{name}': {len(df)} row(s).")
+
+    def export_analysis_csv(self) -> None:
+        name = self.analysis_combo.currentText()
+        if not name or name not in self._analyses_results:
+            QMessageBox.information(self, "Export CSV", "No analysis to export.")
+            return
+        res = self._analyses_results[name]
+        df = res.table if hasattr(res, "table") else (res if isinstance(res, pl.DataFrame) else None)
+        if df is None or len(df) == 0:
+            QMessageBox.information(self, "Export CSV", "Analysis table is empty.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, f"Export Analysis CSV ({name})", f"{name}.csv", "CSV Files (*.csv);;All Files (*)"
+        )
+        if path:
+            try:
+                df.write_csv(path, separator=";")
+            except Exception as exc:
+                QMessageBox.critical(self, "Export CSV Error", f"Cannot write CSV:\n\n{exc}")
 
     # ------------------------------------------------------------------ Actions & Slots
     def _on_scenario_changed(self) -> None:

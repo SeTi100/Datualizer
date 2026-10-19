@@ -392,6 +392,34 @@ class TestResultsPanelGui:
         panel._on_cell_double_clicked(0, 0)
         assert received_step == ["Z16"]
 
+        # Check Tab 4: Analyses
+        assert panel.tabs.count() == 5
+        assert panel.tabs.tabText(4) == "Analyses"
+
+    def test_results_panel_analyses_tab(self, ensure_qapp):
+        from datualizer_core.calc.analyses import CrossingAnalysis
+        eval_with_ana = Evaluation(
+            analyses=[CrossingAnalysis(name="T50", x="T_bett", y="X", level=0.5, unit="°C")]
+        )
+        camp = Campaign(evaluation=eval_with_ana)
+        session = CampaignSession(camp)
+        df_steps = pl.DataFrame({
+            "step_id": ["Z16", "Z19"],
+            "T_bett": [150.0, 200.0],
+            "X": [0.3, 0.7],
+            "u_X": [0.05, 0.05],
+        })
+        session.step_table = lambda spec=None, config=None: df_steps
+
+        panel = ResultsPanel()
+        panel.set_session(session)
+
+        assert panel.analysis_combo.count() == 1
+        assert panel.analysis_combo.currentText() == "T50"
+        assert panel.analysis_table.rowCount() == 1
+        assert panel.analysis_table.columnCount() > 0
+        assert "T50" in panel.analysis_status.text()
+
     def test_campaign_window_dock_results(self, sa_evaluation: Evaluation):
         camp = Campaign(evaluation=sa_evaluation)
         session = CampaignSession(camp)

@@ -1078,6 +1078,104 @@ class CampaignSession:
             df = df.with_columns(new_cols)
         return df
 
+    def analyses(
+        self,
+        scenario: str | Scenario | dict[str, Constant] | None = None,
+        spec: Evaluation | None = None,
+        config: StatsConfig | None = None,
+    ) -> dict[str, Any]:
+        """Run all configured cross-step analyses (crossing, fit_line, aggregate) on campaign results.
+
+        `scenario`: scenario name, Scenario or dict of constant overrides.
+        `spec`: evaluation specification (default: campaign's evaluation).
+        Returns a dict mapping analysis name to its result (CrossingResult, FitLineResult, or DataFrame).
+        """
+        ev = spec if spec is not None else self.campaign.evaluation
+        if not ev.analyses:
+            return {}
+
+        df = self.results(scenario=scenario, spec=ev, config=config)
+        constants = dict(ev.constants)
+        if scenario is not None:
+            if isinstance(scenario, str):
+                constants.update(ev.scenario(scenario).constants)
+            elif isinstance(scenario, Scenario):
+                constants.update(scenario.constants)
+            elif isinstance(scenario, dict):
+                constants.update(scenario)
+
+        from datualizer_core.calc.analyses import aggregate, crossing, fit_line
+
+        out: dict[str, Any] = {}
+        for a in ev.analyses:
+            kind = a.kind if hasattr(a, "kind") else a.get("kind")
+            name = a.name if hasattr(a, "name") else a.get("name", "")
+            if kind == "crossing":
+                x = a.x if hasattr(a, "x") else a["x"]
+                y = a.y if hasattr(a, "y") else a["y"]
+                level = a.level if hasattr(a, "level") else a["level"]
+                group = a.group if hasattr(a, "group") else a.get("group")
+                u_y = a.u_y if hasattr(a, "u_y") else a.get("u_y")
+                where = a.where if hasattr(a, "where") else a.get("where")
+                unit = a.unit if hasattr(a, "unit") else a.get("unit", "")
+                scope = a.scope if hasattr(a, "scope") else a.get("scope", "tag")
+                mc_samples = a.mc_samples if hasattr(a, "mc_samples") else a.get("mc_samples")
+                out[name] = crossing(
+                    df,
+                    x=x,
+                    y=y,
+                    level=level,
+                    group=group,
+                    u_y=u_y,
+                    where=where,
+                    unit=unit,
+                    scope=scope,
+                    constants=constants,
+                    mc_samples=mc_samples,
+                    name=name,
+                )
+            elif kind == "fit_line":
+                x_expr = a.x_expr if hasattr(a, "x_expr") else a["x_expr"]
+                y_expr = a.y_expr if hasattr(a, "y_expr") else a["y_expr"]
+                u_x = a.u_x if hasattr(a, "u_x") else a.get("u_x")
+                u_y = a.u_y if hasattr(a, "u_y") else a.get("u_y")
+                where = a.where if hasattr(a, "where") else a.get("where")
+                method = a.method if hasattr(a, "method") else a.get("method", "effective_variance")
+                derived = a.derived if hasattr(a, "derived") else a.get("derived", {})
+                scope = a.scope if hasattr(a, "scope") else a.get("scope", "tag")
+                mc_samples = a.mc_samples if hasattr(a, "mc_samples") else a.get("mc_samples")
+                out[name] = fit_line(
+                    df,
+                    x_expr=x_expr,
+                    y_expr=y_expr,
+                    u_x=u_x,
+                    u_y=u_y,
+                    where=where,
+                    method=method,
+                    derived=derived,
+                    scope=scope,
+                    constants=constants,
+                    mc_samples=mc_samples,
+                    name=name,
+                )
+            elif kind == "aggregate":
+                rows = a.rows if hasattr(a, "rows") else a["rows"]
+                cols = a.cols if hasattr(a, "cols") else a.get("cols")
+                value = a.value if hasattr(a, "value") else a["value"]
+                where = a.where if hasattr(a, "where") else a.get("where")
+                how = a.how if hasattr(a, "how") else a.get("how", "mean")
+                out[name] = aggregate(
+                    df,
+                    rows=rows,
+                    cols=cols,
+                    value=value,
+                    where=where,
+                    how=how,
+                )
+            else:
+                raise ValueError(f"Unknown analysis kind {kind!r} for {name!r}.")
+        return out
+
     def _stats_input(self, source_id: str, channel: str, cfg: StatsConfig) -> "_StatsInput":
         """What `window_stats` needs of one channel, or the reason why it has nothing (`data` is text)."""
         src = self.campaign.source(source_id)

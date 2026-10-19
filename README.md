@@ -92,6 +92,7 @@ Dazu pro Kanal: Anzeigename, Stil (Linie, Punkte, Treppe), Farbe und Y-Skalierun
 | **Qualität** | Flags statt Löschen: Lücke, Dropout, Sprung, eingefrorener Sensor, Bereich, Hampel-Spike |
 | **Zeit** | Absolute Zeit mit Zeitzone und Sommerzeit, Startzeit für Logger mit verstrichener Zeit, Datum für reine Uhrzeiten |
 | **Messkampagne** | Mehrere Quellen auf Master-Zeit, Uhrenmodell (Versatz, Drift, Anker), Abdeckung, Messschritte, `campaign.json` |
+| **Formeln** | Sicherer Parser (Positivliste, kein `eval`), Polars-Ausdruck oder numpy mit linearer Fehlerfortpflanzung: Budget je Eingang, zufällig/systematisch getrennt, korrelierte Gruppen |
 | **Fenster-Statistik** | Mittelwert, Median, SD, SEM, OLS- und Theil-Sen-Steigung, 2-Punkt-Differenz nach GUM, Integral; AR(1)-`n_eff`, Newey-West, Durbin-Watson, Stationaritäts-Ampel |
 | **Plots** | Eigenes Peak-Downsampling ohne Linien über Lücken, verlinkte Zeitachsen, Fadenkreuz-Werte, Subplots nach Kanal/Einheit/Quelle, Export PNG/SVG/PDF |
 
@@ -167,6 +168,23 @@ s.window_table([(waage.id, "masse")])                   # Kennwerte pro Schritt
 s.save("campaign.json")
 ```
 
+### Formeln
+
+Rechengrössen sind Formeln als Text, geprüft gegen eine Positivliste (Zahlen, Namen, `+ − * / **`, Vergleiche, `and/or/not`, `a if c else b`, `log`, `exp`, `sqrt`, `min`, `max`, `where` …), nie mit `eval`. Dieselbe Formel rechnet als Polars-Ausdruck auf Rohdaten oder mit numpy samt linearer Fehlerfortpflanzung (Dual-Zahlen): Ergebnis, u gesamt, zufällig, systematisch und der Beitrag jedes Eingangs.
+
+```python
+from datualizer_core.calc import Constant, UArray, compile_expr
+
+X = compile_expr("1 - (S - B) * f / c_in", names=["S", "B", "f", "c_in"]).evaluate({
+    "S": UArray.input("S", 25.807, 0.10),                          # FID-Endwert, zufällig
+    "B": UArray.input("B", 2.266, 1.0),                            # Blindwert, zufällig
+    "f": Constant(name="f", value=2.701, u=0.135, kind="syst"),    # Umrechnung, systematisch
+    "c_in": 144.361,
+})
+X.value, X.u(), X.u_random(), X.u_syst()   # 0.560, 0.029, 0.019, 0.022
+X.budget()                                  # {'S': -0.0019, 'B': 0.0187, 'f': -0.0220}
+```
+
 Mehr dazu in der [ausführlichen Anleitung](docs/BENUTZUNG.md).
 
 ### Tests
@@ -232,7 +250,7 @@ Datualizer/
 |:---:|---|:---:|
 | 1 | Minimal End-to-End Tracer Bullet | ✅ |
 | 2 | Ingestion-Festung für chaotische Realdaten | 🔜 grösstenteils fertig |
-| 2b | Messkampagne: mehrere Geräte, Uhren, Schritte, Fenster-Statistik | 🔜 Schritte 1–6 fertig |
+| 2b | Messkampagne: mehrere Geräte, Uhren, Schritte, Fenster-Statistik, Rechengrössen | 🔜 Schritte 1–6 fertig, Schritt 8 begonnen |
 | 3 | Tidy- & Reshaping-DSL (JSON-AST, 10 Operatoren, `join_asof`) | ⏳ |
 | 4 | Tidy-Axiom-Validierung & KI-gestützte Recipe-Reparatur | ⏳ |
 | 5 | High-Performance-Visualisierung (LTTB, Multi-Y, ROI) | ⏳ |

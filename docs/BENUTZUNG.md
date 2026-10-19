@@ -127,6 +127,46 @@ from datualizer_gui.components.plot_export import ExportOptions
 window.export_plot("bericht_12_10.pdf", ExportOptions(width_mm=170, font_pt=8, line_width_pt=0.75))
 ```
 
+## Formeln mit Unsicherheit
+
+`datualizer_core/calc/` ist der Formelkern für Rechengrössen (Etappe 2b, Schritt 8). Er kennt weder Kampagne noch GUI; die Anbindung an Schritt-Tabelle und Rechenkanäle folgt.
+
+**Was eine Formel enthalten darf:** Zahlen, Namen (auch mit Punkt, `fid.mean` ist *ein* Name), `+ - * / **`, unäres Minus, Vergleiche (auch verkettet, `0 < X <= 1`), `and`, `or`, `not`, `a if c else b` und die Funktionen `log` (natürlich), `log10`, `exp`, `sqrt`, `abs`, `min`, `max` (zwei oder mehr Argumente), `where(c, a, b)`, `isfinite`, `round(x, n=0)`. Die Zeichen − · × werden als `-` und `*` gelesen. Alles andere (Attribute, Methodenaufrufe, Indizes, Lambdas, Comprehensions, Text) lehnt `compile_expr` mit einem `ExprError` ab, der die Spalte und die bekannten Namen nennt:
+
+```python
+from datualizer_core.calc import ExprError, compile_expr
+
+try:
+    compile_expr("1 - (S - Bx) * f", names=["S", "B", "f"])
+except ExprError as e:
+    print(e)
+# unknown name 'Bx'; did you mean 'B'? (column 10)
+#     1 - (S - Bx) * f
+#              ^
+# Known names: B, S, f
+```
+
+**Zwei Ziele, eine Bedeutung:** `expr.to_polars(columns=…, constants=…)` liefert einen `pl.Expr` (Namen werden Spalten, Konstanten Literale, ohne Unsicherheit). `expr.evaluate(env)` rechnet mit numpy; `env` ordnet jedem Namen einen `UArray`, eine `Constant`, eine Zahl, ein Array oder eine Series zu. Beide liefern dieselben Werte: `/` ist echte Division, Division durch null gibt ±inf oder NaN, NaN pflanzt sich durch `min`/`max` fort und ist mit nichts gleich. Polars kennt zusätzlich null (fehlend), das sich durch alles fortpflanzt.
+
+**Unsicherheit:** Ein `UArray` trägt neben dem Wert die exakte Ableitung nach jedem unsicheren Eingang (Dual-Zahlen). Daraus folgen nach GUM (linear, erste Ordnung):
+
+| Methode | Bedeutung |
+|---|---|
+| `budget()` | Beitrag cᵢ = ∂f/∂xᵢ · uᵢ jedes Eingangs, mit Vorzeichen |
+| `u_random()` | √(Σ cᵢ²) über die Eingänge `kind="zufall"` (unabhängig) |
+| `u_syst()` | Eingänge `kind="syst"` mit gleicher `group` sind voll korreliert: ihre Beiträge addieren sich linear, Gruppen und Eingänge ohne Gruppe quadratisch |
+| `u()` | √(u_random² + u_syst²) |
+
+Eine `Constant` (`name`, `value`, `u`, `kind`, `group`, `unit`, `note`) ist serialisierbar und kommt später aus `campaign.json`. Gemessene Werte mit einer Unsicherheit pro Schritt werden zu `UArray.input(name, werte, u, kind="zufall")`. `round` und Vergleiche haben die Ableitung 0; `abs`, `min`, `max`, `where` und `if` nehmen die Ableitung des benutzten Zweigs.
+
+```python
+from datualizer_core.calc import Constant, UArray, evaluate
+
+a = Constant(name="a", value=5.0, u=0.2, kind="syst", group="waage")
+b = Constant(name="b", value=3.0, u=0.2, kind="syst", group="waage")
+evaluate("a - b", {"a": a, "b": b}).u()     # 0.0: derselbe Fehler hebt sich in der Differenz auf
+```
+
 ## Absolute Zeit
 
 **Absolute Zeit** bleibt erhalten: `time_seconds` zählt ab dem ersten gültigen Sample, `ds.time_origin` ist der absolute Zeitpunkt dazu, `ds.time_abs` die absolute Zeit jeder Zeile und `ds.with_time_abs()` die Tabelle mit Spalte `time_abs`. Damit lassen sich später mehrere Geräte einer Messkampagne auf eine Zeitachse legen (Etappe 2b). Datums- und Zeitwerte ohne Zeitzone gelten als Wanduhrzeit. Mit `IngestionConfig(time=TimeConfig(timezone="Europe/Zurich"))` werden sie in dieser Zone gelesen, dann bleiben die Sekunden auch über die Sommerzeitumstellung korrekt (doppelte oder fehlende Uhrzeiten stehen im Audit). Logger, die nur die verstrichene Zeit exportieren (z. B. PicoLog `00:00:00`), bekommen ihren Startzeitpunkt über `TimeConfig(origin=datetime(...))`. Uhrzeiten ohne Datum (z. B. im Labjournal) bekommen ihr Datum über `TimeConfig(clock_date=date(...))`. Weitere Datumsformate: `TimeConfig(datetime_formats=[...])`; ein erzwungenes `TimeConfig(format=TimeFormat.DATETIME)`, das nicht passt, schlägt laut fehl (`TimeConfigError`).

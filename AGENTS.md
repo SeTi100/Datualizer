@@ -48,6 +48,7 @@ datualizer_core/                  # Engine, KEINE GUI-Abhängigkeiten
 ├── quality.py                    # Qualitäts-Flags als Ereignistabelle (markieren, nie ändern), inkl. Hampel-`spike`
 ├── timebase.py                   # Absolute Zeit: Datumsformate, Zeitzonen, Sommerzeit (über Polars, importzyklusfrei)
 ├── campaign/                     # Messkampagne: Campaign (JSON), CampaignSession, ClockModel (Versatz, Drift, Anker), Track, Abdeckung (coverage.py), Messschritte (intervals.py), Darstellung pro Kanal (display.py)
+├── calc/                         # Formelkern: expr.py (sicherer Parser, Polars + numpy), uncertain.py (UArray/Dual-Zahlen, Constant); ohne Kampagnen- und GUI-Import
 ├── stats/window.py               # Fenster-Statistik eines Messschritts: StatsConfig, window_stats, theil_sen (ohne Kampagnen- und GUI-Import; numpy, scipy nur für Quantile)
 ├── ingestion/
 │   ├── config.py                 # IngestionConfig, TimeConfig, Vocabulary, LongFormatConfig, RoleConfig, RunConfig, UnitConfig, QualityConfig, MergeConfig  ← alle Stellschrauben
@@ -168,11 +169,12 @@ Mehrere Dateien: `load_csvs(paths, config=…)` liest jede Datei roh ein, prüft
   - Einstellungen des Kampagnenfensters, Teil 3: Subplots pro Kanal, nach Einheit oder nach Quelle mit Legende, Farben nach Kanal, Quelle oder manuell (`components/plot_groups.py`, `ChannelDisplay.color`). `canvas.plot_items` ist nach Subplot geschlüsselt (bei „pro Kanal“ gleich dem Spur-Schlüssel `quelle/kanal`), `canvas.curves` und `edge_markers` immer nach Spur
   - Einstellungen des Kampagnenfensters, Teil 4: Werte unter dem Mauszeiger als Leiste, Tooltip oder Tabelle im Dock (`readout.ReadoutMode`, `ReadoutTable`), Nachkommastellen. Angezeigt wird, was die Kurve zeichnet (`FastCurve.value_at`): Treppen halten ihren Wert bis zum nächsten Punkt, sonst der nächste Messpunkt, in einer Unterbrechung „—“
   - Einstellungen des Kampagnenfensters, Teil 5: Export als PNG, SVG, PDF (`components/plot_export.py`, `canvas.export_copy()`, Dialog `components/export_dialog.py`)
+  - Schritt 8, PR 1 (siehe [Plan Auswertung](docs/PLAN_AUSWERTUNG_KAMPAGNE.md)): Formelkern `datualizer_core/calc/`. `compile_expr` prüft gegen eine Positivliste (nie `eval`), `Expr.to_polars()` und `Expr.evaluate()` rechnen dasselbe (NaN-Vergleiche nach IEEE auch in Polars); `UArray` pflanzt Unsicherheiten exakt linear fort (`budget`, `u_random`, `u_syst`, syst. Eingänge gleicher `group` voll korreliert); `Constant`
 
 **Nächste offene Punkte:**
 
 1. **Später zu den Einstellungen** (mit Etappe 2b, Schritt 5/6): Qualitäts-Flags als Marker, Lücken-Schwelle, Standardauswahl der Kanäle beim Hinzufügen einer Quelle.
-2. **Etappe 2b, Schritte 7–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md)): Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
+2. **Etappe 2b, Schritte 7–10** (siehe [Masterplan](docs/MASTER_ETAPPEN_PLAN.md) und [Plan Auswertung](docs/PLAN_AUSWERTUNG_KAMPAGNE.md), PR 2–10): Abgleich-Werkzeuge, Rechengrössen und Szenarien, Video-Spur.
 3. **Wert und Einheit in einer Zelle (P6)** (`Konzentration = "20 °C"`) und widersprüchliche Metadaten anzeigen (P8).
 4. Danach: Block-Segmentation und Ragged-Healer (ursprünglicher Etappe-2-Plan), sobald Gerätedaten mit Kopfblöcken vorliegen.
 

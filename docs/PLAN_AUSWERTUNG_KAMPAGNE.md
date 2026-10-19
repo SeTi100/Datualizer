@@ -230,7 +230,7 @@ Die Namen der Kanäle/Quellen sind Beispiele. Die Restdrift (|dX/dt|·10 min) is
 
 | PR | Inhalt | braucht | Masterplan |
 |---|---|---|---|
-| 1 | Formelkern + Dual-Zahlen + Konstanten | – | 2b-8 |
+| 1 ✅ | Formelkern + Dual-Zahlen + Konstanten | – | 2b-8 |
 | 2 | Rechenkanäle (Zeitstücke), Masken, Settings-XML, `json_columns` | 1 | 2b-8, 2b-2 |
 | 3 | Schrittarten, benannte Fenster, `step_table`, Äquivalenztest | – (Formeln für `when` aus 1, sonst einfache Vergleiche) | 2b-6/8 |
 | 4 | Bezüge: Blindwert, Beladung, Klassen | 1, 3 | 2b-8 |

@@ -46,8 +46,11 @@ from datualizer_core.calc.expr import FUNCTIONS, compile_expr
 from datualizer_core.campaign.campaign import CampaignSession
 from datualizer_core.campaign.evaluation import Evaluation, Scenario
 from datualizer_core.campaign.views import (
+    AlignedViewSpec,
+    BarsViewSpec,
     MatrixViewSpec,
     RefLine,
+    ReportViewSpec,
     SecondaryAxis,
     TableViewSpec,
     ViewSpec,
@@ -61,6 +64,7 @@ from datualizer_gui.components.plot_export import (
     ExportFormat,
     ExportOptions,
     export_graphics_layout,
+    export_report,
 )
 from datualizer_gui.components.readout import ReadoutLabel
 
@@ -856,6 +860,686 @@ class MatrixViewWidget(QWidget):
         return export_graphics_layout(self.glw, path, options)
 
 
+def _to_epoch_array(series: pl.Series) -> np.ndarray:
+    if series.dtype == pl.Datetime or series.dtype == pl.Date:
+        return (series.cast(pl.Datetime("us", "UTC")).cast(pl.Int64) / 1e6).to_numpy()
+    return series.cast(pl.Float64).to_numpy()
+
+
+# ------------------------------------------------------------------ Aligned View Widget
+class AlignedViewWidget(QWidget):
+    """Render an AlignedViewSpec (e.g. breakthrough curve X(t) over relative time)."""
+
+    step_inspected = Signal(str)
+
+    def __init__(
+        self,
+        spec: AlignedViewSpec,
+        session: CampaignSession | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.spec = spec
+        self.session = session
+        self._df: pl.DataFrame | None = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+
+        header_layout = QHBoxLayout()
+        title_text = spec.title or spec.name
+        lbl = QLabel(f"<b>{title_text}</b>" + (f" – <small>{spec.subtitle}</small>" if spec.subtitle else ""))
+        header_layout.addWidget(lbl)
+        header_layout.addStretch()
+
+        self.btn_export = QPushButton("Export Plot...")
+        self.btn_export.clicked.connect(self._on_export_clicked)
+        header_layout.addWidget(self.btn_export)
+        layout.addLayout(header_layout)
+
+        main_split = QHBoxLayout()
+        self.glw = pg.GraphicsLayoutWidget()
+        self.glw.setBackground(SURFACE)
+        self.glw.scene().setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
+        main_split.addWidget(self.glw, stretch=4)
+
+        # Side legend widget
+        self.legend_panel = QWidget()
+        self.legend_layout = QVBoxLayout(self.legend_panel)
+        self.legend_layout.setContentsMargins(8, 8, 8, 8)
+        self.legend_layout.addStretch()
+        self.legend_panel.setMaximumWidth(250)
+        self.legend_panel.setStyleSheet(f"background: {SURFACE}; color: {INK2}; font-size: 9pt;")
+        main_split.addWidget(self.legend_panel, stretch=1)
+
+        layout.addLayout(main_split, stretch=1)
+        self.status = ReadoutLabel("")
+        layout.addWidget(self.status)
+
+        if spec.footer:
+            footer_lbl = QLabel(f"<small style='color: {INK2};'>{spec.footer}</small>")
+            footer_lbl.setWordWrap(True)
+            layout.addWidget(footer_lbl)
+
+    def set_data(self, df: pl.DataFrame) -> None:
+        self._df = df
+        sub = filter_table(df, self.spec.filter)
+        self.glw.clear()
+        self._clear_legend()
+
+        if len(sub) == 0:
+            self.status.setText("No data matching filter.")
+            return
+
+        id_col = next((c for c in ("step_id", "interval_id", "schritt", "id") if c in sub.columns), None)
+        step_ids = sub[id_col].to_list() if id_col else [f"step_{i}" for i in range(len(sub))]
+
+        start_col = next((c for c in ("step_start", "start") if c in sub.columns), None)
+        end_col = next((c for c in ("step_end", "end", "ende") if c in sub.columns), None)
+        if not start_col or not end_col:
+            self.status.setText("Missing step_start or step_end columns.")
+            return
+
+        starts_epoch = np.asarray(_to_epoch_array(sub[start_col]), dtype=float)
+        ends_epoch = np.asarray(_to_epoch_array(sub[end_col]), dtype=float)
+
+        # Color mapping
+        color_vals = None
+        color_map: dict[Any, str] = {}
+        if self.spec.color_by and self.spec.color_by in sub.columns:
+            color_vals = sub[self.spec.color_by].to_list()
+            distinct_colors = sorted(list(set(color_vals)), key=lambda v: (v is None, v))
+            is_numeric = all(isinstance(v, (int, float, np.number)) for v in distinct_colors if v is not None)
+            if (self.spec.color_mode == "ordinal" or (self.spec.color_mode == "auto" and is_numeric)) and len(
+                distinct_colors
+            ) <= 5:
+                indices = RAMP_SUBSET.get(len(distinct_colors), list(range(len(distinct_colors))))
+                for idx, v in enumerate(distinct_colors):
+                    color_map[v] = RAMP[indices[idx % len(indices)]]
+            elif self.spec.color_mode == "ordinal" or (self.spec.color_mode == "auto" and is_numeric):
+                for idx, v in enumerate(distinct_colors):
+                    frac = idx / max(1, len(distinct_colors) - 1)
+                    color_map[v] = interpolate_color(RAMP, frac)
+            else:
+                for idx, v in enumerate(distinct_colors):
+                    color_map[v] = CAT[idx % len(CAT)]
+
+        # Marker mapping
+        marker_vals = None
+        marker_map: dict[Any, str] = {}
+        if self.spec.marker_by and self.spec.marker_by in sub.columns:
+            marker_vals = sub[self.spec.marker_by].to_list()
+            distinct_markers = sorted(list(set(marker_vals)), key=lambda v: (v is None, v))
+            for idx, v in enumerate(distinct_markers):
+                marker_map[v] = MARKERS[idx % len(MARKERS)]
+
+        # Filled condition mask
+        filled_mask = None
+        if self.spec.filled:
+            f_raw = eval_table_expr(sub, self.spec.filled)
+            if f_raw is not None:
+                filled_mask = np.asarray(f_raw, dtype=bool)
+
+        # Compute t0 for each step
+        t0_arr = np.zeros(len(sub), dtype=float)
+        if self.spec.t0 == "step_start":
+            t0_arr = starts_epoch.copy()
+        else:
+            seq_col = self.spec.sequence_col or next((c for c in ("sequenz", "sequence", "beladung") if c in sub.columns), None)
+            if seq_col:
+                seq_vals = sub[seq_col].to_list()
+                day_vals = sub["tag"].to_list() if "tag" in sub.columns else [None] * len(sub)
+                for seq_id in set(seq_vals):
+                    for day_id in set(day_vals):
+                        mask = np.array([s == seq_id and d == day_id for s, d in zip(seq_vals, day_vals)], dtype=bool)
+                        if mask.any():
+                            t0_arr[mask] = np.nanmin(starts_epoch[mask])
+            else:
+                t0_arr = starts_epoch.copy()
+
+        # Channel lookup from session
+        channel_names = []
+        try:
+            channel_names = compile_expr(self.spec.expr).names
+        except Exception:
+            pass
+
+        ch_sources: dict[str, str] = {}
+        if self.session is not None:
+            for ch in channel_names:
+                for s_id, ds in self.session.datasets.items():
+                    if ch in ds.df.columns or ch in ds.channels:
+                        ch_sources[ch] = s_id
+                        break
+
+        # Faceting
+        facets: list[tuple[Any, np.ndarray]] = []
+        if self.spec.facet_by and self.spec.facet_by in sub.columns:
+            facet_vals = sub[self.spec.facet_by].to_list()
+            for f_val in sorted(list(set(facet_vals)), key=lambda v: (v is None, v)):
+                mask = np.array([v == f_val for v in facet_vals], dtype=bool)
+                facets.append((f_val, mask))
+        else:
+            facets.append((None, np.ones(len(sub), dtype=bool)))
+
+        n_facets = len(facets)
+        ncols = min(self.spec.facet_cols, n_facets)
+        first_plot: pg.PlotItem | None = None
+
+        total_curves = 0
+        for k, (f_name, f_mask) in enumerate(facets):
+            row = k // ncols
+            col = k % ncols
+
+            p = self.glw.addPlot(row=row, col=col)
+            p.showGrid(x=True, y=True, alpha=0.3)
+            p.getAxis("bottom").setPen(AXIS)
+            p.getAxis("left").setPen(AXIS)
+            p.getAxis("bottom").setTextPen(INK2)
+            p.getAxis("left").setTextPen(INK2)
+
+            if f_name is not None:
+                title_f = f"≈ {f_name:.0f} °C" if isinstance(f_name, (int, float)) else str(f_name)
+                p.setTitle(title_f, color=INK)
+            elif self.spec.title:
+                p.setTitle(self.spec.title, color=INK)
+
+            if first_plot is not None:
+                p.setXLink(first_plot)
+                p.setYLink(first_plot)
+            else:
+                first_plot = p
+
+            if self.spec.x_label:
+                p.setLabel("bottom", self.spec.x_label)
+            if self.spec.y_label and col == 0:
+                p.setLabel("left", self.spec.y_label)
+
+            # Ref lines
+            for r in self.spec.ref_lines:
+                angle = 0 if r.axis == "y" else 90
+                line = pg.InfiniteLine(
+                    pos=r.value,
+                    angle=angle,
+                    pen=pg.mkPen(r.color, width=r.width),
+                    label=r.label,
+                    labelOpts={"position": 0.05, "color": MUTED},
+                )
+                p.addItem(line)
+
+            spot_pts: list[dict[str, Any]] = []
+
+            step_indices = [int(i) for i in np.flatnonzero(f_mask)]
+            for idx in step_indices:
+                st = starts_epoch[idx]
+                en = ends_epoch[idx]
+                t0 = t0_arr[idx]
+                s_id = step_ids[idx]
+                c_val = color_vals[idx] if color_vals else None
+                line_col = color_map.get(c_val, CAT[0])
+                m_val = marker_vals[idx] if marker_vals else None
+                marker_sym = marker_map.get(m_val, "o")
+                is_filled = filled_mask[idx] if filled_mask is not None else True
+
+                step_env = {c: sub[c][idx] for c in sub.columns}
+                if self.session is not None and self.session.campaign.evaluation:
+                    for ck, cv in self.session.campaign.evaluation.constants.items():
+                        step_env[ck] = cv.value
+
+                t_slice = None
+                ch_arrays = {}
+                if self.session is not None and ch_sources:
+                    for ch, src_id in ch_sources.items():
+                        m_t = self.session.master_time(src_id)
+                        if m_t is not None:
+                            s_mask = (m_t >= st) & (m_t <= en)
+                            if s_mask.any():
+                                t_slice = m_t[s_mask]
+                                ch_arrays[ch] = self.session.datasets[src_id].df[ch].to_numpy()[s_mask]
+
+                if t_slice is None or len(t_slice) < 2:
+                    t_slice = np.linspace(st, en, 20)
+                    for ch in channel_names:
+                        if ch not in ch_arrays:
+                            ch_arrays[ch] = np.full(len(t_slice), float(step_env.get(ch, 1.0) or 1.0))
+
+                t_rel_min = (t_slice - t0) / 60.0
+
+                eval_env = dict(step_env)
+                eval_env.update(ch_arrays)
+                try:
+                    res_expr = compile_expr(self.spec.expr, names=list(eval_env.keys())).evaluate(eval_env)
+                    val_arr = res_expr.value if hasattr(res_expr, "value") else res_expr
+                    y_arr = np.asarray(val_arr, dtype=float)
+                except Exception:
+                    y_arr = np.full(len(t_slice), np.nan)
+
+                if np.isfinite(y_arr).any():
+                    if self.spec.rolling_s and len(t_slice) > 2:
+                        dt = np.nanmedian(np.diff(t_slice))
+                        if dt > 0:
+                            w_pts = max(1, round(self.spec.rolling_s / dt))
+                            if w_pts > 1 and len(y_arr) >= w_pts:
+                                kernel = np.ones(w_pts) / w_pts
+                                y_arr = np.convolve(y_arr, kernel, mode="same")
+
+                    valid_idx = np.isfinite(t_rel_min) & np.isfinite(y_arr)
+                    if valid_idx.sum() >= 2:
+                        p.plot(t_rel_min[valid_idx], y_arr[valid_idx], pen=pg.mkPen(line_col, width=1.5))
+                        total_curves += 1
+
+                        last_t = float(t_rel_min[valid_idx][-1])
+                        last_y = float(y_arr[valid_idx][-1])
+                        brush = pg.mkBrush(line_col) if is_filled else pg.mkBrush(SURFACE)
+                        pen = pg.mkPen(line_col, width=1.5)
+                        spot_pts.append({
+                            "pos": (last_t, last_y),
+                            "size": 8,
+                            "symbol": marker_sym,
+                            "brush": brush,
+                            "pen": pen,
+                            "data": s_id,
+                        })
+
+            if spot_pts:
+                scatter = pg.ScatterPlotItem(
+                    spots=spot_pts,
+                    hoverable=True,
+                    tip=lambda x, y, data: f"Step: {data}\nt: {x:.1f} min\nX: {y:.3f}",
+                )
+                scatter.sigClicked.connect(self._on_scatter_clicked)
+                p.addItem(scatter)
+
+            if self.spec.x_lim:
+                p.setXRange(self.spec.x_lim[0], self.spec.x_lim[1], padding=0)
+            if self.spec.y_lim:
+                p.setYRange(self.spec.y_lim[0], self.spec.y_lim[1], padding=0)
+
+        self._build_side_legend(color_map, marker_map, filled_mask is not None)
+        self.status.setText(f"{total_curves} aligned curve(s) rendered across {n_facets} facet(s).")
+
+    def _on_scatter_clicked(self, item: Any, points: Sequence[Any]) -> None:
+        if points:
+            step_id = points[0].data()
+            if step_id:
+                self.step_inspected.emit(str(step_id))
+
+    def _clear_legend(self) -> None:
+        while self.legend_layout.count() > 1:
+            item = self.legend_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _build_side_legend(
+        self, color_map: dict[Any, str], marker_map: dict[Any, str], has_filled: bool
+    ) -> None:
+        self._clear_legend()
+
+        if color_map:
+            lbl = QLabel(f"<b>{self.spec.color_by or 'Color'}</b>")
+            self.legend_layout.addWidget(lbl)
+            for v, c_hex in color_map.items():
+                row_w = QWidget()
+                row_l = QHBoxLayout(row_w)
+                row_l.setContentsMargins(0, 2, 0, 2)
+                swatch = QLabel()
+                swatch.setFixedSize(14, 14)
+                swatch.setStyleSheet(f"background-color: {c_hex}; border: 1px solid {INK2}; border-radius: 2px;")
+                row_l.addWidget(swatch)
+                v_txt = f"{v:.4g}" if isinstance(v, (int, float, np.number)) else str(v)
+                row_l.addWidget(QLabel(v_txt))
+                row_l.addStretch()
+                self.legend_layout.addWidget(row_w)
+
+        if marker_map:
+            lbl_m = QLabel(f"<b>{self.spec.marker_by or 'Marker'}</b>")
+            self.legend_layout.addWidget(lbl_m)
+            for v, m_sym in marker_map.items():
+                row_w = QWidget()
+                row_l = QHBoxLayout(row_w)
+                row_l.setContentsMargins(0, 2, 0, 2)
+                row_l.addWidget(QLabel(f"[{m_sym}] {v}"))
+                row_l.addStretch()
+                self.legend_layout.addWidget(row_w)
+
+        if has_filled:
+            lbl_f = QLabel("<b>Status</b>")
+            self.legend_layout.addWidget(lbl_f)
+            r1 = QLabel("● stationär")
+            r2 = QLabel("○ nicht stationär")
+            self.legend_layout.addWidget(r1)
+            self.legend_layout.addWidget(r2)
+
+    def _on_export_clicked(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, f"Export Aligned Plot ({self.spec.name})", f"{self.spec.name}.png", "PNG (*.png);;SVG (*.svg);;PDF (*.pdf)"
+        )
+        if path:
+            try:
+                export_graphics_layout(self.glw, path, ExportOptions(width_mm=170, dpi=300))
+                QMessageBox.information(self, "Export Plot", f"Saved to {path}")
+            except Exception as exc:
+                QMessageBox.critical(self, "Export Error", f"Cannot export plot:\n{exc}")
+
+    def export(self, path: str | Path, options: ExportOptions = ExportOptions()) -> Path:
+        return export_graphics_layout(self.glw, path, options)
+
+
+# ------------------------------------------------------------------ Bars View Widget
+class BarsViewWidget(QWidget):
+    """Render a BarsViewSpec (uncertainty budget bar chart with stacked variance shares)."""
+
+    step_inspected = Signal(str)
+
+    def __init__(self, spec: BarsViewSpec, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.spec = spec
+        self._df: pl.DataFrame | None = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+
+        header_layout = QHBoxLayout()
+        title_text = spec.title or spec.name
+        lbl = QLabel(f"<b>{title_text}</b>" + (f" – <small>{spec.subtitle}</small>" if spec.subtitle else ""))
+        header_layout.addWidget(lbl)
+        header_layout.addStretch()
+
+        self.btn_export = QPushButton("Export Plot...")
+        self.btn_export.clicked.connect(self._on_export_clicked)
+        header_layout.addWidget(self.btn_export)
+        layout.addLayout(header_layout)
+
+        main_split = QHBoxLayout()
+        self.glw = pg.GraphicsLayoutWidget()
+        self.glw.setBackground(SURFACE)
+        self.glw.scene().setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
+        main_split.addWidget(self.glw, stretch=4)
+
+        # Side legend widget
+        self.legend_panel = QWidget()
+        self.legend_layout = QVBoxLayout(self.legend_panel)
+        self.legend_layout.setContentsMargins(8, 8, 8, 8)
+        self.legend_layout.addStretch()
+        self.legend_panel.setMaximumWidth(280)
+        self.legend_panel.setStyleSheet(f"background: {SURFACE}; color: {INK2}; font-size: 9pt;")
+        main_split.addWidget(self.legend_panel, stretch=1)
+
+        layout.addLayout(main_split, stretch=1)
+        self.status = ReadoutLabel("")
+        layout.addWidget(self.status)
+
+        if spec.footer:
+            footer_lbl = QLabel(f"<small style='color: {INK2};'>{spec.footer}</small>")
+            footer_lbl.setWordWrap(True)
+            layout.addWidget(footer_lbl)
+
+    def set_data(self, df: pl.DataFrame) -> None:
+        self._df = df
+        sub = filter_table(df, self.spec.filter)
+        self.glw.clear()
+        self._clear_legend()
+
+        if len(sub) == 0:
+            self.status.setText("No data matching filter.")
+            return
+
+        sort_cols = [c for c in self.spec.sort_by if c in sub.columns]
+        if sort_cols:
+            sub = sub.sort(sort_cols)
+
+        parts: list[tuple[str, str]] = []
+        if self.spec.parts:
+            for p in self.spec.parts:
+                if isinstance(p, (tuple, list)) and len(p) >= 2:
+                    parts.append((str(p[0]), str(p[1])))
+                else:
+                    parts.append((str(p), str(p)))
+        else:
+            q = self.spec.quantity
+            p1 = f"b_{q}__"
+            p2 = f"u{q}_"
+            p3 = f"u_{q}_"
+            for c in sub.columns:
+                if c.startswith(p1):
+                    lab = c[len(p1):].replace("_mgC", "").replace("_m3_h", "").replace("_", " ")
+                    parts.append((c, lab))
+                elif c.startswith(p2) or c.startswith(p3):
+                    parts.append((c, c))
+            if not parts:
+                for c in sub.columns:
+                    if c.startswith("uX_"):
+                        parts.append((c, c[3:].replace("_", " ")))
+
+        parts = [(c, lab) for c, lab in parts if c in sub.columns]
+        if not parts:
+            self.status.setText("No budget parts found in table.")
+            return
+
+        id_col = next((c for c in ("step_id", "interval_id", "schritt", "id") if c in sub.columns), None)
+        step_ids = sub[id_col].to_list() if id_col else [f"step_{i}" for i in range(len(sub))]
+
+        u_col = self.spec.u_total or f"u_{self.spec.quantity}"
+        if u_col in sub.columns:
+            u_vals = sub[u_col].to_numpy().astype(float)
+        else:
+            u_vals = np.sqrt(np.sum([np.nan_to_num(sub[c].to_numpy().astype(float), nan=0.0) ** 2 for c, _ in parts], axis=0))
+
+        n_steps = len(sub)
+        x_indices = np.arange(n_steps)
+
+        p0 = self.glw.addPlot(row=0, col=0)
+        p1 = self.glw.addPlot(row=1, col=0)
+        p0.setXLink(p1)
+
+        p0.showGrid(x=False, y=True, alpha=0.3)
+        p0.getAxis("left").setPen(AXIS)
+        p0.getAxis("bottom").setPen(AXIS)
+        p0.getAxis("left").setTextPen(INK2)
+        p0.getAxis("bottom").setTextPen(INK2)
+        p0.setLabel("left", f"u({self.spec.quantity})")
+        p0.getAxis("bottom").setTicks([])
+
+        bg0 = pg.BarGraphItem(
+            x=x_indices,
+            height=u_vals,
+            width=0.6,
+            brush=pg.mkBrush(CAT[0]),
+            pen=pg.mkPen(SURFACE, width=0.8),
+        )
+        p0.addItem(bg0)
+
+        p1.showGrid(x=False, y=True, alpha=0.3)
+        p1.getAxis("left").setPen(AXIS)
+        p1.getAxis("bottom").setPen(AXIS)
+        p1.getAxis("left").setTextPen(INK2)
+        p1.getAxis("bottom").setTextPen(INK2)
+        p1.setLabel("left", self.spec.y_label)
+        p1.setYRange(0, 1, padding=0)
+
+        var_matrix = np.column_stack([np.nan_to_num(sub[c].to_numpy().astype(float), nan=0.0) ** 2 for c, _ in parts])
+        var_sum = var_matrix.sum(axis=1, keepdims=True)
+        var_sum[var_sum == 0] = 1.0
+        shares = var_matrix / var_sum
+        bottom = np.zeros(n_steps)
+
+        for k, (c, lab) in enumerate(parts):
+            col_brush = pg.mkBrush(CAT[k % len(CAT)])
+            bg1 = pg.BarGraphItem(
+                x=x_indices,
+                y0=bottom,
+                height=shares[:, k],
+                width=0.6,
+                brush=col_brush,
+                pen=pg.mkPen(SURFACE, width=0.8),
+            )
+            p1.addItem(bg1)
+            bottom += shares[:, k]
+
+        tick_labels = []
+        for i in range(n_steps):
+            s_id = step_ids[i]
+            parts_txt = [str(s_id)]
+            if "T_bett" in sub.columns:
+                tb = sub["T_bett"][i]
+                if tb is not None:
+                    parts_txt.append(f"{tb:.0f} °C")
+            if "V_MFC" in sub.columns:
+                vm = sub["V_MFC"][i]
+                if vm is not None:
+                    parts_txt.append(f"{vm:g}")
+            tick_labels.append(" · ".join(parts_txt))
+
+        ticks = list(zip(x_indices, tick_labels))
+        p1.getAxis("bottom").setTicks([ticks])
+
+        self._build_legend(parts)
+        self.status.setText(f"Rendered uncertainty budget for {n_steps} steps across {len(parts)} parts.")
+
+    def _clear_legend(self) -> None:
+        while self.legend_layout.count() > 1:
+            item = self.legend_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _build_legend(self, parts: list[tuple[str, str]]) -> None:
+        self._clear_legend()
+        lbl = QLabel("<b>Quelle</b>")
+        self.legend_layout.addWidget(lbl)
+
+        # Reversed so top stacked layer is on top of legend
+        for k, (c, lab) in reversed(list(enumerate(parts))):
+            color_hex = CAT[k % len(CAT)]
+            row_w = QWidget()
+            row_l = QHBoxLayout(row_w)
+            row_l.setContentsMargins(0, 2, 0, 2)
+            swatch = QLabel()
+            swatch.setFixedSize(14, 14)
+            swatch.setStyleSheet(f"background-color: {color_hex}; border: 1px solid {INK2}; border-radius: 2px;")
+            row_l.addWidget(swatch)
+            row_l.addWidget(QLabel(lab))
+            row_l.addStretch()
+            self.legend_layout.addWidget(row_w)
+
+    def _on_export_clicked(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, f"Export Bars Plot ({self.spec.name})", f"{self.spec.name}.png", "PNG (*.png);;SVG (*.svg);;PDF (*.pdf)"
+        )
+        if path:
+            try:
+                export_graphics_layout(self.glw, path, ExportOptions(width_mm=170, dpi=300))
+                QMessageBox.information(self, "Export Plot", f"Saved to {path}")
+            except Exception as exc:
+                QMessageBox.critical(self, "Export Error", f"Cannot export plot:\n{exc}")
+
+    def export(self, path: str | Path, options: ExportOptions = ExportOptions()) -> Path:
+        return export_graphics_layout(self.glw, path, options)
+
+
+# ------------------------------------------------------------------ Report View Widget
+class ReportViewWidget(QWidget):
+    """Render a ReportViewSpec: lists included report pages and triggers PDF export."""
+
+    def __init__(
+        self,
+        spec: ReportViewSpec,
+        session: CampaignSession | None = None,
+        views_dict: Mapping[str, QWidget] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.spec = spec
+        self.session = session
+        self.views_dict = views_dict or {}
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        header_layout = QHBoxLayout()
+        title_text = spec.title or spec.name
+        lbl = QLabel(f"<h2>{title_text}</h2>" + (f"<p style='color: {INK2};'>{spec.subtitle}</p>" if spec.subtitle else ""))
+        header_layout.addWidget(lbl)
+        header_layout.addStretch()
+
+        self.btn_export = QPushButton("Export PDF Report...")
+        self.btn_export.setStyleSheet("font-size: 11pt; padding: 6px 16px; font-weight: bold; background: #2a78d6; color: white; border-radius: 4px;")
+        self.btn_export.clicked.connect(self._on_export_clicked)
+        header_layout.addWidget(self.btn_export)
+        layout.addLayout(header_layout)
+
+        # Overview Table
+        self.table = QTableWidget()
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["Page #", "Title / Content", "Type", "Page Size"])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setStyleSheet(f"background: {SURFACE}; color: {INK}; gridline-color: {GRID};")
+        layout.addWidget(self.table, stretch=1)
+
+        self.status = ReadoutLabel("")
+        layout.addWidget(self.status)
+
+    def set_data(self, df: pl.DataFrame) -> None:
+        self.table.setRowCount(0)
+        row = 0
+        if self.spec.cover:
+            self.table.insertRow(row)
+            self.table.setItem(row, 0, QTableWidgetItem(f"Page {row + 1}"))
+            self.table.setItem(row, 1, QTableWidgetItem("Cover Page (Title, Dates, KPI Tiles, Analyses)"))
+            self.table.setItem(row, 2, QTableWidgetItem("Cover"))
+            self.table.setItem(row, 3, QTableWidgetItem(f"{self.spec.page_size} {self.spec.orientation.capitalize()}"))
+            row += 1
+
+        views_to_show = self.spec.views
+        if not views_to_show and self.session and self.session.campaign.evaluation:
+            views_to_show = [v.name for v in self.session.campaign.evaluation.views if v.name != self.spec.name]
+
+        for v_name in views_to_show:
+            w = self.views_dict.get(v_name)
+            v_spec = getattr(w, "spec", None)
+            v_title = getattr(v_spec, "title", "") or v_name
+            v_kind = getattr(v_spec, "kind", "View")
+            self.table.insertRow(row)
+            self.table.setItem(row, 0, QTableWidgetItem(f"Page {row + 1}"))
+            self.table.setItem(row, 1, QTableWidgetItem(v_title))
+            self.table.setItem(row, 2, QTableWidgetItem(v_kind.capitalize()))
+            self.table.setItem(row, 3, QTableWidgetItem(f"{self.spec.page_size} {self.spec.orientation.capitalize()}"))
+            row += 1
+
+        self.table.resizeColumnsToContents()
+        self.status.setText(f"Report contains {row} page(s). Click 'Export PDF Report...' to generate PDF.")
+
+    def _on_export_clicked(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, f"Export Report ({self.spec.name})", f"{self.spec.name}.pdf", "PDF (*.pdf)"
+        )
+        if path:
+            try:
+                self.export(path)
+                QMessageBox.information(self, "Export Report", f"Report saved to:\n{path}")
+            except Exception as exc:
+                QMessageBox.critical(self, "Export Error", f"Cannot export report:\n{exc}")
+
+    def export(self, path: str | Path, options: ExportOptions | None = None) -> Path:
+        opts = options or ExportOptions(width_mm=297, height_mm=210, dpi=300)
+        views = []
+        if self.session and self.session.campaign.evaluation:
+            views = [v for v in self.session.campaign.evaluation.views if v.name != self.spec.name]
+            if self.spec.views:
+                views = [v for v in views if v.name in self.spec.views]
+
+        return export_report(
+            session=self.session,
+            views=views,
+            view_widgets=self.views_dict,
+            path=path,
+            options=opts,
+            cover=self.spec.cover,
+            title=self.spec.title,
+            subtitle=self.spec.subtitle,
+        )
+
+
 # ------------------------------------------------------------------ Results Window
 class ResultsWindow(QMainWindow):
     """Main results views window with tabs for Table, XY and Matrix views."""
@@ -943,7 +1627,14 @@ class ResultsWindow(QMainWindow):
     def refresh(self) -> None:
         self._updating = True
         try:
-            if self._session is not None:
+            if self._direct_df is not None:
+                df = self._direct_df
+                views = (
+                    self._session.campaign.evaluation.views
+                    if (self._session and self._session.campaign.evaluation and self._session.campaign.evaluation.views)
+                    else []
+                )
+            elif self._session is not None:
                 ev = self._session.campaign.evaluation
                 scenario = self.current_scenario_name()
                 try:
@@ -952,9 +1643,6 @@ class ResultsWindow(QMainWindow):
                     self.status_label.setText(f"Error computing results: {exc}")
                     return
                 views = ev.views if ev and ev.views else []
-            elif self._direct_df is not None:
-                df = self._direct_df
-                views = []
             else:
                 self.status_label.setText("No campaign session or data.")
                 return
@@ -993,6 +1681,20 @@ class ResultsWindow(QMainWindow):
                 mw.step_inspected.connect(self.step_inspected)
                 mw.set_data(df)
                 w = mw
+            elif spec.kind == "aligned":
+                aw = AlignedViewWidget(spec, session=self._session)
+                aw.step_inspected.connect(self.step_inspected)
+                aw.set_data(df)
+                w = aw
+            elif spec.kind == "bars":
+                bw = BarsViewWidget(spec)
+                bw.step_inspected.connect(self.step_inspected)
+                bw.set_data(df)
+                w = bw
+            elif spec.kind == "report":
+                rw = ReportViewWidget(spec, session=self._session, views_dict=self._view_widgets)
+                rw.set_data(df)
+                w = rw
             else:
                 continue
 
@@ -1021,6 +1723,22 @@ class ResultsWindow(QMainWindow):
         if isinstance(w, TableViewWidget):
             return w.export_csv(path)
 
+        if isinstance(w, ReportViewWidget):
+            if not path:
+                chosen, _ = QFileDialog.getSaveFileName(
+                    self, f"Export Report ({view_name})", f"{view_name}.pdf", "PDF (*.pdf)"
+                )
+                if not chosen:
+                    return None
+                path = chosen
+            try:
+                out = w.export(path)
+                QMessageBox.information(self, "Export Report", f"Saved to {out}")
+                return out
+            except Exception as exc:
+                QMessageBox.critical(self, "Export Error", f"Cannot export report:\n{exc}")
+                return None
+
         if not path:
             chosen, _ = QFileDialog.getSaveFileName(
                 self, f"Export View ({view_name})", f"{view_name}.png", "PNG (*.png);;SVG (*.svg);;PDF (*.pdf)"
@@ -1041,7 +1759,10 @@ class ResultsWindow(QMainWindow):
 
 
 __all__ = [
+    "AlignedViewWidget",
+    "BarsViewWidget",
     "MatrixViewWidget",
+    "ReportViewWidget",
     "ResultsWindow",
     "TableViewWidget",
     "XYViewWidget",

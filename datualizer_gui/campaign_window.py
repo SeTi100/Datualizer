@@ -27,7 +27,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from datualizer_core.campaign import DEFAULT_WINDOW, Campaign, CampaignSession, IntervalSet, master_datetime
+from datualizer_core.campaign import (
+    DEFAULT_WINDOW,
+    Campaign,
+    CampaignSession,
+    IntervalSet,
+    TableViewSpec,
+    master_datetime,
+)
 from datualizer_gui.components.campaign_canvas import CampaignPlotCanvas
 from datualizer_gui.components.intervals_panel import IntervalsPanel
 from datualizer_gui.components.source_dialog import load_source_interactive
@@ -164,6 +171,7 @@ class CampaignWindow(QMainWindow):
             ("&Save Campaign...", "Ctrl+Shift+S", self._on_save),
             ("&Reset Zoom", "Ctrl+R", self.canvas.reset_zoom),
             ("&Export Plot...", "Ctrl+E", self._on_export),
+            ("&Export Report...", "Ctrl+Shift+E", self._on_export_report),
         ]:
             action = QAction(text, self)
             action.setShortcut(QKeySequence(key))
@@ -594,6 +602,47 @@ class CampaignWindow(QMainWindow):
             self.export_plot(path, dialog.options())
         except Exception as exc:  # show, do not crash the window
             QMessageBox.critical(self, "Export Plot", str(exc))
+
+    def _on_export_report(self) -> None:
+        start = str(Path(get_str(EXPORT_DIR) or ".") / f"{self._session.campaign.name}_report.pdf")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Report", start, "PDF document (*.pdf)"
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".pdf"):
+            path += ".pdf"
+        try:
+            out = self.export_report(path)
+            QMessageBox.information(self, "Export Report", f"Report saved to:\n{out}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Report", str(exc))
+
+    def export_report(self, path: str | Path) -> Path:
+        """Export full campaign report as multi-page PDF."""
+        from datualizer_gui.results_window import ResultsWindow
+        from datualizer_gui.components.plot_export import export_report
+
+        if self._results_window is None:
+            self._results_window = ResultsWindow(session=self._session, parent=self)
+        self._results_window.refresh()
+
+        ev = self._session.campaign.evaluation
+        views = ev.views if ev and ev.views else []
+        if not views:
+            views = [TableViewSpec(name="results", title="Results Table")]
+
+        out = export_report(
+            session=self._session,
+            views=views,
+            view_widgets=self._results_window._view_widgets,
+            path=path,
+            options=ExportOptions(width_mm=297, height_mm=210, dpi=300),
+            cover=True,
+            title=self._session.campaign.name,
+        )
+        self.status_bar.showMessage(f"Exported report {Path(out).name}")
+        return Path(out)
 
     def _on_add(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(self, "Add Source(s) to Campaign", "", SOURCE_FILTER)

@@ -42,8 +42,8 @@ class StatsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     exclude_flags: list[str] = Field(
-        default_factory=lambda: ["spike", "dropout"],
-        description="Quality flags whose points are left out (counted in n_excluded).",
+        default_factory=lambda: ["spike", "dropout", "masked"],
+        description="Quality flags whose points are left out (counted in n_excluded); masked = spans the user masked.",
     )
     point_halfwidth_s: float = Field(
         0.0, ge=0.0,

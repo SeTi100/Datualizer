@@ -44,8 +44,12 @@ _MAD_TO_SIGMA = 1.4826
 # Default spike window: 2h + 1 typical sample steps with h = 10, i.e. ten samples on each side
 SPIKE_WINDOW_STEPS = 21
 
+# internal columns carry a prefix, so a channel named like one ("b", "p") is never overwritten
 _SEG = "__q_segment"
 _ROW = "__q_row"
+_BLOCK = "__q_block"
+_LEVEL = "__q_level"
+_PART = "__q_part"
 
 
 @dataclass(frozen=True)
@@ -224,11 +228,11 @@ def _stuck_rows(frame: pl.DataFrame, ch: str, time_col: str, s: QualitySettings)
         return pl.Series(_ROW, [], dtype=pl.UInt32)
     v = pl.col(ch)
     new_block = (v != v.shift(1)).fill_null(True) | (pl.col(_SEG) != pl.col(_SEG).shift(1)).fill_null(True)
-    blocks = frame.select(_ROW, time_col, ch, new_block.cum_sum().alias("b")).filter(v.is_not_null())
-    long = blocks.group_by("b").agg(
+    blocks = frame.select(_ROW, time_col, ch, new_block.cum_sum().alias(_BLOCK)).filter(v.is_not_null())
+    long = blocks.group_by(_BLOCK).agg(
         pl.len().alias("n"), (pl.col(time_col).max() - pl.col(time_col).min()).alias("dur")
     ).filter((pl.col("n") >= s.stuck_min_samples) & (pl.col("dur") >= s.stuck_min_duration_s))
-    return blocks.filter(pl.col("b").is_in(long["b"].implode()))[_ROW]
+    return blocks.filter(pl.col(_BLOCK).is_in(long[_BLOCK].implode()))[_ROW]
 
 
 def _jump_rows(
@@ -244,15 +248,15 @@ def _jump_rows(
     # Compare each value with the previous value of the same run and segment; nulls are skipped
     changed = pl.any_horizontal((pl.col(c) != pl.col(c).shift(1)).fill_null(True) for c in part)
     valid = frame.filter(pl.col(ch).is_not_null()).with_columns(
-        pl.col(ch).shift(1).over(part).alias("lvl"),
-        changed.cum_sum().alias("p"),
+        pl.col(ch).shift(1).over(part).alias(_LEVEL),
+        changed.cum_sum().alias(_PART),
     )
-    steps = valid.filter((pl.col(ch) - pl.col("lvl")).abs() > threshold)
+    steps = valid.filter((pl.col(ch) - pl.col(_LEVEL)).abs() > threshold)
     rows = steps[_ROW].to_list()
     values = steps[ch].to_list()
-    levels = steps["lvl"].to_list()
+    levels = steps[_LEVEL].to_list()
     times = steps[time_col].to_list()
-    parts = steps["p"].to_list()
+    parts = steps[_PART].to_list()
     valid_rows = valid[_ROW].to_list()
     position = {r: i for i, r in enumerate(valid_rows)}
 

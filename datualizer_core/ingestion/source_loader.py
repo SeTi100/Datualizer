@@ -1,4 +1,4 @@
-"""`load_source`: load any supported file (text, Excel, SQLite) with a profile into a dataset."""
+"""`load_source`: load any supported file (text, Excel, SQLite, XML settings) with a profile into a dataset."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from datualizer_core.ingestion.profiles import (
     get_profile,
     reader_for,
 )
-from datualizer_core.ingestion.readers import RawTable, read_delimited, read_excel, read_sqlite
+from datualizer_core.ingestion.readers import RawTable, read_delimited, read_excel, read_sqlite, read_xml_meta
 
 
 def read_raw(path: Path, profile: SourceProfile | None) -> tuple[RawTable, ReaderKind]:
@@ -29,6 +29,8 @@ def read_raw(path: Path, profile: SourceProfile | None) -> tuple[RawTable, Reade
         return read_excel(path, profile.excel if profile else None), kind
     if kind is ReaderKind.SQLITE:
         return read_sqlite(path, profile.sqlite if profile else None), kind
+    if kind is ReaderKind.XML:
+        return read_xml_meta(path, profile.xml if profile else None), kind
     return read_delimited(path), kind
 
 
@@ -74,12 +76,13 @@ def load_source(
     profile: SourceProfile | str | None = None,
     config: IngestionConfig | None = None,
 ) -> DualModeDataset:
-    """Load a text, Excel or SQLite file into a DualModeDataset.
+    """Load a text, Excel, SQLite or XML settings file into a DualModeDataset.
 
     `profile`: a SourceProfile, the name of a shipped profile, or None to detect one (falls back
     to the reader the file suggests and the default config). `config` replaces the profile's
     IngestionConfig, e.g. a dataset's `ingestion_spec` for an exact replay.
     `ds.source_meta` tells which profile and reader were used and what the reader found.
+    An XML settings file gives a dataset without rows; its content is in `source_meta["xml"]`.
     """
     path = Path(source)
     if isinstance(profile, str):
@@ -102,6 +105,10 @@ def load_source(
         schema=SOURCES_SCHEMA,
     )
     meta = {"profile": profile.name if profile else None, "reader": kind.value, **raw.meta}
+    if profile is not None and profile.calibration is not None:
+        meta["calibration_fields"] = profile.calibration.model_dump()
+    if kind is ReaderKind.XML:  # settings file: metadata only, no table, no time
+        return DualModeDataset(pl.DataFrame(), sources=sources, source_meta=meta)
     ds = CSVLoader(cfg).load_frame(raw.df, raw.decimal_separator, sources=sources, source_meta=meta)
 
     rule = profile.origin_rule if profile is not None else OriginRule.NONE

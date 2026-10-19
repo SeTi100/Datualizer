@@ -1,0 +1,31 @@
+{
+  "name": "testa_ifid_settings_xml",
+  "description": "Testa iFID Mobile, Geräteeinstellungen (Settings*.xml): nur die Kalibrierblöcke calib_data (wird für den Vorschlag benutzt) und calib_init sowie die Responsefaktor-Auswahl rf-select. Alles andere in der Datei (Passwort-Hash, PIN, Systemkennung) wird nicht gelesen. Signal = sens · ppm + zero (pA); Zeiten auf der Geräteuhr.",
+  "reader": "xml",
+  "file_patterns": [
+    "*settings*.xml"
+  ],
+  "header_hints": [
+    "calib_data"
+  ],
+  "xml": {
+    "blocks": [
+      "calib_data",
+      "calib_init",
+      "rf-select"
+    ],
+    "datetime_formats": [
+      "%d.%m.%Y %H:%M:%S"
+    ]
+  },
+  "calibration": {
+    "block": "calib_data",
+    "sens": "sens",
+    "zero": "zero",
+    "time": "time_last_cal",
+    "signal_unit": "pA",
+    "concentration_unit": "ppm",
+    "result_unit": "mgC",
+    "signal_channel": "signal"
+  }
+}

@@ -476,15 +476,59 @@ ev = Evaluation(
             x_label="Dosierstufe V_MFC [Nl/min]",
             y_label="Bett-Temperatur (Bereich)",
         ),
+        # 6. Ausgerichtete Zeitreihen / Durchbruchskurven (aligned)
+        AlignedViewSpec(
+            name="durchbruch",
+            title="Durchbruch",
+            subtitle="Umsatz X(t) seit Beginn der Beladung",
+            expr="1 - (fid_mgC - B) * f / c_in",
+            t0="sequence_start",        # Zeitursprung: Beginn der Beladungssequenz oder Schrittstart
+            facet_by="T_klasse",        # Kleinvielfache je Temperaturklasse
+            color_by="V_MFC",           # Farbe nach Dosierstufe (blaue Ordinal-Farbskala)
+            marker_by="tag",            # Symbol nach Messtag
+            filled="stationaer",        # Endpunkt gefüllt = stationär, offen = nicht stationär
+            rolling_s=10.0,             # Optionales gleitendes Mitteln (10 s Fenster)
+            ref_lines=[RefLine(axis="y", value=1.0)],
+        ),
+        # 7. Unsicherheitsbudget (bars)
+        BarsViewSpec(
+            name="unsicherheit",
+            title="Unsicherheit des Umsatzes",
+            quantity="X",
+            sort_by=["T_bett"],         # Sortierung der Schritte entlang der x-Achse
+            filter="stationaer",        # Nur stationäre Stufen
+            # Zeigt oben u(X) als eigene Balkenreihe, darunter gestapelte Varianzen
+        ),
+        # 8. Mehrseitiger Kampagnenbericht (report)
+        ReportViewSpec(
+            name="katalyse_bericht",
+            title="Katalytische Oxidation am Monolith",
+            views=["durchbruch", "unsicherheit", "umsatz_matrix"],
+            cover=True,                 # Titelseite mit Kennwerten (T50, Ea) und Messtagen
+            orientation="landscape",    # A4 quer
+        ),
     ]
 )
 ```
 
-### Ergonomie und Interaktion
+### Schrittwerte auf Zeitreihen ausstrahlen (`broadcast_steps`)
+Für Berechnungen über die gesamte Master-Zeitreihe (z. B. $X(t) = 1 - (\text{FID}(t) - B) \cdot f / c_{\text{in}}$) überträgt `broadcast_steps` schrittweise konstante Werte (wie Blindwerte $B$ oder Konzentrationen $c_{\text{in}}$) per `join_asof` auf die Abtastpunkte der Quelldaten. Außerhalb der Schritte bleiben die Werte leer (`null`).
+```python
+from datualizer_core.campaign import broadcast_steps
+
+# Direkte Ausstrahlung auf ein Ziel-DataFrame oder Array:
+df_mit_stufen = broadcast_steps(session.results(), columns=["B", "c_in"], target=session.datasets["fid"].df)
+
+# Oder bequem über die Session:
+df_fid = session.broadcast_steps(["B", "c_in"], source_id="fid")
+```
+
+### Ergonomie, Interaktion und Berichterstellung
 - **Öffnen**: Über das Kampagnen-Menü *Tools → Results Views...* oder die Schaltfläche *Views...* im Results-Dock.
-- **Klick-to-Inspect**: Ein Klick auf einen Messpunkt im XY-Plot, eine Matrix-Zelle oder ein Doppelklick auf eine Tabellenzeile springt sofort im Fenster-Inspektor auf den exakten Messschritt (`step_inspected`).
+- **Klick-to-Inspect**: Ein Klick auf einen Messpunkt im XY-Plot, einen Stufen-Endpunkt in der Durchbruchskurve, einen Unsicherheitsbalken, eine Matrix-Zelle oder ein Doppelklick auf eine Tabellenzeile springt sofort im Fenster-Inspektor auf den exakten Messschritt (`step_inspected`).
 - **Szenario-Umschalter**: Wechselt das Szenario (z. B. alternative Kalibrierungen); alle Diagramme und Tabellen aktualisieren sich live.
 - **Vektor- und Bildexport**: Jede Ansicht lässt sich über die Schaltfläche *Export Current View...* als PNG (mit definierter Auflösung/DPI), SVG oder PDF (in millimetergenauen Druckmaßen) exportieren.
+- **Mehrseitiger PDF-Bericht**: Über das Menü *Campaign → Export Report...* (oder den Tab der `report`-Ansicht) wird ein vollständiger A4-Querformat-PDF-Bericht erzeugt: inklusive professioneller Titelseite mit Kampagnenmetadaten, Messtagen und Kennwert-Kacheln (T50, Ea) aus den Analysen, gefolgt von allen ausgewählten Diagrammen mit Kopfzeilen, Fußnoten und Seitennummerierung.
 
 ## Absolute Zeit
 

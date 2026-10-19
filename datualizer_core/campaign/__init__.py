@@ -9,6 +9,7 @@ from datualizer_core.campaign.derived import (
     MaskSpan,
     Piece,
     apply_derived,
+    broadcast_steps,
     calibration_channel,
 )
 from datualizer_core.campaign.coverage import (
@@ -35,8 +36,11 @@ from datualizer_core.campaign.evaluation import (
     classify_steps,
 )
 from datualizer_core.campaign.views import (
+    AlignedViewSpec,
+    BarsViewSpec,
     MatrixViewSpec,
     RefLine,
+    ReportViewSpec,
     SecondaryAxis,
     TableViewSpec,
     ViewSpec,
@@ -72,6 +76,7 @@ __all__ = [
     "MaskSpan",
     "Piece",
     "apply_derived",
+    "broadcast_steps",
     "calibration_channel",
     "Campaign",
     "CampaignSession",
@@ -88,11 +93,14 @@ __all__ = [
     "DEFAULT_WINDOW",
     "Evaluation",
     "MEASURE_STATS",
+    "AlignedViewSpec",
+    "BarsViewSpec",
     "MatrixViewSpec",
     "Measure",
     "NamedWindow",
     "Rating",
     "RefLine",
+    "ReportViewSpec",
     "Scenario",
     "SecondaryAxis",
     "StepClass",

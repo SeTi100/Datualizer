@@ -209,8 +209,156 @@ class MatrixViewSpec(BaseModel):
         return v
 
 
+class AlignedViewSpec(BaseModel):
+    """Aligned time-series view specification (e.g. breakthrough curve X(t) over relative time)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["aligned"] = "aligned"
+    name: str = Field(min_length=1)
+    title: str = ""
+    subtitle: str | None = None
+    expr: str = Field(
+        min_length=1,
+        description="Formula over time series channel and step constants, e.g. '1 - (fid_mgC - B) * f / c_in'",
+    )
+    t0: Literal["step_start", "sequence_start"] = Field(
+        default="sequence_start",
+        description="Time origin: start of step, or start of cumulative loading sequence",
+    )
+    sequence_col: str | None = Field(
+        default=None,
+        description="Column identifying cumulative sequence (default: auto-detected from 'sequenz', 'sequence', 'beladung')",
+    )
+    rolling_s: float | None = Field(
+        default=None,
+        description="Optional moving average window in seconds (e.g. 10.0 s)",
+    )
+    facet_by: str | None = Field(
+        default=None,
+        description="Column to facet small multiples by, e.g. 'T_klasse'",
+    )
+    facet_cols: int = Field(default=3, ge=1, le=10)
+    color_by: str | None = Field(
+        default=None,
+        description="Column to color curves by, e.g. 'V_MFC' (dosing level)",
+    )
+    color_mode: Literal["auto", "ordinal", "categorical"] = "auto"
+    marker_by: str | None = Field(
+        default=None,
+        description="Column mapping values to step endpoint marker symbols, e.g. 'tag'",
+    )
+    filled: str | None = Field(
+        default=None,
+        description="Boolean condition for filled vs open endpoint marker, e.g. 'stationaer' or 'stat_ok'",
+    )
+    filter: str | None = Field(
+        default=None,
+        description="Filter condition on steps to include",
+    )
+    x_label: str = Field(default="Minuten seit Beginn der Beladung")
+    y_label: str = Field(default="Umsatz X(t)")
+    x_lim: tuple[float, float] | None = None
+    y_lim: tuple[float, float] | None = None
+    ref_lines: list[RefLine] = Field(default_factory=list)
+    footer: str | None = Field(
+        default="Fällt X während der Dosierung, speichert der Katalysator zuerst Ethanol und bricht dann durch; "
+        "erst das Plateau ist der stationäre Umsatz."
+    )
+
+    @field_validator("name")
+    @classmethod
+    def _name_valid(cls, v: str) -> str:
+        return _name(v, "View name")
+
+    @field_validator("filter", "filled")
+    @classmethod
+    def _cond_valid(cls, v: str | None) -> str | None:
+        if v is not None and v.strip():
+            compile_expr(v)
+        return v
+
+    @field_validator("expr")
+    @classmethod
+    def _expr_valid(cls, v: str) -> str:
+        if v is not None and v.strip():
+            compile_expr(v)
+        return v
+
+
+class BarsViewSpec(BaseModel):
+    """Bar plot view specification for uncertainty budgets (total uncertainty bar above stacked variance shares)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["bars"] = "bars"
+    name: str = Field(min_length=1)
+    title: str = ""
+    subtitle: str | None = None
+    quantity: str = Field(default="X", description="Target quantity whose uncertainty budget is displayed")
+    u_total: str | None = Field(
+        default=None,
+        description="Column for total standard uncertainty, e.g. 'u_X' (default: 'u_' + quantity)",
+    )
+    parts: list[Any] | None = Field(
+        default=None,
+        description="Uncertainty budget component columns, or (col, label) pairs. If None, auto-detected.",
+    )
+    sort_by: list[str] = Field(
+        default_factory=lambda: ["T_bett"],
+        description="Columns to sort steps by along the horizontal axis",
+    )
+    filter: str | None = Field(
+        default=None,
+        description="Filter condition on steps to include, e.g. 'stationaer' or 'stat_ok'",
+    )
+    x_label: str = Field(default="Messschritte")
+    y_label: str = Field(default="Anteil an u²(X)")
+    footer: str | None = Field(
+        default="Systematische Anteile (syst.) wirken auf alle Stufen eines Tages gleich."
+    )
+
+    @field_validator("name")
+    @classmethod
+    def _name_valid(cls, v: str) -> str:
+        return _name(v, "View name")
+
+    @field_validator("filter")
+    @classmethod
+    def _filter_valid(cls, v: str | None) -> str | None:
+        if v is not None and v.strip():
+            compile_expr(v)
+        return v
+
+
+class ReportViewSpec(BaseModel):
+    """Multi-page report view specification combining views and a title/summary page."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["report"] = "report"
+    name: str = Field(min_length=1)
+    title: str = ""
+    subtitle: str | None = None
+    views: list[str] = Field(
+        default_factory=list,
+        description="Ordered list of view names to include in the report; empty = all non-report views",
+    )
+    cover: bool = Field(
+        default=True,
+        description="Include cover / summary page with campaign metadata, dates, and KPI tiles from analyses",
+    )
+    orientation: Literal["landscape", "portrait"] = "landscape"
+    page_size: Literal["A4", "Letter"] = "A4"
+
+    @field_validator("name")
+    @classmethod
+    def _name_valid(cls, v: str) -> str:
+        return _name(v, "View name")
+
+
 ViewSpec = Annotated[
-    Union[TableViewSpec, XYViewSpec, MatrixViewSpec],
+    Union[TableViewSpec, XYViewSpec, MatrixViewSpec, AlignedViewSpec, BarsViewSpec, ReportViewSpec],
     Field(discriminator="kind"),
 ]
 
@@ -278,8 +426,11 @@ def eval_table_expr(table: Any, expr_str: str | None) -> Any:
 
 
 __all__ = [
+    "AlignedViewSpec",
+    "BarsViewSpec",
     "MatrixViewSpec",
     "RefLine",
+    "ReportViewSpec",
     "SecondaryAxis",
     "TableViewSpec",
     "ViewSpec",

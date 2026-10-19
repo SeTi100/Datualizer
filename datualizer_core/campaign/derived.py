@@ -277,3 +277,142 @@ def calibration_channel(
         name=name, expr=cal.formula(channel), unit=cal.fields.result_unit if unit is None else unit,
         note=cal.note(source),
     )
+
+
+# ------------------------------------------------------------------ broadcast steps
+def _to_epoch_series(s: pl.Series) -> pl.Series:
+    """Helper to convert Datetime, Date, Int or Float series to epoch seconds."""
+    if s.dtype == pl.Datetime:
+        return (s.cast(pl.Datetime("us", "UTC")).cast(pl.Int64) / 1e6).alias("_epoch")
+    if s.dtype == pl.Date:
+        return (s.cast(pl.Datetime("us", "UTC")).cast(pl.Int64) / 1e6).alias("_epoch")
+    return s.cast(pl.Float64).alias("_epoch")
+
+
+def broadcast_steps(
+    results: pl.DataFrame,
+    columns: Sequence[str],
+    target: pl.DataFrame | np.ndarray | Sequence[float] | None = None,
+    time_col: str = "time_master",
+    step_start_col: str = "step_start",
+    step_end_col: str = "step_end",
+    zone: str = "UTC",
+) -> pl.DataFrame:
+    """Broadcast step constants into piecewise-constant traces on master time.
+
+    Matches each master timestamp to the preceding step start using `join_asof` (backward strategy).
+    Timestamps outside step bounds `[step_start, step_end]` are left empty (null).
+
+    If `target` is None, constructs minimal piecewise-constant trace points for the steps:
+    - At `step_start`: step values
+    - At `step_end`: step values
+    - If there is a gap before the next step: gap points with null values to avoid connecting lines across pauses.
+
+    If `target` is an array or DataFrame, broadcasts `columns` onto `target`.
+    """
+    if step_start_col not in results.columns:
+        raise ValueError(f"Step start column {step_start_col!r} not found in results table.")
+    if step_end_col not in results.columns:
+        raise ValueError(f"Step end column {step_end_col!r} not found in results table.")
+    missing_cols = [c for c in columns if c not in results.columns]
+    if missing_cols:
+        raise ValueError(f"Columns {missing_cols} not found in results table.")
+
+    if len(results) == 0:
+        if target is None:
+            schema = {time_col: pl.Float64, **{c: results.schema.get(c, pl.Float64) for c in columns}}
+            return pl.DataFrame([], schema=schema)
+        if isinstance(target, pl.DataFrame):
+            return target.with_columns([pl.lit(None, dtype=results.schema.get(c, pl.Float64)).alias(c) for c in columns])
+        t_arr = np.asarray(target, dtype=float)
+        schema = {time_col: pl.Float64, **{c: results.schema.get(c, pl.Float64) for c in columns}}
+        return pl.DataFrame({time_col: t_arr, **{c: [None] * len(t_arr) for c in columns}}, schema=schema)
+
+    r_start_epoch = _to_epoch_series(results[step_start_col])
+    r_end_epoch = _to_epoch_series(results[step_end_col])
+    r_work = results.select([*columns]).with_columns([
+        r_start_epoch.alias("_start_epoch"),
+        r_end_epoch.alias("_end_epoch"),
+    ]).sort("_start_epoch")
+
+    if target is None:
+        t_list: list[float] = []
+        val_lists: dict[str, list[Any]] = {c: [] for c in columns}
+
+        starts = r_work["_start_epoch"].to_list()
+        ends = r_work["_end_epoch"].to_list()
+        row_vals = {c: r_work[c].to_list() for c in columns}
+
+        for i in range(len(starts)):
+            st, en = starts[i], ends[i]
+            if st is None or en is None or np.isnan(st) or np.isnan(en) or en < st:
+                continue
+            t_list.append(st)
+            for c in columns:
+                val_lists[c].append(row_vals[c][i])
+            t_list.append(en)
+            for c in columns:
+                val_lists[c].append(row_vals[c][i])
+            if i + 1 < len(starts):
+                next_st = starts[i + 1]
+                if next_st is not None and not np.isnan(next_st) and next_st > en:
+                    eps = min(1e-3, (next_st - en) / 4.0)
+                    t_list.append(en + eps)
+                    for c in columns:
+                        val_lists[c].append(None)
+                    t_list.append(next_st - eps)
+                    for c in columns:
+                        val_lists[c].append(None)
+
+        out_dict: dict[str, Any] = {time_col: t_list}
+        out_dict.update(val_lists)
+        out_df = pl.DataFrame(out_dict)
+        if results[step_start_col].dtype == pl.Datetime:
+            dt_type = results[step_start_col].dtype
+            out_df = out_df.with_columns(
+                (pl.col(time_col) * 1e6).round().cast(pl.Int64).cast(pl.Datetime("us", "UTC")).dt.convert_time_zone(
+                    dt_type.time_zone or zone
+                ).alias(time_col)
+            )
+        return out_df
+
+    if not isinstance(target, pl.DataFrame):
+        target_series = pl.Series(time_col, target)
+        target_df = pl.DataFrame([target_series])
+    else:
+        target_df = target
+
+    actual_time_col = time_col if time_col in target_df.columns else target_df.columns[0]
+    t_epoch = _to_epoch_series(target_df[actual_time_col])
+
+    target_work = target_df.with_columns([
+        t_epoch.alias("_t_epoch"),
+        pl.int_range(0, len(target_df), dtype=pl.Int64).alias("_orig_idx"),
+    ])
+
+    joined = target_work.sort("_t_epoch").join_asof(
+        r_work.select(["_start_epoch", "_end_epoch", *columns]),
+        left_on="_t_epoch",
+        right_on="_start_epoch",
+        strategy="backward",
+    )
+
+    in_step = (
+        pl.col("_start_epoch").is_not_null()
+        & pl.col("_end_epoch").is_not_null()
+        & (pl.col("_t_epoch") >= pl.col("_start_epoch"))
+        & (pl.col("_t_epoch") <= pl.col("_end_epoch"))
+    )
+
+    masked_cols = [
+        pl.when(in_step).then(pl.col(c)).otherwise(None).alias(c)
+        for c in columns
+    ]
+
+    out = (
+        joined.with_columns(masked_cols)
+        .sort("_orig_idx")
+        .drop(["_t_epoch", "_orig_idx", "_start_epoch", "_end_epoch"])
+    )
+    return out
+

@@ -23,7 +23,13 @@ from datualizer_core.calc.expr import compile_expr
 from datualizer_core.calc.uncertain import Constant, UArray
 from datualizer_core.campaign.clock import ClockAnchor, ClockCells, ClockModel, epoch_seconds, to_epoch_s
 from datualizer_core.campaign.coverage import SourceCoverage, coverage_intervals, value_rows
-from datualizer_core.campaign.derived import DerivedChannel, Mask, MaskSpan, apply_derived
+from datualizer_core.campaign.derived import (
+    DerivedChannel,
+    Mask,
+    MaskSpan,
+    apply_derived,
+    broadcast_steps,
+)
 from datualizer_core.campaign.display import ChannelDisplay, YScale
 from datualizer_core.campaign.evaluation import (
     DEFAULT_WINDOW,
@@ -1077,6 +1083,27 @@ class CampaignSession:
         if new_cols:
             df = df.with_columns(new_cols)
         return df
+
+    def broadcast_steps(
+        self,
+        columns: Sequence[str],
+        source_id: str | None = None,
+        scenario: str | Scenario | dict[str, Constant] | None = None,
+    ) -> pl.DataFrame:
+        """Broadcast step constants from evaluation results into piecewise-constant traces on master time.
+
+        If `source_id` is specified, broadcasts `columns` onto the source's dataset rows.
+        If `source_id` is None, returns minimal piecewise-constant traces covering all steps.
+        """
+        results = self.results(scenario=scenario)
+        if source_id is not None:
+            ds = self.datasets[source_id]
+            master_t = self.master_time(source_id)
+            if master_t is None:
+                raise ValueError(f"Source {source_id!r} has no master time for step broadcasting.")
+            target_df = ds.df.with_columns(pl.Series("time_master", master_t, dtype=pl.Float64))
+            return broadcast_steps(results, columns, target=target_df, time_col="time_master")
+        return broadcast_steps(results, columns, time_col="time_master", zone=self.campaign.timezone)
 
     def analyses(
         self,

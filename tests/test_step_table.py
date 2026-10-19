@@ -58,8 +58,10 @@ def loaded() -> CampaignSession:
 @pytest.fixture()
 def session(loaded: CampaignSession) -> CampaignSession:
     """A fresh campaign on the loaded data (loading the journal takes a while)."""
-    s = CampaignSession(Campaign.model_validate(loaded.campaign.model_dump()))
-    s.datasets = dict(loaded.datasets)
+    s = CampaignSession(Campaign())
+    s.campaign = Campaign.model_validate(loaded.campaign.model_dump())
+    s._raw = dict(loaded._raw)
+    s._datasets = dict(loaded._datasets)
     return s
 
 

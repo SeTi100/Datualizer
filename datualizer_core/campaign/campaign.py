@@ -917,9 +917,11 @@ class CampaignSession:
         if rows:
             df = pl.DataFrame(rows, infer_schema_length=None)
             df = df.with_columns(pl.col(c).cast(t) for c, t in types.items())
-        else:
-            df = pl.DataFrame(schema={c: types.get(c, pl.Null) for c in [*STEP_COLUMNS, *measure_cols]})
-        return _to_datetimes(df, ["step_start", "step_end"], self.campaign.timezone)
+        df = _to_datetimes(df, ["step_start", "step_end"], self.campaign.timezone)
+        if ev.relations:
+            from datualizer_core.calc.relations import apply_relations
+            df = apply_relations(df, ev.relations)
+        return df
 
     def _stats_input(self, source_id: str, channel: str, cfg: StatsConfig) -> "_StatsInput":
         """What `window_stats` needs of one channel, or the reason why it has nothing (`data` is text)."""

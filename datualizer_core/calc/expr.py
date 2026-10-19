@@ -217,7 +217,14 @@ def suggest_name(name: str, known: Iterable[str], cutoff: float = 0.6) -> str | 
 
 
 class _Compiler:
-    def __init__(self, text: str, source: str, lead: int, names: frozenset[str] | None) -> None:
+    def __init__(
+        self,
+        text: str,
+        source: str,
+        lead: int,
+        names: frozenset[str] | None,
+        extra_functions: Mapping[str, tuple[int, int | None, str]] | None = None,
+    ) -> None:
         self.text = text
         self.lead = lead  # leading blanks cut off before parsing (they shift line 1 only)
         self.lines = source.split("\n")
@@ -225,6 +232,9 @@ class _Compiler:
         for line in self.lines[:-1]:
             self.offsets.append(self.offsets[-1] + len(line) + 1)
         self.known = names
+        self.functions = dict(FUNCTIONS)
+        if extra_functions:
+            self.functions.update(extra_functions)
         self.seen: list[str] = []
 
     def pos(self, node: ast.AST) -> int:
@@ -308,7 +318,7 @@ class _Compiler:
             raise self.fail("attribute access is not allowed; a dotted name must consist of names only", node)
         parts.append(cur.id)
         name = ".".join(reversed(parts))
-        if name in FUNCTIONS:
+        if name in self.functions:
             raise self.fail(f"function {name!r} needs arguments, e.g. {name}(x)", node)
         if self.known is not None and name not in self.known:
             hint = suggest_name(name, self.known)
@@ -324,12 +334,12 @@ class _Compiler:
             raise self.fail("method calls ('a.b(...)') are not allowed", node)
         if not isinstance(func, ast.Name):
             raise self.fail("only the listed functions can be called", node)
-        allowed = ", ".join(FUNCTIONS)
-        if func.id not in FUNCTIONS:
+        allowed = ", ".join(self.functions)
+        if func.id not in self.functions:
             raise self.fail(f"unknown function {func.id!r}; allowed are {allowed}", node)
         if node.keywords:
             raise self.fail(f"{func.id}() takes no keyword arguments", node)
-        lo, hi, _ = FUNCTIONS[func.id]
+        lo, hi, _ = self.functions[func.id]
         n = len(node.args)
         if n < lo or (hi is not None and n > hi):
             want = f"{lo}" if lo == hi else (f"at least {lo}" if hi is None else f"{lo} to {hi}")
@@ -383,11 +393,15 @@ class _Types:
                 if ko == "?":
                     self.inferred.add(other.name)  # type: ignore[attr-defined]  # '?' is always a name
             return "num"
+        if isinstance(node, _Call) and node.func == "changed":
+            return "num"
         for child in _children(node):
             self.need_number(child)
         return "num"
 
     def need_number(self, node: _Node) -> None:
+        if isinstance(node, _Call) and node.func == "changed":
+            return
         if self.kind(node) == "text":
             raise self.fail(_TEXT_USE, node)
 
@@ -402,11 +416,17 @@ def _check_types(source: str, node: _Node, text: frozenset[str] | None) -> froze
     return text
 
 
-def compile_expr(text: str, names: Iterable[str] | None = None, text_names: Iterable[str] | None = None) -> "Expr":
+def compile_expr(
+    text: str,
+    names: Iterable[str] | None = None,
+    text_names: Iterable[str] | None = None,
+    extra_functions: Mapping[str, tuple[int, int | None, str]] | None = None,
+) -> "Expr":
     """Parse and check a formula.
 
     `names`: the accepted names (None = any name). `text_names`: the names that hold text, all
     others are numbers (None = unknown: a name compared directly with a text literal is text).
+    `extra_functions`: additional allowed functions mapping name to (min_args, max_args, doc).
     """
     if not isinstance(text, str):
         raise ExprError(f"a formula must be text, got {type(text).__name__}")
@@ -430,7 +450,7 @@ def compile_expr(text: str, names: Iterable[str] | None = None, text_names: Iter
         raise ExprError(f"syntax error: {e.msg}", text, pos, known_list) from None
     except (RecursionError, MemoryError):
         raise ExprError("the formula is nested too deeply", text, known=known_list) from None
-    compiler = _Compiler(text, source, lead, known)
+    compiler = _Compiler(text, source, lead, known, extra_functions=extra_functions)
     given = None if text_names is None else frozenset(text_names)
     try:
         node = compiler.convert(tree.body)
@@ -474,6 +494,9 @@ class Expr:
             raise ExprError(f"no value for name {missing[0]!r}", self.text, node.pos if node else None, env.keys())
         text = self._text_for(n for n in self.names if is_text(env[n]))
         values = {n: (_text_values(env[n]) if n in text else UArray.of(env[n])) for n in self.names}
+        for k, v in env.items():
+            if k.startswith("__changed__"):
+                values[k] = UArray.of(v)
         try:
             return _NumpyEval(values).run(self.node)
         except ValueError as e:
@@ -626,6 +649,18 @@ class _NumpyEval:
         if isinstance(node, _If):
             return U.where(self.run(node.cond), self.run(node.then), self.run(node.other))
         if isinstance(node, _Call):
+            if node.func == "changed":
+                var_name = node.args[0].name if isinstance(node.args[0], _Var) else None
+                if var_name and f"__changed__{var_name}" in self.values:
+                    return self.values[f"__changed__{var_name}"]
+                arr = self.run(node.args[0])
+                val = arr.value if isinstance(arr, UArray) else (arr.values if isinstance(arr, _Text) else np.asarray(arr))
+                if len(val) == 0:
+                    return UArray(np.zeros(0, dtype=bool))
+                shifted = np.roll(val, 1)
+                res = val != shifted
+                res[0] = True
+                return UArray(res.astype(float))
             args = [self.run(a) for a in node.args]
             if node.func == "round" and len(args) == 2:
                 return U.round_(args[0], int(node.args[1].value))  # type: ignore[attr-defined]
@@ -731,6 +766,12 @@ class _PolarsBuild:
         if isinstance(node, _Call):
             args = [self.run(a) for a in node.args]
             f = node.func
+            if f == "changed":
+                var_name = node.args[0].name if isinstance(node.args[0], _Var) else None
+                col_name = self.columns.get(var_name, var_name) if var_name else None
+                if col_name:
+                    return pl.col(col_name).ne(pl.col(col_name).shift(1)).fill_null(True)
+                return args[0].ne(args[0].shift(1)).fill_null(True)
             if f == "where":
                 return _pl_where(*args)
             if f == "min":

@@ -153,6 +153,12 @@ from datualizer_gui.components.plot_export import ExportOptions
 window.export_plot("bericht_12_10.pdf", ExportOptions(width_mm=170, font_pt=8, line_width_pt=0.75))
 ```
 
+**Rechenkanäle und Masken**: Quellen einer Kampagne können berechnete Kanäle und zeitliche Masken tragen (Menü im Quellen-Dock oder Rechtsklick im Plot):
+- **Rechenkanäle** (`DerivedChannel` in `CampaignSource.derived`): entstehen mit dem Formelkern aus Kanälen derselben Quelle (z. B. Skalierung oder Differenz). Sie können zeitabhängig gestückelt sein (`pieces`, z. B. bei Neukalibrierung ab einer bestimmten Uhrzeit). Rechenkanäle verhalten sich wie normale Messkanäle für Plot, Statistik und Qualitäts-Flags; Rohkanäle bleiben unverändert.
+- **Masken** (`Mask` in `CampaignSource.masks`): markieren Zeitspannen einer Quelle (für alle oder ausgewählte Kanäle), die in der Auswertung ignoriert werden sollen. Die Messwerte erhalten das Qualitätsflag `masked` (in `StatsConfig.exclude_flags` standardmässig enthalten) und werden im Kampagnenplot schraffiert dargestellt.
+- **Gerätekalibrierung aus XML**: Der Testa-iFID-Reader liest `Settings*.xml` (Kalibrierblock `sens`, `zero`) und schlägt über `suggest_linear_calibration` direkt passende Rechenkanäle vor.
+- **JSON-Spalten in SQLite**: `SqliteOptions.json_columns` zerlegt strukturierte Textspalten (wie `parameters_json`) automatisch in einzelne Spalten (`V_MFC`, `Temperatur`, etc.).
+
 ## Formeln mit Unsicherheit
 
 `datualizer_core/calc/` ist der Formelkern für Rechengrössen (Etappe 2b, Schritt 8). Er kennt weder Kampagne noch GUI; die Anbindung an Schritt-Tabelle und Rechenkanäle folgt.

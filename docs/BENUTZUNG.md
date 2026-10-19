@@ -267,6 +267,62 @@ relations = [
 table_with_relations = apply_relations(step_table, relations)
 ```
 
+## Auswertung: Rechengrössen, Kriterien, Szenarien
+
+In einer Messkampagne fasst `Evaluation` (in `campaign.json`) alle Schritte zusammen, die aus der Roh-Schritt-Tabelle Kennwerte mit Unsicherheiten, Kriterien und Bewertungen erzeugen (Etappe 2b, Schritt 8, PR 5):
+
+```
+Schritt-Tabelle → Bezüge (Relations) → Rechengrössen (Calculations) → Kriterien (Criteria) → Bewertungsregeln (Ratings)
+```
+
+- **Konstanten (`constants`)**: Physikalische Eingangsgrössen (`Constant(name, value, u, kind, scope, unit, note)`). Unsicherheiten (`kind="zufall"` oder `"syst"`) werden über Dual-Zahlen linear fortgepflanzt. `scope` (z. B. `"tag"`) definiert den Gültigkeitsbereich für spätere Zeilenkorrelationen (PR 6).
+- **Rechengrössen (`calculations`)**: `Calculation(name, expr, unit, note)` wertet mathematische Formeln in Listenreihenfolge aus; jede Rechengrösse darf alle Spalten der Schritt-Tabelle, Bezüge, Konstanten sowie alle zuvor berechneten Grössen nutzen.
+  - Erzeugt Spalten `<name>`, Standardunsicherheit `u_<name>`, zufälligen Anteil `u_<name>_zufall` und systematischen Anteil `u_<name>_syst`.
+  - Erzeugt für jeden unsicheren Eingang `inp` eine Budget-Spalte `b_<name>__<inp>` mit dem vorzeichenbehafteten Beitrag $c_i = \frac{\partial \text{name}}{\partial \text{inp}} \cdot u_i$.
+- **Kriterien (`criteria`)**: `Criterion(name, expr, text)` liefert pro Schritt eine boolesche Spalte. `text` beschreibt die Begründung, falls das Kriterium verletzt ist (`expr` ist falsch oder NaN).
+- **Bewertungsregeln (`ratings`)**: `Rating(label, all_of, any_of, none_of)` legt das Qualitätslabel der Stufe fest (z. B. `"gut"`, `"brauchbar"`, `"unsicher"`). Die erste passende Regel gewinnt.
+- **Gründe (`grund`)**: Bei verletzten Kriterien werden deren Texte mit `; ` getrennt in der Spalte `grund` gesammelt.
+- **Szenarien (`scenarios`)**: Ein `Scenario(name, constants)` überschreibt Grundkonstanten (z. B. abweichender Luftstrom).
+
+`session.results(scenario=None) -> pl.DataFrame` führt die gesamte Kette aus und liefert die fertige Ergebnistabelle.
+
+```python
+from datualizer_core.calc import Constant
+from datualizer_core.campaign import Calculation, Criterion, Evaluation, Rating, Scenario
+
+ev = Evaluation(
+    constants={
+        "f": Constant(value=2.701, u=0.135, kind="syst", note="RF 0.71"),
+        "luft_m3_h": Constant(value=100.0, u=7.2, kind="syst", scope="tag"),
+        "T_ref": Constant(value=24.4, u=3.0, kind="syst"),
+    },
+    calculations=[
+        Calculation(name="V_N", expr="luft_m3_h * 273.15 / (T_ref + 273.15)", unit="Nm3/h"),
+        Calculation(name="c_in", expr="-mdot * 3600 * 1000 / V_N", unit="mg/Nm3"),
+        Calculation(name="X", expr="1 - (S - B) * f / c_in"),
+    ],
+    criteria=[
+        Criterion(name="c_ok", expr="c_in >= 60", text="c_in < 60"),
+    ],
+    ratings=[
+        Rating(label="gut", all_of=["c_ok"]),
+        Rating(label="unsicher"),
+    ],
+    scenarios=[
+        Scenario(name="Luft 115 m³/h", constants={"luft_m3_h": Constant(value=115.0, u=7.2, kind="syst")}),
+    ],
+)
+
+df_results = session.results(spec=ev)
+df_scen = session.results(scenario="Luft 115 m³/h", spec=ev)
+```
+
+**Dock „Results“ im Kampagnenfenster**:
+- **Ergebnistabelle**: Zeigt alle Schritte, Messgrössen, Rechengrössen mit `u_` und `b_`-Budgetspalten, Kriterien, `bewertung` und `grund`. Enthält Schnellsuche/Filter, Sortierung per Klick auf die Spaltenköpfe, Spaltenauswahl (*Columns...* inkl. schnellem Ausblenden der Budget-Spalten) und CSV-Export (*Export CSV...*).
+- **Inspektor per Doppelklick**: Ein Doppelklick auf eine Zeile öffnet direkt den Fenster-Inspektor für diesen Schritt.
+- **Szenario-Umschalter**: Wechselt sofort zwischen Grundwerten und Szenarien und aktualisiert alle berechneten Kennwerte in Echtzeit.
+- **Formeleditor mit Live-Syntaxprüfung**: Beim Eintippen einer Rechen- oder Kriterienformel wird die Syntax sofort geprüft und mit Fehlerstelle oder grünem Häkchen angezeigt.
+
 ## Absolute Zeit
 
 **Absolute Zeit** bleibt erhalten: `time_seconds` zählt ab dem ersten gültigen Sample, `ds.time_origin` ist der absolute Zeitpunkt dazu, `ds.time_abs` die absolute Zeit jeder Zeile und `ds.with_time_abs()` die Tabelle mit Spalte `time_abs`. Damit lassen sich später mehrere Geräte einer Messkampagne auf eine Zeitachse legen (Etappe 2b). Datums- und Zeitwerte ohne Zeitzone gelten als Wanduhrzeit. Mit `IngestionConfig(time=TimeConfig(timezone="Europe/Zurich"))` werden sie in dieser Zone gelesen, dann bleiben die Sekunden auch über die Sommerzeitumstellung korrekt (doppelte oder fehlende Uhrzeiten stehen im Audit). Logger, die nur die verstrichene Zeit exportieren (z. B. PicoLog `00:00:00`), bekommen ihren Startzeitpunkt über `TimeConfig(origin=datetime(...))`. Uhrzeiten ohne Datum (z. B. im Labjournal) bekommen ihr Datum über `TimeConfig(clock_date=date(...))`. Weitere Datumsformate: `TimeConfig(datetime_formats=[...])`; ein erzwungenes `TimeConfig(format=TimeFormat.DATETIME)`, das nicht passt, schlägt laut fehl (`TimeConfigError`).

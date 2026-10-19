@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from datualizer_core.calc.expr import FUNCTIONS, ExprError, compile_expr
 from datualizer_core.calc.relations import Relation
+from datualizer_core.calc.uncertain import Constant
 from datualizer_core.campaign.intervals import DEFAULT_WINDOW, ResolvedInterval, WindowRule
 from datualizer_core.stats.window import WindowResult
 
@@ -140,29 +141,164 @@ class Measure(BaseModel):
         return self.alias, f"u_{self.alias}", f"checks_{self.alias}"
 
 
-class Evaluation(BaseModel):
-    """Step classes, named windows and measures of a campaign (stored in campaign.json)."""
+class Calculation(BaseModel):
+    """A formula evaluated per step, propagating uncertainties via dual numbers."""
 
     model_config = ConfigDict(extra="forbid")
 
+    name: str = Field(min_length=1)
+    expr: str = Field(
+        min_length=1,
+        description="Formula over step parameters, measures, relations, constants and earlier calculations.",
+    )
+    unit: str = ""
+    note: str = ""
+
+    @field_validator("name")
+    @classmethod
+    def _name_valid(cls, v: str) -> str:
+        return _name(v, "Calculation")
+
+    @field_validator("expr")
+    @classmethod
+    def _expr_valid(cls, v: str) -> str:
+        compile_expr(v)
+        return v
+
+    def columns(self) -> tuple[str, str, str, str]:
+        """Names of the 4 columns: value, u, u_random, u_syst (plus budget columns)."""
+        return self.name, f"u_{self.name}", f"u_{self.name}_zufall", f"u_{self.name}_syst"
+
+
+class Criterion(BaseModel):
+    """A condition evaluated per step; `text` is the reason when violated."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    expr: str = Field(min_length=1, description="Condition formula returning a boolean / truth value.")
+    text: str = Field(min_length=1, description="Text describing the reason when the criterion is violated.")
+
+    @field_validator("name")
+    @classmethod
+    def _name_valid(cls, v: str) -> str:
+        return _name(v, "Criterion")
+
+    @field_validator("expr")
+    @classmethod
+    def _expr_valid(cls, v: str) -> str:
+        compile_expr(v)
+        return v
+
+
+class Rating(BaseModel):
+    """Rating rule for steps based on evaluated criteria."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1)
+    all_of: list[str] = Field(default_factory=list, description="Criteria that must all be True.")
+    any_of: list[str] = Field(default_factory=list, description="Criteria of which at least one must be True.")
+    none_of: list[str] = Field(default_factory=list, description="Criteria of which none must be True.")
+
+
+def _normalize_constants(v: Any) -> Any:
+    if isinstance(v, dict):
+        out = {}
+        for k, val in v.items():
+            if isinstance(val, dict):
+                item = dict(val)
+                item.setdefault("name", k)
+                out[k] = item
+            elif isinstance(val, Constant):
+                if not val.name:
+                    out[k] = val.model_copy(update={"name": k})
+                else:
+                    out[k] = val
+            else:
+                out[k] = val
+        return out
+    return v
+
+
+class Scenario(BaseModel):
+    """A set of constants overriding base constants of the evaluation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    constants: dict[str, Constant] = Field(default_factory=dict)
+
+    @field_validator("constants", mode="before")
+    @classmethod
+    def _populate_constant_names(cls, v: Any) -> Any:
+        return _normalize_constants(v)
+
+
+class Evaluation(BaseModel):
+    """Step classes, named windows, measures, relations, calculations, criteria, ratings and scenarios (stored in campaign.json)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    constants: dict[str, Constant] = Field(default_factory=dict)
     step_classes: list[StepClass] = Field(default_factory=list)
     windows: list[NamedWindow] = Field(default_factory=list)
     measures: list[Measure] = Field(default_factory=list)
     relations: list[Relation] = Field(default_factory=list)
+    calculations: list[Calculation] = Field(default_factory=list)
+    criteria: list[Criterion] = Field(default_factory=list)
+    ratings: list[Rating] = Field(default_factory=list)
+    scenarios: list[Scenario] = Field(default_factory=list)
+    analyses: list[dict[str, Any]] = Field(default_factory=list)
+    views: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator("constants", mode="before")
+    @classmethod
+    def _populate_constant_names(cls, v: Any) -> Any:
+        return _normalize_constants(v)
 
     @model_validator(mode="after")
     def _consistent(self) -> "Evaluation":
         classes = [c.name for c in self.step_classes]
         windows = [w.name for w in self.windows]
-        for what, names in (("step class", classes), ("window", windows)):
+        calc_names = [c.name for c in self.calculations]
+        crit_names = [c.name for c in self.criteria]
+        scen_names = [s.name for s in self.scenarios]
+
+        for what, names in (
+            ("step class", classes),
+            ("window", windows),
+            ("calculation", calc_names),
+            ("criterion", crit_names),
+            ("scenario", scen_names),
+        ):
             dup = sorted({n for n in names if names.count(n) > 1})
             if dup:
                 raise ValueError(f"Duplicate {what} name(s): {', '.join(dup)}.")
+
         for w in self.windows:
             unknown = [c for c in w.classes if c not in classes]
             if unknown:
                 raise ValueError(f"Window {w.name!r}: unknown class(es) {', '.join(unknown)}; defined are {classes}.")
+
+        known_criteria = set(crit_names)
+        for rat in self.ratings:
+            unknown_crit = [c for c in rat.all_of + rat.any_of + rat.none_of if c not in known_criteria]
+            if unknown_crit:
+                raise ValueError(
+                    f"Rating {rat.label!r}: unknown criterion {unknown_crit}; defined are {sorted(known_criteria)}."
+                )
+
         taken: dict[str, str] = {c: "a step table column" for c in STEP_COLUMNS}
+        taken["bewertung"] = "the rating column"
+        taken["grund"] = "the reason column"
+
+        for k in self.constants:
+            _name(k, "Constant")
+            if k in taken:
+                raise ValueError(f"Constant {k!r} clashes with {taken[k]}.")
+            taken[k] = "a constant"
+
         for m in self.measures:
             if m.window != DEFAULT_WINDOW and m.window not in windows:
                 raise ValueError(f"Measure {m.alias!r}: unknown window {m.window!r}; defined are {[DEFAULT_WINDOW, *windows]}.")
@@ -170,11 +306,24 @@ class Evaluation(BaseModel):
                 if col in taken:
                     raise ValueError(f"Measure {m.alias!r}: column {col!r} is already {taken[col]}.")
                 taken[col] = f"a column of measure {m.alias!r}"
+
         for r in self.relations:
             for col in r.columns():
                 if col in taken:
                     raise ValueError(f"Relation {r.name!r}: column {col!r} is already {taken[col]}.")
                 taken[col] = f"a column of relation {r.name!r}"
+
+        for c in self.calculations:
+            for col in c.columns():
+                if col in taken:
+                    raise ValueError(f"Calculation {c.name!r}: column {col!r} is already {taken[col]}.")
+                taken[col] = f"a column of calculation {c.name!r}"
+
+        for cr in self.criteria:
+            if cr.name in taken:
+                raise ValueError(f"Criterion {cr.name!r}: column {cr.name!r} is already {taken[cr.name]}.")
+            taken[cr.name] = "a criterion"
+
         return self
 
     def window(self, name: str) -> NamedWindow | None:
@@ -188,6 +337,16 @@ class Evaluation(BaseModel):
 
     def window_names(self) -> list[str]:
         return [DEFAULT_WINDOW, *[w.name for w in self.windows]]
+
+    def scenario(self, name: str) -> Scenario:
+        """Scenario by name; KeyError if unknown."""
+        for s in self.scenarios:
+            if s.name == name:
+                return s
+        raise KeyError(f"No scenario {name!r}; defined are {[s.name for s in self.scenarios]}.")
+
+    def scenario_names(self) -> list[str]:
+        return [s.name for s in self.scenarios]
 
 
 # ------------------------------------------------------------------ step parameters
@@ -306,9 +465,13 @@ __all__ = [
     "MEASURE_STATS",
     "MEASURE_U",
     "STEP_COLUMNS",
+    "Calculation",
+    "Criterion",
     "Evaluation",
     "Measure",
     "NamedWindow",
+    "Rating",
+    "Scenario",
     "StepClass",
     "StepClassification",
     "StepWindow",

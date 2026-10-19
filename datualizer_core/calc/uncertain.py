@@ -49,7 +49,7 @@ class Constant(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(min_length=1)
+    name: str = Field("", description="Identifier of the constant.")
     value: float
     u: float = Field(0.0, ge=0.0, description="Standard uncertainty (k = 1), same unit as value.")
     kind: Kind = Field("syst", description="'zufall' (random) or 'syst' (systematic).")
@@ -57,6 +57,7 @@ class Constant(BaseModel):
         None, description="Systematic inputs with the same group share one error source and are fully correlated "
         "(e.g. one reference gas). Not for different quantities of the same day."
     )
+    scope: str = Field("", description="Optional scope of the constant, e.g. 'tag' (evaluated in PR 6).")
     unit: str = ""
     note: str = ""
 
@@ -64,6 +65,8 @@ class Constant(BaseModel):
         """The constant as a `UArray`; an uncertain input when u > 0, else a plain value."""
         if self.u == 0:
             return UArray(self.value)
+        if not self.name:
+            raise ValueError("Constant must have a non-empty name to produce an uncertain input.")
         return UArray.input(self.name, self.value, self.u, kind=self.kind, group=self.group)
 
 

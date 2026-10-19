@@ -161,7 +161,7 @@ def test_dragging_the_window_sets_an_override(qapp: QApplication, window: Campai
     assert "(set by hand)" in insp.title.text() and insp.btn_reset.isEnabled()
     assert insp.views[0].region.lines[0].pen.color().rgb() == OVERRIDE_PEN.rgb()
     assert all(v.region.getRegion() == pytest.approx((10, 110)) for v in insp.views)
-    assert "window ✎" in window.intervals_panel.table.item(T155_V2, 4).text()
+    assert "window ✎" in window.intervals_panel.table.item(T155_V2, 5).text()
     # other steps keep the window rule
     assert not window.session.intervals().intervals[T155_V1].window_override
 
@@ -217,3 +217,65 @@ def test_values_rounded_to_their_uncertainty() -> None:
     assert value_and_u(-1.7372, 0.172) == ("-1.74", "0.17")
     assert value_and_u(12345.6, 230.0) == ("12346", "2.3e+02")
     assert value_and_u(float("nan"), 1.0) == ("—", "1")
+
+
+# ------------------------------------------------------- PR 3: classes and named windows
+def _evaluation():
+    from datualizer_core.campaign import Evaluation, NamedWindow, StepClass, WindowRule
+
+    return Evaluation(
+        step_classes=[StepClass(name="null", when="v_mfc == 0"), StepClass(name="viel", when="v_mfc >= 10"),
+                      StepClass(name="dosierung", when="v_mfc > 0")],
+        windows=[NamedWindow(name="masse", rule=WindowRule(skip_start_s=60)),
+                 NamedWindow(name="blank", rule=WindowRule(length_s=180), classes=["null"])],
+    )
+
+
+def test_steps_dock_shows_the_class(qapp: QApplication, window: CampaignWindow) -> None:
+    window.session.set_evaluation(_evaluation())
+    window.refresh_steps()
+    table = window.intervals_panel.table
+    assert table.horizontalHeaderItem(1).text() == "Class"
+    assert table.item(0, 1).text() == "null"  # Konditionierung, V_MFC = 0
+    assert table.item(T155_V2, 1).text() == "dosierung" and not table.item(T155_V2, 1).toolTip()
+    row = next(r for r in range(table.rowCount()) if table.item(r, 6).text().endswith("v_mfc = 10.0"))
+    assert table.item(row, 1).text() == "viel" and "'viel' taken" in table.item(row, 1).toolTip()
+
+    from datualizer_core.campaign import Evaluation, StepClass
+
+    window.session.set_evaluation(Evaluation(step_classes=[StepClass(name="x", when="V_MFC > 0")]))
+    window.refresh_steps()
+    panel = window.intervals_panel
+    assert table.item(0, 1).text() == "" and "did you mean 'v_mfc'" in panel.problem_label.text()
+
+
+def test_inspector_shows_a_named_window(qapp: QApplication, window: CampaignWindow) -> None:
+    window.session.set_evaluation(_evaluation())
+    sid = step_id(window, T155_V2)
+    window.inspect_step(sid)
+    insp = window.window_inspector
+    assert insp.window_box.isVisibleTo(insp)
+    assert [insp.window_box.itemText(i) for i in range(insp.window_box.count())] == ["default", "masse", "blank"]
+    assert insp.results[(DB.stem, "masse")].n == 120
+
+    insp.set_window_name("masse")
+    qapp.processEvents()
+    assert insp.window_name == "masse" and insp.results[(DB.stem, "masse")].n == 60
+    assert "window 60–120 s of 120 s (window 'masse')" in insp.title.text()
+
+    insp.set_window(70, 110)  # dragging sets an override of this window only
+    qapp.processEvents()
+    assert f"{sid}@masse" in window.session.campaign.window_overrides
+    assert not window.session.intervals().get(sid).window_override
+    assert "(window 'masse', set by hand)" in insp.title.text() and insp.btn_reset.isEnabled()
+    insp.btn_reset.click()
+    qapp.processEvents()
+    assert not window.session.campaign.window_overrides
+
+    insp.set_window_name("blank")
+    qapp.processEvents()
+    assert insp.results == {} and "window 'blank' is for null" in insp.title.text()
+    assert "No statistics" in insp.checks.item(0).text() and not insp.btn_reset.isEnabled()
+    insp.set_window_name("default")
+    qapp.processEvents()
+    assert insp.results[(DB.stem, "masse")].n == 120

@@ -17,11 +17,22 @@ from typing import Sequence
 
 import numpy as np
 import polars as pl
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from datualizer_core.campaign.clock import ClockAnchor, ClockCells, ClockModel, epoch_seconds, to_epoch_s
 from datualizer_core.campaign.coverage import SourceCoverage, coverage_intervals, value_rows
 from datualizer_core.campaign.display import ChannelDisplay, YScale
+from datualizer_core.campaign.evaluation import (
+    DEFAULT_WINDOW,
+    STEP_COLUMNS,
+    Evaluation,
+    StepClassification,
+    StepWindow,
+    classify_steps,
+    measure_value,
+    override_key,
+    parameter_columns,
+)
 from datualizer_core.campaign.intervals import (
     Interval,
     IntervalConfigError,
@@ -91,10 +102,22 @@ class Campaign(BaseModel):
     intervals: list[Interval] = Field(default_factory=list, description="Measurement steps set by hand.")
     window_rule: WindowRule = Field(default_factory=WindowRule, description="Evaluated part of each step.")
     window_overrides: dict[str, WindowOverride] = Field(
-        default_factory=dict, description="Evaluated window set by hand, per step id (replaces the window rule there)."
+        default_factory=dict,
+        description="Evaluated window set by hand, per step id (replaces the window rule there); "
+        "'<step id>@<window>' for a named window.",
     )
     stats: StatsConfig = Field(default_factory=StatsConfig, description="Settings of the window statistics.")
+    evaluation: Evaluation = Field(
+        default_factory=Evaluation, description="Step classes, named windows and measures (the step table)."
+    )
     notes: str = ""
+
+    @model_validator(mode="after")
+    def _override_keys(self) -> "Campaign":
+        for key, ov in self.window_overrides.items():
+            if ov.window is not None and not key.endswith(f"@{ov.window}"):
+                raise ValueError(f"Window override {key!r} is for window {ov.window!r}; its key must end in '@{ov.window}'.")
+        return self
 
     def source(self, source_id: str) -> CampaignSource:
         for s in self.sources:
@@ -162,6 +185,34 @@ def _result_row(r: WindowResult) -> dict:
     return row
 
 
+@dataclass(frozen=True)
+class _StatsInput:
+    """One channel ready for `window_stats`; `data` is (x, y, gap_rows, excluded) or the reason there is none."""
+
+    source: str
+    channel: str
+    unit: str
+    data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | str
+    reading_u: float
+    clock_u: float | None
+    equivalence: float | None
+
+    def run(self, window: WindowSpec, cfg: StatsConfig) -> WindowResult:
+        x, y, gap, flags = self.data  # type: ignore[misc]
+        return window_stats(
+            x, y, gap, window, flags, cfg,
+            reading_u=self.reading_u, clock_u_s=self.clock_u, equivalence=self.equivalence,
+        )
+
+
+def _to_datetimes(df: pl.DataFrame, columns: Sequence[str], zone: str) -> pl.DataFrame:
+    """Epoch-second columns as date-times in the campaign zone."""
+    return df.with_columns(
+        (pl.col(c) * 1e6).round().cast(pl.Int64).cast(pl.Datetime("us", "UTC")).dt.convert_time_zone(zone)
+        for c in columns
+    )
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -184,6 +235,7 @@ class CampaignSession:
         self._track_cache: dict[tuple[str, str], Track] = {}
         self._coverage_cache: dict[tuple[str, tuple[str, ...] | None], tuple[np.ndarray | None, SourceCoverage]] = {}
         self._interval_cache: tuple[tuple, IntervalSet] | None = None
+        self._class_cache: tuple[tuple, StepClassification] | None = None
         for src in self.campaign.sources:
             self._load(src)
 
@@ -426,7 +478,7 @@ class CampaignSession:
         c = self.campaign
         key = (
             c.timezone,
-            c.model_dump_json(include={"interval_mappings", "intervals", "window_rule", "window_overrides"}),
+            c.model_dump_json(include={"interval_mappings", "intervals", "window_rule", "window_overrides", "evaluation"}),
             tuple((s.id, s.clock.model_dump_json(), id(self.datasets.get(s.id))) for s in c.sources),
         )
         if self._interval_cache is not None and self._interval_cache[0] == key:
@@ -448,38 +500,99 @@ class CampaignSession:
     def _apply_overrides(
         self, steps: list[ResolvedInterval], problems: list[str]
     ) -> tuple[list[ResolvedInterval], list[str]]:
-        """Replace the rule's window by the one set by hand; report overrides that no longer fit."""
+        """Replace the rule's window by the one set by hand; report overrides that no longer fit.
+
+        Overrides of named windows are applied in `step_window`; here they are only checked.
+        """
         overrides = self.campaign.window_overrides
         if not overrides:
             return steps, problems
         zone = self.campaign.timezone
+        windows = self.campaign.evaluation.window_names()
         problems = list(problems)
-        out, seen = [], set()
+        by_id = {iv.id: iv for iv in steps}
+        out = []
         for iv in steps:
             ov = overrides.get(iv.id)
-            if ov is None:
+            if ov is None or ov.window is not None:
                 out.append(iv)
                 continue
-            seen.add(iv.id)
-            if ov.label and ov.label != iv.label:
-                problems.append(f"{iv.id}: window set by hand on step '{ov.label}', the step is now '{iv.label}'.")
             out.append(replace(iv, window=(to_epoch_s(ov.start, zone), to_epoch_s(ov.end, zone)), window_override=True))
-        for sid in sorted(set(overrides) - seen):
-            problems.append(f"{sid}: window set by hand, but there is no such step (kept in the campaign).")
+        for key in sorted(overrides):
+            ov = overrides[key]
+            sid = key if ov.window is None else key[: -len(ov.window) - 1]
+            what = "window set by hand" + ("" if ov.window is None else f" ('{ov.window}')")
+            iv = by_id.get(sid)
+            if iv is None:
+                problems.append(f"{sid}: {what}, but there is no such step (kept in the campaign).")
+            elif ov.window is not None and ov.window not in windows:
+                problems.append(f"{sid}: {what}, but there is no such window (kept in the campaign).")
+            elif ov.label and ov.label != iv.label:
+                problems.append(f"{sid}: {what} on step '{ov.label}', the step is now '{iv.label}'.")
         return out, problems
 
-    def set_window_override(self, step_id: str, start: float, end: float) -> WindowOverride:
-        """Evaluated window of one step set by hand (master epoch seconds; may be swapped)."""
+    def set_window_override(self, step_id: str, start: float, end: float, window: str = DEFAULT_WINDOW) -> WindowOverride:
+        """Evaluated window of one step set by hand (master epoch seconds; may be swapped).
+
+        `window`: which named window it replaces (default: the window rule). KeyError for an
+        unknown step or window.
+        """
         step = self.intervals().get(step_id)
+        self.campaign.evaluation.window(window)
         start, end = sorted((start, end))
         zone = self.campaign.timezone
-        ov = WindowOverride(start=master_datetime(start, zone), end=master_datetime(end, zone), label=step.label)
-        self.campaign.window_overrides[step_id] = ov
+        ov = WindowOverride(
+            start=master_datetime(start, zone), end=master_datetime(end, zone), label=step.label, window=window
+        )
+        self.campaign.window_overrides[override_key(step_id, window)] = ov
         return ov
 
-    def clear_window_override(self, step_id: str) -> None:
-        """Back to the window rule for this step."""
-        self.campaign.window_overrides.pop(step_id, None)
+    def clear_window_override(self, step_id: str, window: str = DEFAULT_WINDOW) -> None:
+        """Back to the window's rule for this step."""
+        self.campaign.window_overrides.pop(override_key(step_id, window), None)
+
+    # ---------------------------------------------------- classes and named windows
+    def set_evaluation(self, evaluation: Evaluation) -> None:
+        """Replace step classes, named windows and measures (checked by the model)."""
+        self.campaign.evaluation = Evaluation.model_validate(evaluation.model_dump())
+
+    def step_classes(self) -> StepClassification:
+        """Class of every step (`Evaluation.step_classes`); raises ExprError for a formula that does not fit."""
+        ivs = self.intervals()
+        rules = self.campaign.evaluation.model_dump_json(include={"step_classes"})
+        cached = self._class_cache
+        if cached is not None and cached[0][0] is ivs and cached[0][1] == rules:
+            return cached[1]
+        result = classify_steps(ivs.intervals, self.campaign.evaluation.step_classes)
+        self._class_cache = ((ivs, rules), result)
+        return result
+
+    def step_window(
+        self, step: str | ResolvedInterval, window: str = DEFAULT_WINDOW, klasse: str | None | bool = False,
+        evaluation: Evaluation | None = None,
+    ) -> StepWindow:
+        """Window `window` of one step on master time (KeyError for an unknown step or window).
+
+        `default` is the step's window from the window rule (or set by hand). A named window
+        applies its rule to the step, unless it is only for other classes (then `applies` is
+        False). `klasse`: the step's class if already known (False = look it up).
+        `evaluation`: where the named windows are defined (default the campaign's).
+        """
+        iv = self.intervals().get(step) if isinstance(step, str) else step
+        nw = (evaluation or self.campaign.evaluation).window(window)
+        if nw is None:
+            return StepWindow(DEFAULT_WINDOW, iv.window, True, iv.window_override)
+        if nw.classes:
+            k = self.step_classes().of(iv.id) if klasse is False else klasse
+            if k not in nw.classes:
+                why = "the step has no class" if k is None else f"the step is '{k}'"
+                return StepWindow(window, None, False, note=f"window '{window}' is for {', '.join(nw.classes)}; {why}")
+        ov = self.campaign.window_overrides.get(override_key(iv.id, window))
+        if ov is not None:
+            zone = self.campaign.timezone
+            return StepWindow(window, (to_epoch_s(ov.start, zone), to_epoch_s(ov.end, zone)), True, True)
+        w = nw.rule.apply(iv.start, iv.end)
+        return StepWindow(window, w, True, note="" if w is not None else f"window rule '{window}' leaves nothing")
 
     def preview_steps(self, m: IntervalMapping):
         """Steps a mapping would give (without storing it); unknown columns raise IntervalConfigError."""
@@ -496,23 +609,27 @@ class CampaignSession:
         self.campaign.stats = config.model_copy(deep=True)
 
     def window_stats(
-        self, step: str | ResolvedInterval, source_id: str, channel: str, config: StatsConfig | None = None
+        self, step: str | ResolvedInterval, source_id: str, channel: str, config: StatsConfig | None = None,
+        window: str = DEFAULT_WINDOW,
     ) -> WindowResult:
-        """Statistics of one channel in the evaluated window of one step (what `window_table` gives per row).
+        """Statistics of one channel in an evaluated window of one step (what `window_table` gives per row).
 
-        A step whose window rule leaves nothing is evaluated over the whole step; a finding says so.
-        Raises ValueError if the source is not loaded or has no absolute time, KeyError for an
-        unknown step, source or channel.
+        `window`: a named window (`Evaluation.windows`); default the window rule. A step whose
+        window rule leaves nothing is evaluated over the whole step; a finding says so.
+        Raises ValueError if the source is not loaded or has no absolute time, or if the named
+        window does not apply to the step's class; KeyError for an unknown step, window, source or channel.
         """
         cfg = config if config is not None else self.campaign.stats
         iv = self.intervals().get(step) if isinstance(step, str) else step
-        sid, ch, _unit, data, reading_u, clock_u = self._stats_input(source_id, channel, cfg)
-        if isinstance(data, str):
-            raise ValueError(f"{source_id}: {data}")
-        x, y, gap, flags = data
-        lo, hi = iv.window if iv.window is not None else (iv.start, iv.end)
-        r = window_stats(x, y, gap, WindowSpec(lo, hi), flags, cfg, reading_u=reading_u, clock_u_s=clock_u)
-        if iv.window is None:
+        sw = self.step_window(iv, window)
+        if not sw.applies:
+            raise ValueError(f"{iv.id}: {sw.note}")
+        inp = self._stats_input(source_id, channel, cfg)
+        if isinstance(inp.data, str):
+            raise ValueError(f"{source_id}: {inp.data}")
+        lo, hi = sw.window if sw.window is not None else (iv.start, iv.end)
+        r = inp.run(WindowSpec(lo, hi), cfg)
+        if sw.window is None:
             r.checks.append(Check("window rule leaves nothing: whole step evaluated"))
         return r
 
@@ -536,53 +653,117 @@ class CampaignSession:
         fixed = ["step_id", "step_label", "step_start", "step_end", "window_start", "window_end"]
         result_cols = _result_columns()
         taken = set(fixed) | {"window_override", "source", "channel", "unit"} | set(result_cols)
-        param_names: dict[str, str] = {}
-        for iv in steps:
-            for k in iv.params:
-                param_names.setdefault(k, f"param_{k}" if k in taken else k)
+        param_names = parameter_columns(steps, tuple(taken))
 
         rows = []
         for iv in steps:
-            for sid, ch, unit, data, reading_u, clock_u in inputs:
+            for inp in inputs:
                 row = {
                     "step_id": iv.id, "step_label": iv.label, "step_start": iv.start, "step_end": iv.end,
                     "window_start": iv.window[0] if iv.window else None,
                     "window_end": iv.window[1] if iv.window else None,
                     "window_override": iv.window_override,
                     **{param_names[k]: iv.params.get(k) for k in param_names},
-                    "source": sid, "channel": ch, "unit": unit,
+                    "source": inp.source, "channel": inp.channel, "unit": inp.unit,
                     **dict.fromkeys(result_cols),
                 }
                 if iv.window is None:
                     row["checks"] = "window rule leaves nothing"
-                elif isinstance(data, str):
-                    row["checks"] = data
+                elif isinstance(inp.data, str):
+                    row["checks"] = inp.data
                 else:
-                    x, y, gap, flags = data
-                    r = window_stats(x, y, gap, WindowSpec(*iv.window), flags, cfg,
-                                     reading_u=reading_u, clock_u_s=clock_u)
-                    row.update(_result_row(r))
+                    row.update(_result_row(inp.run(WindowSpec(*iv.window), cfg)))
                 rows.append(row)
         if not rows:
             return pl.DataFrame()
         df = pl.DataFrame(rows, infer_schema_length=None)
-        return df.with_columns(
-            (pl.col(c) * 1e6).round().cast(pl.Int64).cast(pl.Datetime("us", "UTC")).dt.convert_time_zone(zone)
-            for c in fixed[2:]
-        )
+        return _to_datetimes(df, fixed[2:], zone)
 
-    def _stats_input(self, source_id: str, channel: str, cfg: StatsConfig):
-        """(source, channel, unit, (x, y, gap_rows, excluded) or a reason, reading_u, clock_u)."""
+    def step_table(self, spec: Evaluation | None = None, config: StatsConfig | None = None) -> pl.DataFrame:
+        """One row per step: parameters, class and every measure with its standard uncertainty.
+
+        `spec`: classes, named windows and measures (default the campaign's `evaluation`).
+        Columns: step_id, step_label, step_start, step_end (campaign zone), dauer_s, the step
+        parameters, klasse, klasse_hinweis (no class matches, or several did), then per measure
+        `<alias>`, `u_<alias>` (see `evaluation.MEASURE_U`; null where none is defined) and
+        `checks_<alias>` (the window's findings joined with "; ").
+
+        A window that is not for the step's class leaves its measures empty (value, u and checks
+        null). A window the rule leaves nothing of, or a source without data, gives a null value
+        with the reason in checks. Unknown sources, channels or windows raise KeyError, a class
+        formula that does not fit the steps ExprError, a measure column equal to a parameter ValueError.
+        """
+        ev = spec if spec is not None else self.campaign.evaluation
+        cfg = config if config is not None else self.campaign.stats
+        steps = self.intervals().intervals
+        params = parameter_columns(steps)
+        measure_cols = [col for m in ev.measures for col in m.columns()]
+        clash = sorted(set(params.values()) & set(measure_cols))
+        if clash:
+            raise ValueError(f"Measure column(s) {', '.join(clash)} are also step parameters; choose another alias.")
+        for m in ev.measures:
+            ev.window(m.window)
+        inputs = {(m.source, m.channel): self._stats_input(m.source, m.channel, cfg) for m in ev.measures}
+        classes = self.step_classes() if spec is None else classify_steps(steps, ev.step_classes)
+
+        rows = []
+        for iv in steps:
+            klasse = classes.of(iv.id)
+            row = {
+                "step_id": iv.id, "step_label": iv.label, "step_start": iv.start, "step_end": iv.end,
+                "dauer_s": iv.duration_s,
+                **{col: iv.params.get(k) for k, col in params.items()},
+                "klasse": klasse, "klasse_hinweis": classes.notes.get(iv.id),
+            }
+            results: dict[tuple, WindowResult] = {}  # measures of one channel and window share the statistics
+            for m in ev.measures:
+                col, u_col, checks_col = m.columns()
+                row[col] = row[u_col] = row[checks_col] = None
+                sw = self.step_window(iv, m.window, klasse, ev)
+                if not sw.applies:
+                    continue
+                inp = inputs[(m.source, m.channel)]
+                if sw.window is None:
+                    row[checks_col] = sw.note or "window rule leaves nothing"
+                elif isinstance(inp.data, str):
+                    row[checks_col] = inp.data
+                else:
+                    key = (m.source, m.channel, sw.window)
+                    if key not in results:
+                        results[key] = inp.run(WindowSpec(*sw.window), cfg)
+                    r = results[key]
+                    row[col], row[u_col] = measure_value(r, m.stat, inp.reading_u)
+                    row[checks_col] = "; ".join(r.checks)
+            rows.append(row)
+
+        types: dict[str, pl.DataType] = {
+            "step_id": pl.String, "step_label": pl.String, "step_start": pl.Float64, "step_end": pl.Float64,
+            "dauer_s": pl.Float64, "klasse": pl.String, "klasse_hinweis": pl.String,
+        }
+        for m in ev.measures:
+            col, u_col, checks_col = m.columns()
+            types.update({col: pl.Float64, u_col: pl.Float64, checks_col: pl.String})
+        if rows:
+            df = pl.DataFrame(rows, infer_schema_length=None)
+            df = df.with_columns(pl.col(c).cast(t) for c, t in types.items())
+        else:
+            df = pl.DataFrame(schema={c: types.get(c, pl.Null) for c in [*STEP_COLUMNS, *measure_cols]})
+        return _to_datetimes(df, ["step_start", "step_end"], self.campaign.timezone)
+
+    def _stats_input(self, source_id: str, channel: str, cfg: StatsConfig) -> "_StatsInput":
+        """What `window_stats` needs of one channel, or the reason why it has nothing (`data` is text)."""
         src = self.campaign.source(source_id)
-        reading_u = cfg.reading_u.get(f"{source_id}/{channel}", 0.0)
+        key = f"{source_id}/{channel}"
+        reading_u = cfg.reading_u.get(key, 0.0)
+        equivalence = cfg.equivalence.get(key)
         ds = self.datasets.get(source_id)
         if ds is None:
-            return source_id, channel, "", "source not loaded", reading_u, None
+            return _StatsInput(source_id, channel, "", "source not loaded", reading_u, None, equivalence)
         if channel not in ds.channels:
             raise KeyError(f"Source {source_id!r} has no channel {channel!r}.")
         unit = ds.units.get(channel, "")
         if self.master_time(source_id) is None:
-            return source_id, channel, unit, "source has no absolute time", reading_u, None
+            return _StatsInput(source_id, channel, unit, "source has no absolute time", reading_u, None, equivalence)
         tr = self.track(source_id, channel)
         excluded = np.zeros(len(tr.x), dtype=bool)
         if cfg.exclude_flags:
@@ -591,7 +772,8 @@ class CampaignSession:
                 & (pl.col("channel").is_null() | (pl.col("channel") == channel))
             )
             excluded[ev["row"].unique().to_numpy()] = True
-        return source_id, channel, unit, (tr.x, tr.y, tr.gap_rows, excluded), reading_u, src.clock.uncertainty_s
+        data = (tr.x, tr.y, tr.gap_rows, excluded)
+        return _StatsInput(source_id, channel, unit, data, reading_u, src.clock.uncertainty_s, equivalence)
 
     # ---------------------------------------------------------- clock alignment
     def clock_from_cells(self, cells: ClockCells) -> tuple[ClockModel, list[ClockAnchor]]:

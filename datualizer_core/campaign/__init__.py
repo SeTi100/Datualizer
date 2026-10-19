@@ -10,6 +10,17 @@ from datualizer_core.campaign.coverage import (
     coverage_intervals,
 )
 from datualizer_core.campaign.display import ChannelDisplay, YScale, YScaleMode
+from datualizer_core.campaign.evaluation import (
+    DEFAULT_WINDOW,
+    MEASURE_STATS,
+    Evaluation,
+    Measure,
+    NamedWindow,
+    StepClass,
+    StepClassification,
+    StepWindow,
+    classify_steps,
+)
 from datualizer_core.campaign.intervals import (
     Interval,
     IntervalConfigError,
@@ -44,6 +55,15 @@ __all__ = [
     "ClockCellsError",
     "ClockModel",
     "CoverageGap",
+    "DEFAULT_WINDOW",
+    "Evaluation",
+    "MEASURE_STATS",
+    "Measure",
+    "NamedWindow",
+    "StepClass",
+    "StepClassification",
+    "StepWindow",
+    "classify_steps",
     "Interval",
     "IntervalConfigError",
     "IntervalMapping",

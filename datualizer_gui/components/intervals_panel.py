@@ -1,9 +1,13 @@
-"""Measurement steps of a campaign: table, step mapping dialog and window rule (Etappe 2b, step 5)."""
+"""Measurement steps of a campaign: table, step mapping dialog and window rule (Etappe 2b, step 5).
+
+The column "Class" shows the step class from `Evaluation.step_classes` (PR 3); a step without a
+class or with several is marked and its hint is in the tooltip.
+"""
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -24,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from datualizer_core.calc import ExprError
 from datualizer_core.campaign import (
     CampaignSession,
     IntervalConfigError,
@@ -36,6 +41,8 @@ from datualizer_core.ingestion.steps import EndKind, EndRule
 from datualizer_core.schema import ColumnKind
 
 ROLE_ID = Qt.ItemDataRole.UserRole
+COLUMNS = ["Step", "Class", "Start", "End", "Duration", "Origin", "Parameters"]
+HINT_COLOR = QColor("#ffb86c")  # a class cell with a hint (no class, or several)
 TIME_COLUMN = "(time column of the source)"
 OWN_CLOCK = "(clock of this source)"
 END_KINDS = [
@@ -78,8 +85,8 @@ class IntervalsPanel(QWidget):
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["Step", "Start", "End", "Duration", "Origin", "Parameters"])
+        self.table = QTableWidget(0, len(COLUMNS))
+        self.table.setHorizontalHeaderLabels(COLUMNS)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().hide()
@@ -139,11 +146,20 @@ class IntervalsPanel(QWidget):
         if session is not None:
             zone = session.campaign.timezone
             steps = session.intervals()
+            problems = list(steps.problems)
+            try:
+                classes = session.step_classes()
+            except ExprError as exc:  # a class formula that does not fit the steps: say so, show no classes
+                classes = None
+                problems.append(str(exc).split("\n")[0])
             self.table.setRowCount(len(steps.intervals))
             for row, iv in enumerate(steps.intervals):
                 params = ", ".join(f"{k} = {v}" for k, v in iv.params.items() if v is not None)
+                klasse = classes.of(iv.id) if classes is not None else None
+                hint = classes.notes.get(iv.id) if classes is not None else None
                 cells = [
                     iv.label,
+                    klasse or ("—" if hint else ""),
                     master_datetime(iv.start, zone).strftime("%d.%m. %H:%M:%S"),
                     master_datetime(iv.end, zone).strftime("%H:%M:%S"),
                     _duration(iv.duration_s),
@@ -153,9 +169,12 @@ class IntervalsPanel(QWidget):
                 for col, text in enumerate(cells):
                     item = QTableWidgetItem(text)
                     item.setData(ROLE_ID, iv.id)
+                    if col == 1 and hint:
+                        item.setForeground(HINT_COLOR)
+                        item.setToolTip(hint)
                     self.table.setItem(row, col, item)
-            self.problem_label.setText("\n".join(steps.problems))
-            self.problem_label.setVisible(bool(steps.problems))
+            self.problem_label.setText("\n".join(problems))
+            self.problem_label.setVisible(bool(problems))
             rule = session.campaign.window_rule
             self.skip_start.setValue(rule.skip_start_s)
             self.skip_end.setValue(rule.skip_end_s)

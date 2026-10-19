@@ -21,7 +21,7 @@ from typing import Any, Literal, Sequence
 
 import numpy as np
 import polars as pl
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from datualizer_core.campaign.clock import ClockModel, epoch_seconds, to_epoch_s
 from datualizer_core.dataset import DualModeDataset
@@ -29,6 +29,8 @@ from datualizer_core.ingestion.steps import EndKind, EndRule, StepColumns
 from datualizer_core.pipeline.operators import clean_column_name
 from datualizer_core.schema import ColumnKind
 from datualizer_core.timebase import localize, parse_datetime
+
+DEFAULT_WINDOW = "default"  # name of the campaign's window rule among the named windows
 
 _CLOCK = re.compile(r"^\s*(\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?\s*$")
 
@@ -97,6 +99,8 @@ class WindowOverride(BaseModel):
     Replaces what the `WindowRule` gives for this step only. Times are master wall-clock times in
     the campaign zone, like manual steps. `label` is the step's name when the override was set:
     if a corrected step table gives the step id another name, this is reported, not ignored.
+    `window`: the named window it replaces (`Evaluation.windows`); None = the window rule
+    (`default`). Stored under `override_key(step id, window)`.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -104,6 +108,12 @@ class WindowOverride(BaseModel):
     start: datetime
     end: datetime
     label: str = ""
+    window: str | None = Field(None, description="Named window it replaces; None = the window rule (default).")
+
+    @field_validator("window")
+    @classmethod
+    def _default_is_none(cls, v: str | None) -> str | None:
+        return None if v == DEFAULT_WINDOW else v
 
     @model_validator(mode="after")
     def _ordered(self) -> "WindowOverride":

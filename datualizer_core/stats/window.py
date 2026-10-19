@@ -14,6 +14,9 @@ Rules:
   sensors need: n_eff and sem_eff (AR(1) approximation), the Newey-West (HAC) and AR(1)-corrected
   slope SE, Durbin-Watson, the robust Theil-Sen slope with a Kendall confidence interval and a
   stationarity light (slope test and comparison of the two window halves).
+- Practical stationarity (PR 3): with 1-Hz data almost every slope is significant, what matters is
+  whether it is small. With a tolerance δ per channel (`StatsConfig.equivalence`) an equivalence
+  test (TOST) asks whether the 90 % interval of the slope lies inside ±δ (`stationary_practical`).
 
 The module knows nothing about campaigns or the GUI; `CampaignSession.window_table` calls it.
 scipy only for the t and normal quantiles.
@@ -34,6 +37,7 @@ from scipy import stats as _sps
 THEIL_SEN_MAX_POINTS = 1000
 THEIL_SEN_MAX_PAIRS = THEIL_SEN_MAX_POINTS * (THEIL_SEN_MAX_POINTS - 1) // 2
 CONFIDENCE = 0.95  # level of the intervals behind the stationarity light and the Theil-Sen interval
+TOST_ALPHA = 0.05  # each one-sided test of the equivalence test; together a 1 − 2α = 90 % interval
 
 
 class StatsConfig(BaseModel):
@@ -57,6 +61,12 @@ class StatsConfig(BaseModel):
         default_factory=dict,
         description="Standard uncertainty of one reading per 'source/channel' (type B, e.g. resolution/√12); "
         "an input from the device data, never a code constant. Missing = 0, said in the assumptions.",
+    )
+    equivalence: dict[str, float] = Field(
+        default_factory=dict,
+        description="Tolerance δ of the slope per 'source/channel' in unit per second (e.g. 0.1 mgC/min = "
+        "0.1/60): practically stationary if the 90 % interval of the slope lies inside ±δ (TOST). "
+        "Missing = not tested.",
     )
 
 
@@ -137,6 +147,8 @@ class WindowResult:
     integral_u: float | None = None  # sem_eff · covered time (approximation)
     halves_diff: float | None = None  # mean of the second half minus mean of the first half
     stationary: bool | None = None  # light: no significant slope and no significant halves difference
+    stationary_practical: bool | None = None  # TOST: 90 % interval of the slope inside ±δ; None = no δ
+    equivalence_delta: float | None = None  # the δ tested (unit per second)
     checks: list[Check] = field(default_factory=list)  # what failed or needs a look (with a level)
     assumptions: list[str] = field(default_factory=list)  # what the values rest on
     # for drawing (window inspector); not table columns
@@ -170,6 +182,7 @@ def window_stats(
     *,
     reading_u: float = 0.0,
     clock_u_s: float | None = None,
+    equivalence: float | None = None,
 ) -> WindowResult:
     """Statistics of `y` over `x` inside `window`.
 
@@ -177,7 +190,8 @@ def window_stats(
     `y`: values (NaN = no value). `gap_rows`: rows where a time gap starts (the step from the
     previous row into this one is not data). `flags`: True where a row is excluded (e.g. spike).
     `reading_u`: standard uncertainty of one reading. `clock_u_s`: uncertainty of the source clock
-    (`ClockModel.uncertainty_s`); it enters u(Δt) of the two-point difference.
+    (`ClockModel.uncertainty_s`); it enters u(Δt) of the two-point difference. `equivalence`:
+    tolerance δ of the slope (unit per second) for `stationary_practical`; None = not tested.
     """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -243,6 +257,7 @@ def window_stats(
     auto = _autocorrelation(tw - a, yw, loc, fit, config.hac_lag, checks, assumptions)
     ts = _theil_sen(tw - a, yw, fit, checks, assumptions) if config.robust_slope else {}
     st = _stationarity(tw - a, yw, window.length_s, loc, fit, auto, checks, assumptions)
+    st.update(_equivalence(fit["slope"], auto, equivalence, checks, assumptions))
     integral_u = None if auto.get("sem_eff") is None else auto["sem_eff"] * covered
     if integral_u is not None:
         assumptions.append("integral_u = sem_eff · covered time (approximation; gap time not included)")
@@ -565,3 +580,33 @@ def _stationarity(
             f"together at {CONFIDENCE:.0%} (Bonferroni), normal quantiles; R statistic not computed"
         )
     return dict(halves_diff=halves_diff, stationary=all(verdicts) if verdicts else None)
+
+
+def _equivalence(slope: float | None, auto: dict, delta: float | None, checks: list[str], assumptions: list[str]) -> dict:
+    """Practical stationarity: two one-sided tests (TOST) that the slope lies inside ±δ.
+
+    Equivalent to the 1 − 2α interval slope ± z₁₋α · SE lying inside ±δ. SE is the larger of
+    slope_se_hac and slope_se_ar1, normal quantiles as in the light. Unlike the light, a large n
+    makes this test more lenient, not stricter: a tiny but certain drift is practically stationary.
+    """
+    if delta is None:
+        return dict(stationary_practical=None, equivalence_delta=None)
+    delta = abs(float(delta))
+    ses = [v for v in (auto["slope_se_hac"], auto["slope_se_ar1"]) if v is not None]
+    if slope is None or not ses:
+        checks.append("practical stationarity: no slope with an autocorrelation-aware SE, not tested")
+        return dict(stationary_practical=None, equivalence_delta=delta)
+    z = float(_sps.norm.ppf(1 - TOST_ALPHA))
+    lo, hi = slope - z * max(ses), slope + z * max(ses)
+    ok = -delta < lo and hi < delta
+    assumptions.append(
+        f"stationary_practical: TOST at {TOST_ALPHA:.0%} per side, {1 - 2 * TOST_ALPHA:.0%} interval of the slope "
+        f"[{lo:.3g}, {hi:.3g}]/s (larger of slope_se_hac and slope_se_ar1, normal quantiles) "
+        f"{'inside' if ok else 'not inside'} ±δ = ±{delta:.3g}/s"
+    )
+    if not ok:
+        checks.append(
+            f"not practically stationary: {1 - 2 * TOST_ALPHA:.0%} interval of the slope [{lo:.3g}, {hi:.3g}]/s "
+            f"not inside ±{delta:.3g}/s"
+        )
+    return dict(stationary_practical=ok, equivalence_delta=delta)

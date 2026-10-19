@@ -108,7 +108,7 @@ for step in s.intervals().intervals:
     print(step.label, step.window, step.params)
 ```
 
-**Fenster-Statistik** (Etappe 2b, Schritt 6, Paket A): `session.window_table([(quelle, kanal), …])` liefert pro Schritt × Kanal eine Zeile mit Schritt, Fenster, Sollwerten und den Kennwerten aus `datualizer_core.stats.window_stats`: Anzahl Punkte, ausgeschlossene (`StatsConfig.exclude_flags`, Standard `spike`, `dropout`) und leere Werte, Abdeckungsgrad, Mittelwert, Median, SD, SEM, Min/Max, 5-/95-%-Quantil, OLS-Steigung pro Sekunde mit klassischem Standardfehler, R² und Residuen-SD, 2-Punkt-Differenz Δy/Δt mit Unsicherheit nach GUM (Ablesung aus `StatsConfig.reading_u`, Uhr aus `ClockModel.uncertainty_s`) und das Trapez-Integral. Lücken, leere und ausgeschlossene Werte werden nie überbrückt: Die nicht abgedeckte Zeit steht in `integral_gap_s`. `checks` nennt, was auffällt (zu wenige Punkte, geringe Abdeckung, 2-Punkt weicht von der Steigung ab), `assumptions`, worauf die Werte beruhen. SEM und klassischer Steigungs-SE setzen unabhängige Werte voraus und sind bei dicht abgetasteten Sensoren zu klein. Deshalb gibt es zusätzlich (Paket B): `rho1`, `n_eff` und `sem_eff` (AR(1)-Näherung), `slope_se_hac` (Newey-West, Lag `StatsConfig.hac_lag`, sonst ⌊4·(n/100)^(2/9)⌋), `slope_se_ar1`, `durbin_watson`, die robuste Theil-Sen-Steigung `slope_theil_sen` mit 95-%-Intervall `ts_ci_low`/`ts_ci_high` (Kendall, bei Autokorrelation verbreitert; ab 1000 Punkten aus einer festen Stichprobe von Paaren), `integral_u` und die Ampel `stationary` (Steigungstest und Hälftenvergleich `halves_diff`, Begründung in `checks`). Weichen OLS und Theil-Sen um mehr als 2 SE ab, steht das in `checks` (Ausreisser oder Knick). Die Einstellungen stehen als `stats` in `campaign.json`.
+**Fenster-Statistik** (Etappe 2b, Schritt 6, Paket A): `session.window_table([(quelle, kanal), …])` liefert pro Schritt × Kanal eine Zeile mit Schritt, Fenster, Sollwerten und den Kennwerten aus `datualizer_core.stats.window_stats`: Anzahl Punkte, ausgeschlossene (`StatsConfig.exclude_flags`, Standard `spike`, `dropout`, `masked`) und leere Werte, Abdeckungsgrad, Mittelwert, Median, SD, SEM, Min/Max, 5-/95-%-Quantil, OLS-Steigung pro Sekunde mit klassischem Standardfehler, R² und Residuen-SD, 2-Punkt-Differenz Δy/Δt mit Unsicherheit nach GUM (Ablesung aus `StatsConfig.reading_u`, Uhr aus `ClockModel.uncertainty_s`) und das Trapez-Integral. Lücken, leere und ausgeschlossene Werte werden nie überbrückt: Die nicht abgedeckte Zeit steht in `integral_gap_s`. `checks` nennt, was auffällt (zu wenige Punkte, geringe Abdeckung, 2-Punkt weicht von der Steigung ab), `assumptions`, worauf die Werte beruhen. SEM und klassischer Steigungs-SE setzen unabhängige Werte voraus und sind bei dicht abgetasteten Sensoren zu klein. Deshalb gibt es zusätzlich (Paket B): `rho1`, `n_eff` und `sem_eff` (AR(1)-Näherung), `slope_se_hac` (Newey-West, Lag `StatsConfig.hac_lag`, sonst ⌊4·(n/100)^(2/9)⌋), `slope_se_ar1`, `durbin_watson`, die robuste Theil-Sen-Steigung `slope_theil_sen` mit 95-%-Intervall `ts_ci_low`/`ts_ci_high` (Kendall, bei Autokorrelation verbreitert; ab 1000 Punkten aus einer festen Stichprobe von Paaren), `integral_u` und die Ampel `stationary` (Steigungstest und Hälftenvergleich `halves_diff`, Begründung in `checks`). Weichen OLS und Theil-Sen um mehr als 2 SE ab, steht das in `checks` (Ausreisser oder Knick). Die Einstellungen stehen als `stats` in `campaign.json`.
 
 ```python
 from datualizer_core.stats import StatsConfig
@@ -185,13 +185,15 @@ window.export_plot("bericht_12_10.pdf", ExportOptions(width_mm=170, font_pt=8, l
 - **Rechenkanäle** (`DerivedChannel` in `CampaignSource.derived`): entstehen mit dem Formelkern aus Kanälen derselben Quelle (z. B. Skalierung oder Differenz). Sie können zeitabhängig gestückelt sein (`pieces`, z. B. bei Neukalibrierung ab einer bestimmten Uhrzeit). Rechenkanäle verhalten sich wie normale Messkanäle für Plot, Statistik und Qualitäts-Flags; Rohkanäle bleiben unverändert.
 - **Masken** (`Mask` in `CampaignSource.masks`): markieren Zeitspannen einer Quelle (für alle oder ausgewählte Kanäle), die in der Auswertung ignoriert werden sollen. Die Messwerte erhalten das Qualitätsflag `masked` (in `StatsConfig.exclude_flags` standardmässig enthalten) und werden im Kampagnenplot schraffiert dargestellt.
 - **Gerätekalibrierung aus XML**: Der Testa-iFID-Reader liest `Settings*.xml` (Kalibrierblock `sens`, `zero`) und schlägt über `suggest_linear_calibration` direkt passende Rechenkanäle vor.
-- **JSON-Spalten in SQLite**: `SqliteOptions.json_columns` zerlegt strukturierte Textspalten (wie `parameters_json`) automatisch in einzelne Spalten (`V_MFC`, `Temperatur`, etc.).
+- **JSON-Spalten in SQLite**: `SqliteOptions.json_columns` zerlegt strukturierte Textspalten (wie `parameters_json`) in eine Spalte pro Schlüssel; fehlt ein Schlüssel, bleibt die Zelle leer. Aus den Schlüsseln `V_MFC`, `Temperatur` werden wie bei jeder Spalte nach der Namensbereinigung `v_mfc` und `temperatur`.
+
+**Spaltennamen in Formeln:** Der Loader bereinigt alle Spaltennamen (`clean_names`: klein, Einheit und Sonderzeichen entfernt). In Formeln, Schrittarten, `match`, `group`, `rows`/`cols` und Ansichten stehen deshalb die bereinigten Namen, z. B. `v_mfc > 0`, nicht `V_MFC > 0`; welche es gibt, zeigen `ds.channels` und `ds.parameters`. Ein falsch geschriebener Name schlägt laut fehl, der `ExprError` schlägt den Namen vor, der sich nur in Gross/klein unterscheidet. Selbst vergebene Namen (Rechengrössen, Aliase von Messgrössen wie `T_bett`, `X`) behalten ihre Schreibweise.
 
 ## Formeln mit Unsicherheit
 
 `datualizer_core/calc/` ist der Formelkern für Rechengrössen (Etappe 2b, Schritt 8). Er kennt weder Kampagne noch GUI. Die Schrittarten der Schritt-Tabelle nutzen ihn bereits (siehe oben), Rechenkanäle und Rechengrössen folgen.
 
-**Was eine Formel enthalten darf:** Zahlen, Namen (auch mit Punkt, `fid.mean` ist *ein* Name), `+ - * / **`, unäres Minus, Vergleiche (auch verkettet, `0 < X <= 1`), `and`, `or`, `not`, `a if c else b` und die Funktionen `log` (natürlich), `log10`, `exp`, `sqrt`, `abs`, `min`, `max` (zwei oder mehr Argumente), `where(c, a, b)`, `isfinite`, `round(x, n=0)`. Die Zeichen − · × werden als `-` und `*` gelesen. Text in einfachen oder doppelten Anführungszeichen und Textspalten sind nur mit `==` und `!=` erlaubt (`klasse == 'null'`, `Probe != "Eingang" and v_mfc > 0`). Das Ergebnis ist ein Wahrheitswert ohne Ableitung. Fehlender Text (null) ist weder gleich noch ungleich: Beide Vergleiche ergeben falsch, damit eine fehlende Klasse keine Bedingung zufällig erfüllt. Welche Namen Text sind, sagt `compile_expr(…, text_names=[…])`. Ohne Angabe gilt ein Name, der direkt mit Text verglichen wird, als Text; `evaluate` prüft das an den Werten (str, Objekt-Arrays, Polars-String-Spalten). Alles andere (Attribute, Methodenaufrufe, Indizes, Lambdas, Comprehensions, Rechnen oder `<` mit Text, Text mit Zahl verglichen) lehnt `compile_expr` mit einem `ExprError` ab, der die Spalte und die bekannten Namen nennt. Bei Tippfehlern schlägt es bevorzugt einen Namen mit gleichem Anfangsbuchstaben vor bzw. einen, der sich nur in Gross/klein unterscheidet:
+**Was eine Formel enthalten darf:** Zahlen, Namen (auch mit Punkt, `fid.mean` ist *ein* Name), `+ - * / **`, unäres Minus, Vergleiche (auch verkettet, `0 < X <= 1`), `and`, `or`, `not`, `a if c else b` und die Funktionen `log` (natürlich), `log10`, `exp`, `sqrt`, `abs`, `min`, `max` (zwei oder mehr Argumente), `where(c, a, b)`, `isfinite`, `round(x, n=0)`. Die Zeichen − · × werden als `-` und `*` gelesen. Text in einfachen oder doppelten Anführungszeichen und Textspalten sind nur mit `==` und `!=` erlaubt (`klasse == 'null'`, `probe != "Eingang" and v_mfc > 0`). Das Ergebnis ist ein Wahrheitswert ohne Ableitung. Fehlender Text (null) ist weder gleich noch ungleich: Beide Vergleiche ergeben falsch, damit eine fehlende Klasse keine Bedingung zufällig erfüllt. Welche Namen Text sind, sagt `compile_expr(…, text_names=[…])`. Ohne Angabe gilt ein Name, der direkt mit Text verglichen wird, als Text; `evaluate` prüft das an den Werten (str, Objekt-Arrays, Polars-String-Spalten). Alles andere (Attribute, Methodenaufrufe, Indizes, Lambdas, Comprehensions, Rechnen oder `<` mit Text, Text mit Zahl verglichen) lehnt `compile_expr` mit einem `ExprError` ab, der die Spalte und die bekannten Namen nennt. Bei Tippfehlern schlägt es bevorzugt einen Namen mit gleichem Anfangsbuchstaben vor bzw. einen, der sich nur in Gross/klein unterscheidet:
 
 ```python
 from datualizer_core.calc import ExprError, compile_expr
@@ -235,7 +237,7 @@ evaluate("a - b", {"a": a, "b": b}).u()     # 0.0: derselbe Fehler hebt sich in 
 
 - **Nächster Referenzschritt (`nearest_reference`)**: Sucht für jeden Schritt den zeitlich nächsten passenden Bezugsschritt davor und/oder danach (z. B. Blindwert-Nullphasen).
   - `where`: Filterformel für Kandidaten (z. B. `klasse == 'null' and abs(dS*60) <= 0.1`).
-  - `match`: Spalten, die zwischen Schritt und Referenz übereinstimmen müssen (z. B. `["T_soll", "luft"]`).
+  - `match`: Spalten, die zwischen Schritt und Referenz übereinstimmen müssen (z. B. `["temperatur", "luft"]`).
   - `combine`: Wenn davor und danach ein Schritt gefunden wird (`art == "eingeklammert"`): Mittelwert beider Schritte, Unsicherheit nach Rechteckverteilung $u = \max(|\Delta| / (2\sqrt{3}), u_{\min})$.
   - Wenn nur einseitig gefunden (`art == "einseitig"`): Wert dieses Schritts, $u = u_{\text{one}}$.
   - Wenn keiner gefunden (`art == "keiner"`): Konfigurierter `fallback: FallbackValue(value, u)` oder `NaN`.
@@ -256,11 +258,11 @@ from datualizer_core.calc import NearestReferenceRelation, CumulativeRelation, B
 relations = [
     NearestReferenceRelation(
         name="B", value="S_b", where="klasse == 'null' and abs(dS*60) <= 0.1",
-        match=["T_soll", "luft"], u_min=0.3, u_one=1.0, fallback={"value": 2.09, "u": 2.0},
+        match=["temperatur", "luft"], u_min=0.3, u_one=1.0, fallback={"value": 2.09, "u": 2.0},
     ),
     CumulativeRelation(
         name="beladung", expr="-mdot * dauer_s",
-        reset_when="(klasse == 'null' and dauer_s >= 300) or changed(T_soll)", gap_s=300.0,
+        reset_when="(klasse == 'null' and dauer_s >= 300) or changed(temperatur)", gap_s=300.0,
     ),
     BinRelation(name="T_klasse", expr="T_bett", width=25.0),
 ]
@@ -337,7 +339,7 @@ ev = Evaluation(
         "luft_m3_h": Constant(value=100.0, u=7.2, kind="syst", scope="tag"),
     },
     analyses=[
-        CrossingAnalysis(name="T50", x="T_bett", y="X", level=0.5, group="V_MFC", unit="°C", where="stationaer and bewertung != 'unsicher'"),
+        CrossingAnalysis(name="T50", x="T_bett", y="X", level=0.5, group="v_mfc", unit="°C", where="stationaer and bewertung != 'unsicher'"),
         FitLineAnalysis(
             name="arrhenius",
             x_expr="1000 / (T_bett + 273.15)",
@@ -346,7 +348,7 @@ ev = Evaluation(
             where="stationaer and bewertung != 'unsicher' and X > 0.05 and X < 0.80 and isfinite(k)",
             derived={"Ea": "-m * 8.314462"},
         ),
-        AggregateAnalysis(name="umsatz_matrix", rows="T_klasse", cols="V_MFC", value="X", how="mean", where="stationaer and bewertung != 'unsicher'"),
+        AggregateAnalysis(name="umsatz_matrix", rows="T_klasse", cols="v_mfc", value="X", how="mean", where="stationaer and bewertung != 'unsicher'"),
     ]
 )
 results = session.analyses()
@@ -403,7 +405,7 @@ ev = Evaluation(
         TableViewSpec(
             name="stationaer_tabelle",
             title="Stationäre Stufen",
-            columns=["step_id", "tag", "T_bett", "V_MFC", "X", "u_X"],
+            columns=["step_id", "tag", "T_bett", "v_mfc", "X", "u_X"],
             filter="stationaer and bewertung != 'unsicher'",
             sort_by=["T_bett"],
         ),
@@ -416,11 +418,11 @@ ev = Evaluation(
             y="X",
             u_x="u_T_bett",
             u_y="u_X",
-            color_by="V_MFC",
+            color_by="v_mfc",
             color_mode="ordinal",        # Blaue Farbrampe hell -> dunkel
             marker_by="tag",             # Messtag als Markersymbol (o, s, ^, D, v)
             filled="stationaer",         # Gefüllt = stationär, leer/offen = nicht stationär
-            connect_by="V_MFC",          # Linien verbinden Stufen gleicher Dosierung
+            connect_by="v_mfc",          # Linien verbinden Stufen gleicher Dosierung
             ref_lines=[
                 RefLine(value=0.5, label="X = 0.5 (T50)"),
                 RefLine(value=0.9, label="X = 0.9 (T90)"),
@@ -436,7 +438,7 @@ ev = Evaluation(
             x_expr="1000 / (T_bett + 273.15)",
             y_expr="log(k_1_s)",
             u_y="u_lnk_zufall",
-            color_by="V_MFC",
+            color_by="v_mfc",
             marker_by="tag",
             secondary_x=SecondaryAxis(
                 label="Bett-Temperatur [°C]",
@@ -466,7 +468,7 @@ ev = Evaluation(
             title="Umsatz-Matrix",
             subtitle="Mittlerer Umsatz X je Temperatur und Dosierstufe",
             rows="T_klasse",
-            cols="V_MFC",
+            cols="v_mfc",
             value="X",
             status="stationaer",        # Bei Nichterfüllung: Zelle in Grau-Wash + '*'
             subtext="{c_in_mg_m3:.0f} mg/Nm³",

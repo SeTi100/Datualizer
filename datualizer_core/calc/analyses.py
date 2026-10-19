@@ -54,7 +54,7 @@ class CrossingAnalysis(BaseModel):
     x: str = Field(min_length=1, description="x column or expression (e.g. 'T_bett').")
     y: str = Field(min_length=1, description="y column or expression (e.g. 'X').")
     level: float = Field(description="Crossing level (e.g. 0.5 for T50).")
-    group: str | None = Field(default=None, description="Grouping column (e.g. 'V_MFC').")
+    group: str | None = Field(default=None, description="Grouping column (e.g. 'v_mfc').")
     u_y: str | None = Field(default=None, description="Standard uncertainty column or expression for y.")
     where: str | None = Field(default=None, description="Filter condition.")
     unit: str = Field(default="", description="Unit of x for formatted text output (e.g. '°C').")
@@ -563,7 +563,7 @@ def crossing(
     level : float
         Crossing threshold (e.g. 0.5 for T50).
     group : str | None
-        Optional column to group by (e.g. 'V_MFC').
+        Optional column to group by (e.g. 'v_mfc').
     u_y : str | None
         Standard uncertainty for y. Default: 'u_{y}'.
     where : str | None

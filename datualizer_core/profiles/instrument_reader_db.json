@@ -1,6 +1,6 @@
 {
   "name": "instrument_reader_db",
-  "description": "instrument_reader-Datenbank (SQLite): OCR-Messwerte je ROI mit Run und Experiment, als Long-Tabelle. readings.timestamp ist Lokalzeit; ungültige Lesungen (is_valid = 0) werden zu leeren Werten. Die Run-Parameter (parameters_json) werden in Spalten zerlegt (V_MFC, Temperatur, Volumenstrom, f_Fan …).",
+  "description": "instrument_reader-Datenbank (SQLite): OCR-Messwerte je ROI mit Run und Experiment, als Long-Tabelle. readings.timestamp ist Lokalzeit; ungültige Lesungen (is_valid = 0) werden zu leeren Werten. Die Run-Parameter (parameters_json) werden in Spalten zerlegt; aus V_MFC, Temperatur, Volumenstrom, f_Fan … werden v_mfc, temperatur, volumenstrom, f_fan.",
   "reader": "sqlite",
   "file_patterns": [
     "*.db",

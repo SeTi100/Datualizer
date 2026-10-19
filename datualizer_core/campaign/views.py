@@ -178,7 +178,7 @@ class MatrixViewSpec(BaseModel):
     title: str = ""
     subtitle: str | None = None
     rows: str = Field(min_length=1, description="Row grouping column, e.g. 'T_klasse'")
-    cols: str = Field(min_length=1, description="Column grouping column, e.g. 'V_MFC'")
+    cols: str = Field(min_length=1, description="Column grouping column, e.g. 'v_mfc'")
     value: str = Field(min_length=1, description="Value column or expression to average in each cell, e.g. 'X'")
     status: str | None = Field(
         default=None,

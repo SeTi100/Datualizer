@@ -1,7 +1,7 @@
 """What a campaign evaluates per measurement step (Etappe 2b, step 8, PR 3).
 
 - `StepClass`: a kind of step ("dosing", "zero phase"), given by a formula over the step
-  parameters (`V_MFC > 0`, `Probe == 'Eingang'`). The first class whose formula is true wins;
+  parameters (`v_mfc > 0`, `probe == 'Eingang'`). The first class whose formula is true wins;
   a step without a class or with several is reported, never guessed.
 - `NamedWindow`: a window rule with a name, optionally only for some classes (the blank value of
   a zero phase, the last 120 s of a dosing step). The campaign's `window_rule` is the window
@@ -89,7 +89,7 @@ class StepClass(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
-    when: str = Field(description="Formula over step parameters, e.g. \"V_MFC > 0\" or \"Probe == 'Eingang'\".")
+    when: str = Field(description="Formula over step parameters, e.g. \"v_mfc > 0\" or \"probe == 'Eingang'\" (loaded column names are cleaned: lower case).")
 
     @field_validator("when")
     @classmethod

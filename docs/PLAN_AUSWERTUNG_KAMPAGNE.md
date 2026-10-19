@@ -22,7 +22,7 @@ Referenz-Implementierung (nur lesen, nicht kopieren):
 | PicoLog-Start = Speicherzeit − Dauer | ✅ `OriginRule.FILE_MTIME_END` |
 | Versatz aus Journal-Paaren („Start FID“/„Start Real“) | ✅ `ClockCells` → `session.clock_from_cells` (PR 9) |
 | Journal-Zeilen als Schritte, fehlendes Ende = nächster Start, Sollwerte als Parameter | ✅ `IntervalMapping`, `EndKind.NEXT_START` |
-| DB-Runs als Schritte, `V_MFC`/`Volumenstrom` aus `parameters_json` | ◐ JSON-Spalte wird nicht zerlegt → PR 2 |
+| DB-Runs als Schritte, `V_MFC`/`Volumenstrom` aus `parameters_json` | ✅ `SqliteOptions.json_columns` (PR 2), Spalten `v_mfc`, `volumenstrom` |
 | OCR-Fehllesungen der Waage | ✅ `spike` (Hampel) |
 | FID-Skala aus dem Rohsignal: mgC = a·pA + b, a/b aus der Kalibrierung (Settings-XML: `sens`, `zero`; 1.616 mgC/ppm Propan), am 15.10. vor/nach 09:24 verschieden | ✗ Rechenkanal mit Zeitstücken, XML-Reader → PR 1, 2 |
 | Prüfgas-Fenster ausblenden | ✗ Maske → PR 2 |
@@ -98,14 +98,14 @@ Alles, was der Nutzer festlegt, steht in `campaign.json` (Abschnitt `evaluation`
 - `CampaignSource.derived: list[DerivedChannel]` mit `name`, `expr`, `unit`, `pieces: list[Piece(start, end, expr)]` (stückweise nach Zeit, z. B. andere Kalibrierung vor 09:24). Rechenkanäle sind normale Kanäle für Plot, Statistik und Qualitäts-Flags; Rohkanäle bleiben unverändert.
 - `CampaignSource.masks: list[Mask(start, end, channels, reason)]` → Flag `masked` (in `StatsConfig.exclude_flags` standardmässig enthalten), im Plot schraffiert.
 - Reader für Testa-iFID-`Settings*.xml`: Kalibrierblock (`time_last_cal`, `std_gas`, `sig_span`, `sens`, `zero`, `rsp-fac`) als `source_meta`; Vorschlag für die Kalibrierung `a = k/sens`, `b = −zero·a` mit `k` (mgC/ppm) als Eingabe. Vorschlag, nicht Automatik (Prinzip 2). Datei enthält Passwort-Hash, PIN und Systemkennung: Reader liest nur den Kalibrierblock, Fixture nur gekürzt.
-- `SqliteOptions.json_columns: list[str]`: JSON-Spalten in Spalten zerlegen (`parameters_json` → `V_MFC`, `Volumenstrom`, `f_Fan`).
+- `SqliteOptions.json_columns: list[str]`: JSON-Spalten in Spalten zerlegen (`parameters_json` → `V_MFC`, `Volumenstrom`, `f_Fan`; nach der Namensbereinigung `v_mfc`, `volumenstrom`, `f_fan`).
 
 ### 3.3 Schrittarten, benannte Fenster, Schritt-Tabelle, praktische Stationarität – PR 3 ✅
 
 Umgesetzt in `datualizer_core/campaign/evaluation.py` und `CampaignSession.step_table`. Spaltennamen der Schritt-Tabelle: `step_id`, `step_label`, `step_start`, `step_end`, `dauer_s`, Parameter, `klasse`, `klasse_hinweis`, je Messgrösse `<alias>`, `u_<alias>`, `checks_<alias>`. Klassenformeln kennen zusätzlich `step_id`, `step_label` und `dauer_s`. Das 90-%-Intervall des Äquivalenztests nimmt den grösseren der beiden autokorrelationsfesten SE (`slope_se_eff`), Normalquantile wie die Ampel.
 
 ```python
-class StepClass(BaseModel):  name: str; when: str            # "dosierung": "V_MFC > 0"
+class StepClass(BaseModel):  name: str; when: str            # "dosierung": "v_mfc > 0"
 class NamedWindow(BaseModel): name: str; rule: WindowRule; classes: list[str] = []
 class Measure(BaseModel):    alias: str; source: str; channel: str; window: str; stat: str
     # stat: Feld von WindowResult (mean, slope, two_point, integral, …); Unsicherheit automatisch
@@ -177,7 +177,7 @@ Umgesetzt (`datualizer_core/campaign/sync.py`, Dialog `datualizer_gui/components
     "luft_m3_h": {"value": 100, "u": 7.2, "kind": "syst", "scope": "tag"},
     "T_ref": {"value": 24.4, "u": 3, "kind": "syst"}
   },
-  "step_classes": [{"name": "dosierung", "when": "V_MFC > 0"}, {"name": "null", "when": "V_MFC == 0"}],
+  "step_classes": [{"name": "dosierung", "when": "v_mfc > 0"}, {"name": "null", "when": "v_mfc == 0"}],
   "windows": [
     {"name": "ende",  "rule": {"length_s": 120, "anchor": "end"}},
     {"name": "blank", "rule": {"length_s": 180, "anchor": "end"}, "classes": ["null"]},
@@ -196,10 +196,10 @@ Umgesetzt (`datualizer_core/campaign/sync.py`, Dialog `datualizer_gui/components
   ],
   "relations": [
     {"name": "B", "kind": "nearest_reference", "value": "S_b",
-     "where": "klasse == 'null' and abs(dS*60) <= 0.1", "match": ["T_soll", "luft"],
+     "where": "klasse == 'null' and abs(dS*60) <= 0.1", "match": ["temperatur", "luft"],
      "u_min": 0.3, "u_one": 1.0, "fallback": {"value": 2.09, "u": 2.0}},
     {"name": "beladung", "kind": "cumulative", "expr": "-mdot * dauer_s",
-     "reset_when": "(klasse == 'null' and dauer_s >= 300) or changed(T_soll)"},
+     "reset_when": "(klasse == 'null' and dauer_s >= 300) or changed(temperatur)"},
     {"name": "T_klasse", "kind": "bin", "expr": "T_bett", "width": 25}
   ],
   "calculations": [
@@ -217,12 +217,12 @@ Umgesetzt (`datualizer_core/campaign/sync.py`, Dialog `datualizer_gui/components
     {"name": "geladen","expr": "beladung >= 3", "text": "nicht stationär: Speicherphase (< 3 g dosiert)"}
   ],
   "ratings": [{"label": "gut", "all_of": ["c_ok", "flach", "t_ok", "geladen", "b_ok", "spread_ok"]}, "…"],
-  "analyses": [{"name": "T50", "kind": "crossing", "x": "T_bett", "y": "X", "level": 0.5, "group": "V_MFC",
+  "analyses": [{"name": "T50", "kind": "crossing", "x": "T_bett", "y": "X", "level": 0.5, "group": "v_mfc",
                 "where": "stationaer and bewertung != 'unsicher'"}],
   "views": ["…"]
 }
 ```
-Die Namen der Kanäle/Quellen sind Beispiele. Die Restdrift (|dX/dt|·10 min) ist ein zusätzlicher zufälliger Eingang in X.
+Die Namen der Kanäle/Quellen sind Beispiele. Geladene Spalten stehen in bereinigter Schreibweise (`v_mfc`, `temperatur`, siehe `clean_names`), selbst vergebene Namen (`T_bett`, `X`) wie angegeben. Die Restdrift (|dX/dt|·10 min) ist ein zusätzlicher zufälliger Eingang in X.
 
 ## 5. Abwägungen
 

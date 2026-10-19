@@ -247,7 +247,7 @@ def nearest_reference(
     where : str
         Expression identifying usable reference steps, e.g. ``"klasse == 'null' and abs(dS*60) <= 0.1"``.
     match : sequence of str, optional
-        Columns that must have identical values between target and reference steps (e.g. ``["T_soll", "luft"]``).
+        Columns that must have identical values between target and reference steps (e.g. ``["temperatur", "luft"]``).
     side : {"both", "before", "after"}, default "both"
         Look before, after, or both.
     combine : {"mean_rect", "mean", "linear"}, default "mean_rect"

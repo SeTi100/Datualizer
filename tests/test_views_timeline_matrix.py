@@ -83,7 +83,7 @@ def _matrix_rows() -> pl.DataFrame:
 
 def test_matrix_labels_every_row_with_hottest_on_top(qapp, tmp_path: Path) -> None:
     spec = MatrixViewSpec(name="m", rows="T_klasse", cols="v_mfc", value="X", status="stationaer",
-                          subtext="{c_in:.0f} mg/Nm³")
+                          subtext="{c_in:.0f} mg/Nm³", row_label="{T_klasse:.0f} °C\n({T_bett|min:.0f}–{T_bett|max:.0f})")
     w = MatrixViewWidget(spec)
     w.resize(900, 600)
     w.set_data(_matrix_rows())
@@ -92,6 +92,7 @@ def test_matrix_labels_every_row_with_hottest_on_top(qapp, tmp_path: Path) -> No
     left = p.getAxis("left")
     ticks = dict(left._tickLevels[0])
     assert ticks[0].startswith("250 °C") and ticks[5].startswith("100 °C")  # first row = top
+    assert ticks[0] == "250 °C\n(251–251)" and ticks[5] == "100 °C\n(101–101)"  # row_label over the row's steps
     # two-line labels of six rows fill more than 80 % of a 105 mm axis: pyqtgraph would drop them all
     assert left.style["textFillLimits"] == [(0, 100.0)]
     texts = [it.textItem.toPlainText() for it in w.glw.scene().items() if isinstance(it, pg.TextItem)]
@@ -225,7 +226,7 @@ def test_campaign_window_report_follows_the_report_view(
     seen = _record_pages(monkeypatch)
     covers: list[str] = []
     cover = pe._draw_cover_page
-    monkeypatch.setattr(pe, "_draw_cover_page", lambda p, s, w, h, title="", sub=None: (covers.append(title), cover(p, s, w, h, title, sub)))
+    monkeypatch.setattr(pe, "_draw_cover_page", lambda p, s, w, h, title="", sub=None, **kw: (covers.append(title), cover(p, s, w, h, title, sub, **kw)))
     try:
         win = CampaignWindow(session)
         out = win.export_report(tmp_path / "k.pdf")

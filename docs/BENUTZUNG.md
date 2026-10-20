@@ -432,7 +432,10 @@ In der heterogenen Katalyse wird die Reaktionsgeschwindigkeit $k \propto \dot{V}
 Für die wissenschaftliche Visualisierung und Berichterstellung bietet Datualizer das **Results Views Fenster** (`datualizer_gui/results_window.py`, Etappe 2b, Schritt 8, PR 7). Ansichten werden deklarativ als `ViewSpec` (discriminated union) in `Evaluation.views` konfiguriert und als Tabs mit nativer `pyqtgraph`-Performance dargestellt:
 
 ```python
-from datualizer_core.campaign.views import TableViewSpec, XYViewSpec, MatrixViewSpec, RefLine, SecondaryAxis
+from datualizer_core.campaign.views import (
+    AlignedViewSpec, BarsViewSpec, MatrixViewSpec, RefLine, ReportTile, ReportViewSpec, SecondaryAxis, TableViewSpec,
+    XYViewSpec,
+)
 
 ev = Evaluation(
     views=[
@@ -507,6 +510,8 @@ ev = Evaluation(
             value="X",
             status="stationaer",        # Bei Nichterfüllung: Zelle in Grau-Wash + '*'
             subtext="{c_in_mg_m3:.0f} mg/Nm³",
+            # Zeilenbeschriftung als Vorlage über alle Schritte der Zeile, ohne Vorlage nur der Zeilenwert
+            row_label="{T_klasse:.0f} °C\n({T_bett|min:.0f}–{T_bett|max:.0f})",
             cmap="seq",                 # Sequentielle 13-Stufen-Blauskala
             vmin=0.0,
             vmax=1.0,
@@ -541,8 +546,14 @@ ev = Evaluation(
             name="katalyse_bericht",
             title="Katalytische Oxidation am Monolith",
             views=["durchbruch", "unsicherheit", "umsatz_matrix"],
-            cover=True,                 # Titelseite mit Kennwerten (T50, Ea) und Messtagen
+            cover=True,                 # Titelseite mit Titel, Untertitel, Kacheln, Analysen, Konstanten
             orientation="landscape",    # A4 quer
+            tiles=[                     # Kennwert-Kacheln, ohne Angabe keine
+                ReportTile(label="Dosierstufen", value="{step_id|n}", filter="klasse == 'dosierung'"),
+                ReportTile(label="T50 bei 10 Nl/min", value="{T50}", analysis="T50", filter="v_mfc == 10"),
+                ReportTile(label="Ea (scheinbar)", value="{Ea_kJ_mol:.0f} ± {u_Ea_kJ_mol:.0f} kJ/mol",
+                           analysis="Arrhenius"),
+            ],
         ),
     ]
 )
@@ -566,8 +577,9 @@ df_fid = session.broadcast_steps(["B", "c_in"], source_id="fid")
 - **Szenario-Umschalter**: Wechselt das Szenario (z. B. alternative Kalibrierungen); alle Diagramme und Tabellen aktualisieren sich live.
 - **Vektor- und Bildexport**: Jede Ansicht lässt sich über die Schaltfläche *Export Current View...* als PNG (mit definierter Auflösung/DPI), SVG oder PDF (in millimetergenauen Druckmaßen) exportieren.
 - **Tagesverlauf (`timeline`)**: Kanäle über Master-Zeit in gestapelten Panels (`TimelinePanel` mit `traces` und `marks`), Schritte als farbige Bänder (`bands`, `band_color_by`, Beschriftung `band_label`), Marken pro Schritt aus der Ergebnistabelle: Punkt am Stufenende mit Fehlerbalken oder Strich über ein benanntes Fenster (Blindwert der Null-Phase). `page_by="tag"` ergibt eine Seite je Messtag, im Fenster eine Auswahl, im Bericht je eine Seite (`page_title="Messtag {tag}"`). Kurven laufen über `curves.add_curve` (Lücken nie überbrückt), die Legenden stehen im Bild und damit auch im PDF.
-- **Vorlagen-Texte**: `MatrixViewSpec.subtext`, `band_label` und `page_title` sind Vorlagen mit Feldern `{formel:format}` aus der Ergebnistabelle, z. B. `"{c_in:.0f} mg/Nm³"`; in der Matrix gemittelt über die stationären Stufen der Zelle, bei mehreren Stufen mit „· n Stufen“. Falsche Formeln oder Formate schlagen beim Laden fehl. Die Matrix zeigt die grösste Zeile oben (`rows_descending`) und beschriftet jede Zeile auch in kleinen Exporten.
-- **Mehrseitiger PDF-Bericht**: Über das Menü *Campaign → Export Report...* (oder den Tab der `report`-Ansicht) wird ein vollständiger A4-Querformat-PDF-Bericht erzeugt. Gibt es eine `report`-Ansicht, bestimmt sie Seiten, Reihenfolge, Titel und Untertitel: inklusive professioneller Titelseite mit Kampagnenmetadaten, Messtagen und Kennwert-Kacheln (T50, Ea) aus den Analysen, gefolgt von allen ausgewählten Diagrammen mit Kopfzeilen, Fußnoten und Seitennummerierung.
+- **Vorlagen-Texte**: `MatrixViewSpec.subtext`, `row_label`, `band_label`, `page_title` und die Kacheln des Berichts (`ReportTile.value`) sind Vorlagen mit Feldern `{formel:format}` aus der Ergebnistabelle, z. B. `"{c_in:.0f} mg/Nm³"`; in der Matrix gemittelt über die stationären Stufen der Zelle, bei mehreren Stufen mit „· n Stufen“. Ein Feld `{formel|agg:format}` fasst die Formel vorher über alle Zeilen zusammen: `mean`, `median`, `min`, `max`, `sum`, `n` (Anzahl vorhandener Werte), z. B. `"({T_bett|min:.0f}–{T_bett|max:.0f})"` als zweite Zeile der Matrix-Beschriftung (über alle Schritte der Zeile) oder `"{step_id|n}"` als Anzahl. Falsche Formeln, Aggregate oder Formate schlagen beim Laden fehl. Die Matrix zeigt die grösste Zeile oben (`rows_descending`) und beschriftet jede Zeile auch in kleinen Exporten; ohne `row_label` steht dort nur der Zeilenwert, ohne Einheit.
+- **Legenden**: `xy`, `aligned` und `bars` zeichnen ihre Legende (Farbe nach `color_by`, Symbol nach `marker_by`, gefüllt/offen nach `filled`, Budget-Anteile) als Spalte rechts im Bild, oben ausgerichtet. Sie ist damit Teil jedes Exports und jeder Berichtsseite.
+- **Mehrseitiger PDF-Bericht**: Über das Menü *Campaign → Export Report...* (oder den Tab der `report`-Ansicht) wird ein vollständiger A4-Querformat-PDF-Bericht erzeugt. Gibt es eine `report`-Ansicht, bestimmt sie Seiten, Reihenfolge, Titel, Untertitel und die Kennwert-Kacheln des Deckblatts (`tiles`), gefolgt von allen ausgewählten Diagrammen mit Kopfzeilen, Fußnoten und Seitennummerierung. Eine Kachel (`ReportTile`) hat eine Beschriftung und eine Vorlage über eine Tabelle: die Ergebnistabelle oder mit `analysis` die Tabelle einer Analyse (eine Zeile je Gruppe eines Crossings, eine Zeile eines Fits), Zeilen wählt `filter`. Beispiele: `{step_id|n}` mit `filter="klasse == 'dosierung'"` zählt Dosierstufen, `{T50}` mit `analysis="T50", filter="v_mfc == 10"` ist T50 einer Dosierstufe. Eine Kachel auf eine unbekannte Analyse schlägt beim Laden fehl, ein unbekannter Name in der Vorlage beim Export (mit Vorschlägen); ohne Kacheln hat das Deckblatt keine. Ohne Untertitel steht dort nur das Datum.
 
 ## Rundgang: die SA-Kampagne mit echten Daten
 

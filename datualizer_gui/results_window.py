@@ -15,6 +15,7 @@ Supports:
 
 from __future__ import annotations
 
+import html
 import math
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -23,9 +24,10 @@ import numpy as np
 import polars as pl
 import pyqtgraph as pg
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QFontMetricsF
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QComboBox,
     QFileDialog,
     QGraphicsItem,
@@ -119,6 +121,76 @@ CAT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d
 
 # pyqtgraph marker symbols
 MARKERS = ["o", "s", "t", "d", "t1", "+", "x"]
+LEGEND_W_PX = 175
+
+
+class _HeadingSample(pg.ItemSample):
+    """Empty sample: a legend row that carries only a heading."""
+
+    def __init__(self) -> None:
+        super().__init__(pg.ScatterPlotItem())
+
+    def paint(self, p: Any, *args: Any) -> None:
+        pass
+
+
+def _legend_value(v: Any) -> str:
+    return f"{v:g}" if isinstance(v, (int, float, np.number)) else str(v)
+
+
+def swatch(color: str) -> pg.ScatterPlotItem:
+    """Legend sample: a filled square."""
+    return pg.ScatterPlotItem(symbol="s", size=10, pen=None, brush=pg.mkBrush(color))
+
+
+def marker_sample(symbol: str, filled: bool = False) -> pg.ScatterPlotItem:
+    """Legend sample: a marker in the ink colour, filled or open."""
+    return pg.ScatterPlotItem(symbol=symbol, size=8, pen=pg.mkPen(INK2, width=1.2),
+                              brush=pg.mkBrush(INK2 if filled else SURFACE))
+
+
+def add_layout_legend(
+    glw: pg.GraphicsLayoutWidget,
+    sections: Sequence[tuple[str | None, Sequence[tuple[Any, str]]]],
+    row: int = 0,
+    col: int = 1,
+    rowspan: int = 1,
+) -> pg.LegendItem | None:
+    """A legend in its own column of the graphics layout (top aligned, fixed width).
+
+    It is part of the scene, so the export and the report page show it (a Qt widget beside the plot
+    would be missing there). `sections`: (heading or None, [(sample item, text), ...]); sections
+    without entries are left out, without any entry there is no legend.
+    """
+    if not any(entries for _, entries in sections):
+        return None
+    legend = pg.LegendItem(labelTextColor=INK2, labelTextSize="8pt", verSpacing=-4)
+    legend.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    for heading, entries in sections:
+        if not entries:
+            continue
+        if heading:  # labels are rich text: a condition such as 'x <= 0.1' must not open a tag
+            legend.addItem(_HeadingSample(), f"<b>{html.escape(heading)}</b>")
+        for sample, text in entries:
+            legend.addItem(sample, html.escape(text))
+    glw.ci.addItem(legend, row=row, col=col, rowspan=rowspan)
+    glw.ci.layout.setAlignment(legend, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+    glw.ci.layout.setColumnFixedWidth(col, LEGEND_W_PX)
+    return legend
+
+
+def point_legend_sections(
+    color_by: str | None, color_map: Mapping[Any, str], marker_by: str | None, marker_map: Mapping[Any, str],
+    filled: str | None,
+) -> list[tuple[str | None, list[tuple[Any, str]]]]:
+    """Legend of the xy and aligned views: colours, marker symbols, filled vs open (the `filled` condition)."""
+    sections: list[tuple[str | None, list[tuple[Any, str]]]] = [
+        (color_by, [(swatch(c), _legend_value(v)) for v, c in color_map.items()]),
+        (marker_by, [(marker_sample(m), _legend_value(v)) for v, m in marker_map.items()]),
+    ]
+    if filled:
+        sections.append((filled, [(marker_sample("o", True), "erfüllt"), (marker_sample("o"), "nicht erfüllt")]))
+    return sections
 
 
 def ink_on_color(hex_color: str) -> str:
@@ -351,22 +423,10 @@ class XYViewWidget(QWidget):
         header_layout.addWidget(self.btn_export)
         layout.addLayout(header_layout)
 
-        main_split = QHBoxLayout()
         self.glw = pg.GraphicsLayoutWidget()
         self.glw.setBackground(SURFACE)
         self.glw.scene().setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
-        main_split.addWidget(self.glw, stretch=4)
-
-        # Side legend widget
-        self.legend_panel = QWidget()
-        self.legend_layout = QVBoxLayout(self.legend_panel)
-        self.legend_layout.setContentsMargins(8, 8, 8, 8)
-        self.legend_layout.addStretch()
-        self.legend_panel.setMaximumWidth(250)
-        self.legend_panel.setStyleSheet(f"background: {SURFACE}; color: {INK2}; font-size: 9pt;")
-        main_split.addWidget(self.legend_panel, stretch=1)
-
-        layout.addLayout(main_split, stretch=1)
+        layout.addWidget(self.glw, stretch=1)
         self.status = ReadoutLabel("")
         layout.addWidget(self.status)
 
@@ -374,7 +434,6 @@ class XYViewWidget(QWidget):
         self._df = df
         sub = filter_table(df, self.spec.filter)
         self.glw.clear()
-        self._clear_legend()
 
         if len(sub) == 0:
             self.status.setText("No data matching filter.")
@@ -592,8 +651,12 @@ class XYViewWidget(QWidget):
             if self.spec.y_lim:
                 p.setYRange(self.spec.y_lim[0], self.spec.y_lim[1], padding=0)
 
-        # Build Side Legend
-        self._build_side_legend(color_map, marker_map, filled_mask is not None)
+        add_layout_legend(
+            self.glw,
+            point_legend_sections(self.spec.color_by, color_map, self.spec.marker_by, marker_map,
+                                  self.spec.filled if filled_mask is not None else None),
+            row=0, col=ncols, rowspan=-(-n_facets // ncols),
+        )
         self.status.setText(f"{n_pts} points rendered across {n_facets} facet(s).")
 
     def _on_scatter_clicked(self, item: Any, points: Sequence[Any]) -> None:
@@ -601,56 +664,6 @@ class XYViewWidget(QWidget):
             step_id = points[0].data()
             if step_id:
                 self.step_inspected.emit(str(step_id))
-
-    def _clear_legend(self) -> None:
-        while self.legend_layout.count() > 1:
-            item = self.legend_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-    def _build_side_legend(
-        self, color_map: dict[Any, str], marker_map: dict[Any, str], has_filled: bool
-    ) -> None:
-        self._clear_legend()
-
-        if color_map:
-            lbl_col = QLabel(f"<b>{self.spec.color_by or 'Color'}</b>")
-            self.legend_layout.insertWidget(self.legend_layout.count() - 1, lbl_col)
-            for val, c in color_map.items():
-                row = QHBoxLayout()
-                swatch = QLabel("■")
-                swatch.setStyleSheet(f"color: {c}; font-size: 14pt;")
-                row.addWidget(swatch)
-                row.addWidget(QLabel(f"{val:g}" if isinstance(val, (int, float)) else str(val)))
-                row.addStretch()
-                self.legend_layout.insertLayout(self.legend_layout.count() - 1, row)
-
-        if marker_map:
-            lbl_m = QLabel(f"<b>{self.spec.marker_by or 'Marker'}</b>")
-            self.legend_layout.insertWidget(self.legend_layout.count() - 1, lbl_m)
-            for val, m in marker_map.items():
-                row = QHBoxLayout()
-                m_lbl = QLabel(f"[{m}]")
-                m_lbl.setStyleSheet(f"color: {INK2}; font-weight: bold;")
-                row.addWidget(m_lbl)
-                row.addWidget(QLabel(str(val)))
-                row.addStretch()
-                self.legend_layout.insertLayout(self.legend_layout.count() - 1, row)
-
-        if has_filled:
-            lbl_s = QLabel(f"<b>Status</b>")
-            self.legend_layout.insertWidget(self.legend_layout.count() - 1, lbl_s)
-            r1 = QHBoxLayout()
-            r1.addWidget(QLabel("● filled:"))
-            r1.addWidget(QLabel("True"))
-            r1.addStretch()
-            self.legend_layout.insertLayout(self.legend_layout.count() - 1, r1)
-
-            r2 = QHBoxLayout()
-            r2.addWidget(QLabel("○ open:"))
-            r2.addWidget(QLabel("False"))
-            r2.addStretch()
-            self.legend_layout.insertLayout(self.legend_layout.count() - 1, r2)
 
     def _on_export_clicked(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -763,21 +776,21 @@ class MatrixViewWidget(QWidget):
         p.setLabel("bottom", self.spec.x_label or self.spec.cols)
 
         # Y-Ticks
+        # Y-Ticks: the row value, or the template `row_label` filled from all steps of the row
         y_ticks = []
         for i, r_val in enumerate(rows_unique):
-            # Check if there is T_bett in sub to show range (min–max)
-            t_col = next((c for c in ("T_bett", "t_bett") if c in sub.columns), None)
-            if t_col and isinstance(r_val, (int, float)):
-                pts_r = sub.filter(pl.col(self.spec.rows) == r_val)
-                if len(pts_r) > 0 and pts_r[t_col].is_not_null().any():
-                    t_min = pts_r[t_col].min()
-                    t_max = pts_r[t_col].max()
-                    y_ticks.append((i, f"{r_val:.0f} °C\n({t_min:.0f}–{t_max:.0f})"))
-                else:
-                    y_ticks.append((i, f"{r_val:.0f} °C"))
+            if self.spec.row_label:
+                rows_r = sub.filter(pl.Series([r == r_val for r in row_vals]))
+                y_ticks.append((i, str(render_template(rows_r, self.spec.row_label, reduce=True))))
             else:
-                y_ticks.append((i, f"{r_val}"))
-        p.getAxis("left").setTicks([y_ticks])
+                y_ticks.append((i, f"{r_val:g}" if isinstance(r_val, (int, float)) else str(r_val)))
+        left = p.getAxis("left")
+        left.setTicks([y_ticks])
+        # width from the labels up front: pyqtgraph drops labels wider than the axis and widens it only
+        # after the first paint, so a one-shot render (export, report page) showed no row labels
+        fm = QFontMetricsF(left.style["tickFont"] or QApplication.font())
+        text_w = max((fm.horizontalAdvance(line) for _, t in y_ticks for line in t.split("\n")), default=0.0)
+        left.setStyle(autoExpandTextSpace=False, tickTextWidth=int(text_w * 1.15) + 4)
         p.setLabel("left", self.spec.y_label or self.spec.rows)
 
         p.setXRange(-0.5, n_cols - 0.5, padding=0)
@@ -914,22 +927,10 @@ class AlignedViewWidget(QWidget):
         header_layout.addWidget(self.btn_export)
         layout.addLayout(header_layout)
 
-        main_split = QHBoxLayout()
         self.glw = pg.GraphicsLayoutWidget()
         self.glw.setBackground(SURFACE)
         self.glw.scene().setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
-        main_split.addWidget(self.glw, stretch=4)
-
-        # Side legend widget
-        self.legend_panel = QWidget()
-        self.legend_layout = QVBoxLayout(self.legend_panel)
-        self.legend_layout.setContentsMargins(8, 8, 8, 8)
-        self.legend_layout.addStretch()
-        self.legend_panel.setMaximumWidth(250)
-        self.legend_panel.setStyleSheet(f"background: {SURFACE}; color: {INK2}; font-size: 9pt;")
-        main_split.addWidget(self.legend_panel, stretch=1)
-
-        layout.addLayout(main_split, stretch=1)
+        layout.addWidget(self.glw, stretch=1)
         self.status = ReadoutLabel("")
         layout.addWidget(self.status)
 
@@ -942,7 +943,6 @@ class AlignedViewWidget(QWidget):
         self._df = df
         sub = filter_table(df, self.spec.filter)
         self.glw.clear()
-        self._clear_legend()
 
         if len(sub) == 0:
             self.status.setText("No data matching filter.")
@@ -1172,7 +1172,12 @@ class AlignedViewWidget(QWidget):
             if self.spec.y_lim:
                 p.setYRange(self.spec.y_lim[0], self.spec.y_lim[1], padding=0)
 
-        self._build_side_legend(color_map, marker_map, filled_mask is not None)
+        add_layout_legend(
+            self.glw,
+            point_legend_sections(self.spec.color_by, color_map, self.spec.marker_by, marker_map,
+                                  self.spec.filled if filled_mask is not None else None),
+            row=0, col=ncols, rowspan=-(-n_facets // ncols),
+        )
         self.status.setText(f"{total_curves} aligned curve(s) rendered across {n_facets} facet(s).")
 
     def _on_scatter_clicked(self, item: Any, points: Sequence[Any]) -> None:
@@ -1180,52 +1185,6 @@ class AlignedViewWidget(QWidget):
             step_id = points[0].data()
             if step_id:
                 self.step_inspected.emit(str(step_id))
-
-    def _clear_legend(self) -> None:
-        while self.legend_layout.count() > 1:
-            item = self.legend_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-    def _build_side_legend(
-        self, color_map: dict[Any, str], marker_map: dict[Any, str], has_filled: bool
-    ) -> None:
-        self._clear_legend()
-
-        if color_map:
-            lbl = QLabel(f"<b>{self.spec.color_by or 'Color'}</b>")
-            self.legend_layout.addWidget(lbl)
-            for v, c_hex in color_map.items():
-                row_w = QWidget()
-                row_l = QHBoxLayout(row_w)
-                row_l.setContentsMargins(0, 2, 0, 2)
-                swatch = QLabel()
-                swatch.setFixedSize(14, 14)
-                swatch.setStyleSheet(f"background-color: {c_hex}; border: 1px solid {INK2}; border-radius: 2px;")
-                row_l.addWidget(swatch)
-                v_txt = f"{v:.4g}" if isinstance(v, (int, float, np.number)) else str(v)
-                row_l.addWidget(QLabel(v_txt))
-                row_l.addStretch()
-                self.legend_layout.addWidget(row_w)
-
-        if marker_map:
-            lbl_m = QLabel(f"<b>{self.spec.marker_by or 'Marker'}</b>")
-            self.legend_layout.addWidget(lbl_m)
-            for v, m_sym in marker_map.items():
-                row_w = QWidget()
-                row_l = QHBoxLayout(row_w)
-                row_l.setContentsMargins(0, 2, 0, 2)
-                row_l.addWidget(QLabel(f"[{m_sym}] {v}"))
-                row_l.addStretch()
-                self.legend_layout.addWidget(row_w)
-
-        if has_filled:
-            lbl_f = QLabel("<b>Status</b>")
-            self.legend_layout.addWidget(lbl_f)
-            r1 = QLabel("● stationär")
-            r2 = QLabel("○ nicht stationär")
-            self.legend_layout.addWidget(r1)
-            self.legend_layout.addWidget(r2)
 
     def _on_export_clicked(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -1267,22 +1226,10 @@ class BarsViewWidget(QWidget):
         header_layout.addWidget(self.btn_export)
         layout.addLayout(header_layout)
 
-        main_split = QHBoxLayout()
         self.glw = pg.GraphicsLayoutWidget()
         self.glw.setBackground(SURFACE)
         self.glw.scene().setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
-        main_split.addWidget(self.glw, stretch=4)
-
-        # Side legend widget
-        self.legend_panel = QWidget()
-        self.legend_layout = QVBoxLayout(self.legend_panel)
-        self.legend_layout.setContentsMargins(8, 8, 8, 8)
-        self.legend_layout.addStretch()
-        self.legend_panel.setMaximumWidth(280)
-        self.legend_panel.setStyleSheet(f"background: {SURFACE}; color: {INK2}; font-size: 9pt;")
-        main_split.addWidget(self.legend_panel, stretch=1)
-
-        layout.addLayout(main_split, stretch=1)
+        layout.addWidget(self.glw, stretch=1)
         self.status = ReadoutLabel("")
         layout.addWidget(self.status)
 
@@ -1295,7 +1242,6 @@ class BarsViewWidget(QWidget):
         self._df = df
         sub = filter_table(df, self.spec.filter)
         self.glw.clear()
-        self._clear_legend()
 
         if len(sub) == 0:
             self.status.setText("No data matching filter.")
@@ -1410,33 +1356,12 @@ class BarsViewWidget(QWidget):
         ticks = list(zip(x_indices, tick_labels))
         p1.getAxis("bottom").setTicks([ticks])
 
-        self._build_legend(parts)
+        add_layout_legend(
+            self.glw,
+            [("Quelle", [(swatch(CAT[k % len(CAT)]), lab) for k, (_, lab) in reversed(list(enumerate(parts)))])],
+            row=1, col=1,
+        )
         self.status.setText(f"Rendered uncertainty budget for {n_steps} steps across {len(parts)} parts.")
-
-    def _clear_legend(self) -> None:
-        while self.legend_layout.count() > 1:
-            item = self.legend_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-    def _build_legend(self, parts: list[tuple[str, str]]) -> None:
-        self._clear_legend()
-        lbl = QLabel("<b>Quelle</b>")
-        self.legend_layout.addWidget(lbl)
-
-        # Reversed so top stacked layer is on top of legend
-        for k, (c, lab) in reversed(list(enumerate(parts))):
-            color_hex = CAT[k % len(CAT)]
-            row_w = QWidget()
-            row_l = QHBoxLayout(row_w)
-            row_l.setContentsMargins(0, 2, 0, 2)
-            swatch = QLabel()
-            swatch.setFixedSize(14, 14)
-            swatch.setStyleSheet(f"background-color: {color_hex}; border: 1px solid {INK2}; border-radius: 2px;")
-            row_l.addWidget(swatch)
-            row_l.addWidget(QLabel(lab))
-            row_l.addStretch()
-            self.legend_layout.addWidget(row_w)
 
     def _on_export_clicked(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -1473,7 +1398,6 @@ def _with_alpha(hex_color: str, alpha: int) -> QColor:
 
 
 BAND_ALPHA = 41  # 16 % as in the script's day pages
-LEGEND_W_PX = 175
 
 
 class TimelineViewWidget(QWidget):
@@ -1871,6 +1795,7 @@ class ReportViewWidget(QWidget):
             cover=self.spec.cover,
             title=self.spec.title,
             subtitle=self.spec.subtitle,
+            tiles=self.spec.tiles,
         )
 
 

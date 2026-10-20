@@ -678,6 +678,7 @@ class CampaignWindow(QMainWindow):
             cover=True if report is None else report.cover,
             title=title,
             subtitle=subtitle,
+            tiles=report.tiles if report is not None else (),
         )
         self.status_bar.showMessage(f"Exported report {Path(out).name}")
         return Path(out)

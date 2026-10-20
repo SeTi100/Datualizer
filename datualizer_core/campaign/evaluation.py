@@ -370,6 +370,9 @@ class Evaluation(BaseModel):
                 for mk in panel.marks:
                     if mk.at == "window" and mk.window not in window_names:
                         raise ValueError(f"View {v.name!r}: marks over unknown window {mk.window!r}; defined are {sorted(window_names)}.")
+            for tile in getattr(v, "tiles", []):
+                if tile.analysis is not None and tile.analysis not in analysis_names:
+                    raise ValueError(f"View {v.name!r}: tile {tile.label!r} on unknown analysis {tile.analysis!r}; defined are {analysis_names}.")
 
         known_criteria = set(crit_names)
         for rat in self.ratings:

@@ -70,6 +70,7 @@ class TestViewSpecModels:
             title="Durchbruchskurve",
             expr="1 - (fid_mgC - B) * f / c_in",
             t0="sequence_start",
+            sequence_col="sequenz",
             facet_by="T_klasse",
             color_by="V_MFC",
             marker_by="tag",

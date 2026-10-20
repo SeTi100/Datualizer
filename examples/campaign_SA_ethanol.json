@@ -1126,6 +1126,7 @@
         "marker_by": "tag",
         "filled": "stationaer",
         "facet_by": "T_klasse",
+        "facet_label": "≈ {T_klasse:.0f} °C",
         "filter": "klasse == 'dosierung' and luft == 100 and c_ok",
         "x_label": "c_ein [mg/Nm³]",
         "y_label": "X",
@@ -1135,12 +1136,23 @@
         "name": "durchbruch",
         "title": "Durchbruch seit Beginn der Beladung",
         "expr": "1 - (fid_mgc - B) * f / c_in",
+        "t0": "sequence_start",
+        "sequence_col": "beladung_lauf",
+        "sequence_steps": "klasse == 'dosierung'",
         "rolling_s": 10.0,
         "facet_by": "T_klasse",
+        "facet_label": "≈ {T_klasse:.0f} °C",
         "color_by": "v_mfc",
         "marker_by": "tag",
         "filled": "stationaer",
         "filter": "klasse == 'dosierung' and c_ok",
+        "x_label": "Minuten seit Beginn der Beladung",
+        "y_label": "Umsatz X(t)",
+        "y_lim": [
+          0.0,
+          1.05
+        ],
+        "footer": "Fällt X während der Dosierung, speichert der Katalysator zuerst Ethanol und bricht dann durch; erst das Plateau ist der stationäre Umsatz.",
         "kind": "aligned"
       },
       {
@@ -1185,6 +1197,7 @@
         "marker_by": "tag",
         "filled": "stationaer",
         "facet_by": "v_mfc",
+        "facet_label": "{v_mfc:g} Nl/min",
         "filter": "klasse == 'dosierung' and luft == 100 and c_ok",
         "x_label": "T_bett [°C]",
         "y_label": "X",
@@ -1291,7 +1304,13 @@
       {
         "name": "unsicherheit",
         "title": "Unsicherheitsbudget von X",
+        "sort_by": [
+          "T_bett"
+        ],
+        "bar_label": "{T_bett:.0f} °C\n{v_mfc:g}",
         "filter": "stationaer and klasse == 'dosierung'",
+        "x_label": "T_bett, V_MFC [Nl/min] (stationäre Dosierstufen)",
+        "footer": "Systematische Anteile (syst.) wirken auf alle Stufen eines Tages gleich.",
         "kind": "bars"
       },
       {

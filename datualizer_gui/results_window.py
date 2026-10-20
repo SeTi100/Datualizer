@@ -193,6 +193,49 @@ def point_legend_sections(
     return sections
 
 
+def facet_title(rows: pl.DataFrame, facet_by: str, value: Any, template: str | None) -> str:
+    """Title of a facet: the template filled from its steps, else '<facet_by> = <value>'."""
+    if template:
+        return str(render_template(rows, template, reduce=True))
+    return f"{facet_by} = {_legend_value(value)}"
+
+
+def shared_range(plot: pg.PlotItem | None, xs: Sequence[np.ndarray], ys: Sequence[np.ndarray],
+                 x_lim: tuple[float, float] | None, y_lim: tuple[float, float] | None) -> None:
+    """Range of linked facets from the data of all of them (pyqtgraph would fit the first facet only)."""
+    if plot is None:
+        return
+    for lim, arrays, setter in ((x_lim, xs, plot.setXRange), (y_lim, ys, plot.setYRange)):
+        if lim is not None:
+            setter(lim[0], lim[1], padding=0)
+            continue
+        vals = np.concatenate([np.asarray(a, dtype=float).ravel() for a in arrays]) if arrays else np.array([])
+        vals = vals[np.isfinite(vals)]
+        if vals.size:
+            setter(float(vals.min()), float(vals.max()), padding=0.04)
+
+
+def step_ids_of(table: pl.DataFrame) -> list[Any]:
+    """The `step_id` column of a result table, or row numbers if there is none."""
+    return table["step_id"].to_list() if "step_id" in table.columns else [f"step_{i}" for i in range(len(table))]
+
+
+def fit_tick_text(axis: pg.AxisItem, labels: Sequence[str]) -> None:
+    """Room for the given (multi-line) tick labels before the first paint.
+
+    pyqtgraph drops labels that do not fit into the axis and widens it only after a paint, so a
+    one-shot render (export, report page) showed none; the size is set from the text up front.
+    """
+    fm = QFontMetricsF(axis.style["tickFont"] or QApplication.font())
+    lines = [line for t in labels for line in str(t).split("\n")]
+    if axis.orientation in ("left", "right"):
+        text_w = max((fm.horizontalAdvance(line) for line in lines), default=0.0)
+        axis.setStyle(autoExpandTextSpace=False, tickTextWidth=int(text_w * 1.15) + 4)
+    else:
+        n_lines = max((str(t).count("\n") + 1 for t in labels), default=1)
+        axis.setStyle(autoExpandTextSpace=False, tickTextHeight=int(fm.lineSpacing() * n_lines * 1.1) + 2)
+
+
 def ink_on_color(hex_color: str) -> str:
     """Return 'white' or '#0b0b0b' based on background luminance (sRGB WCAG)."""
     c = hex_color.lstrip("#")
@@ -473,8 +516,7 @@ class XYViewWidget(QWidget):
             if f_raw is not None:
                 filled_mask = np.asarray(f_raw, dtype=bool)
 
-        id_col = next((c for c in ("step_id", "interval_id", "schritt", "id") if c in sub_valid.columns), None)
-        step_ids = sub_valid[id_col].to_list() if id_col else [f"step_{i}" for i in range(n_pts)]
+        step_ids = step_ids_of(sub_valid)
 
         # Color mapping
         color_vals = None
@@ -514,7 +556,8 @@ class XYViewWidget(QWidget):
                 mask = np.array([v == f_val for v in facet_vals], dtype=bool)
                 facets.append((f_val, mask))
         else:
-            facets.append((None, np.ones(n_pts, dtype=bool)))
+            facets.append((_NO_FACET, np.ones(n_pts, dtype=bool)))
+        facet_rows = sub_valid
 
         n_facets = len(facets)
         ncols = min(self.spec.facet_cols, n_facets)
@@ -541,15 +584,16 @@ class XYViewWidget(QWidget):
             p.getAxis("left").setPen(AXIS)
             p.getAxis("bottom").setTextPen(INK2)
             p.getAxis("left").setTextPen(INK2)
+            p.getAxis("left").enableAutoSIPrefix(False)
 
             if self.spec.secondary_x is not None:
                 p.showAxis("top")
                 p.getAxis("top").setPen(AXIS)
                 p.getAxis("top").setTextPen(INK2)
 
-            if f_name is not None:
-                title_f = f"≈ {f_name:.0f} °C" if isinstance(f_name, (int, float)) else str(f_name)
-                p.setTitle(title_f, color=INK)
+            if f_name is not _NO_FACET:
+                p.setTitle(facet_title(facet_rows.filter(pl.Series(f_mask)), self.spec.facet_by, f_name,
+                                       self.spec.facet_label), color=INK)
             elif self.spec.title:
                 p.setTitle(self.spec.title, color=INK)
 
@@ -646,11 +690,8 @@ class XYViewWidget(QWidget):
             scatter.sigClicked.connect(self._on_scatter_clicked)
             p.addItem(scatter)
 
-            if self.spec.x_lim:
-                p.setXRange(self.spec.x_lim[0], self.spec.x_lim[1], padding=0)
-            if self.spec.y_lim:
-                p.setYRange(self.spec.y_lim[0], self.spec.y_lim[1], padding=0)
 
+        shared_range(first_plot, [x], [y], self.spec.x_lim, self.spec.y_lim)
         add_layout_legend(
             self.glw,
             point_legend_sections(self.spec.color_by, color_map, self.spec.marker_by, marker_map,
@@ -747,8 +788,7 @@ class MatrixViewWidget(QWidget):
             if st_raw is not None:
                 stat_mask = np.asarray(st_raw, dtype=bool)
 
-        id_col = next((c for c in ("step_id", "interval_id", "schritt", "id") if c in sub.columns), None)
-        step_ids = sub[id_col].to_list() if id_col else [f"step_{i}" for i in range(len(sub))]
+        step_ids = step_ids_of(sub)
 
         # Unique sorted rows (first row at the top; descending e.g. for temperature) and cols (ascending)
         rows_unique = sorted(list(set(row_vals)), reverse=self.spec.rows_descending, key=lambda v: (v is None, v))
@@ -784,13 +824,8 @@ class MatrixViewWidget(QWidget):
                 y_ticks.append((i, str(render_template(rows_r, self.spec.row_label, reduce=True))))
             else:
                 y_ticks.append((i, f"{r_val:g}" if isinstance(r_val, (int, float)) else str(r_val)))
-        left = p.getAxis("left")
-        left.setTicks([y_ticks])
-        # width from the labels up front: pyqtgraph drops labels wider than the axis and widens it only
-        # after the first paint, so a one-shot render (export, report page) showed no row labels
-        fm = QFontMetricsF(left.style["tickFont"] or QApplication.font())
-        text_w = max((fm.horizontalAdvance(line) for _, t in y_ticks for line in t.split("\n")), default=0.0)
-        left.setStyle(autoExpandTextSpace=False, tickTextWidth=int(text_w * 1.15) + 4)
+        p.getAxis("left").setTicks([y_ticks])
+        fit_tick_text(p.getAxis("left"), [t for _, t in y_ticks])
         p.setLabel("left", self.spec.y_label or self.spec.rows)
 
         p.setXRange(-0.5, n_cols - 0.5, padding=0)
@@ -890,6 +925,9 @@ class MatrixViewWidget(QWidget):
         return export_graphics_layout(self.glw, path, options)
 
 
+_NO_FACET = object()  # the one facet of a view without facet_by (None is a valid facet value)
+
+
 def _to_epoch_array(series: pl.Series) -> np.ndarray:
     if series.dtype == pl.Datetime or series.dtype == pl.Date:
         return (series.cast(pl.Datetime("us", "UTC")).cast(pl.Int64) / 1e6).to_numpy()
@@ -948,17 +986,14 @@ class AlignedViewWidget(QWidget):
             self.status.setText("No data matching filter.")
             return
 
-        id_col = next((c for c in ("step_id", "interval_id", "schritt", "id") if c in sub.columns), None)
-        step_ids = sub[id_col].to_list() if id_col else [f"step_{i}" for i in range(len(sub))]
+        step_ids = step_ids_of(sub)
 
-        start_col = next((c for c in ("step_start", "start") if c in sub.columns), None)
-        end_col = next((c for c in ("step_end", "end", "ende") if c in sub.columns), None)
-        if not start_col or not end_col:
+        if "step_start" not in sub.columns or "step_end" not in sub.columns:
             self.status.setText("Missing step_start or step_end columns.")
             return
 
-        starts_epoch = np.asarray(_to_epoch_array(sub[start_col]), dtype=float)
-        ends_epoch = np.asarray(_to_epoch_array(sub[end_col]), dtype=float)
+        starts_epoch = np.asarray(_to_epoch_array(sub["step_start"]), dtype=float)
+        ends_epoch = np.asarray(_to_epoch_array(sub["step_end"]), dtype=float)
 
         # Color mapping
         color_vals = None
@@ -998,21 +1033,21 @@ class AlignedViewWidget(QWidget):
                 filled_mask = np.asarray(f_raw, dtype=bool)
 
         # Compute t0 for each step
-        t0_arr = np.zeros(len(sub), dtype=float)
-        if self.spec.t0 == "step_start":
-            t0_arr = starts_epoch.copy()
-        else:
-            seq_col = self.spec.sequence_col or next((c for c in ("sequenz", "sequence", "beladung") if c in sub.columns), None)
-            if seq_col:
-                seq_vals = sub[seq_col].to_list()
-                day_vals = sub["tag"].to_list() if "tag" in sub.columns else [None] * len(sub)
-                for seq_id in set(seq_vals):
-                    for day_id in set(day_vals):
-                        mask = np.array([s == seq_id and d == day_id for s, d in zip(seq_vals, day_vals)], dtype=bool)
-                        if mask.any():
-                            t0_arr[mask] = np.nanmin(starts_epoch[mask])
-            else:
-                t0_arr = starts_epoch.copy()
+        # t0: the step's start, or the first start of its sequence among `sequence_steps` of the full
+        # table (steps of the sequence left out by the view's filter still set its start)
+        t0_arr = starts_epoch.copy()
+        if self.spec.t0 == "sequence_start":
+            seq_col = self.spec.sequence_col
+            if seq_col not in df.columns:
+                self.status.setText(f"No column {seq_col!r} for the sequences.")
+                return
+            seq_rows = filter_table(df, self.spec.sequence_steps)
+            all_starts = np.asarray(_to_epoch_array(seq_rows["step_start"]), dtype=float)
+            first: dict[Any, float] = {}
+            for v, t in zip(seq_rows[seq_col].to_list(), all_starts):
+                if v is not None and np.isfinite(t):
+                    first[v] = min(first.get(v, t), t)
+            t0_arr = np.array([first.get(v, np.nan) for v in sub[seq_col].to_list()], dtype=float)
 
         # Channel lookup from session
         channel_names = []
@@ -1021,13 +1056,14 @@ class AlignedViewWidget(QWidget):
         except Exception:
             pass
 
-        ch_sources: dict[str, str] = {}
+        # every source with the channel (e.g. one FID file per day); each step takes the one covering it
+        ch_sources: dict[str, list[tuple[str, np.ndarray]]] = {}
         if self.session is not None:
             for ch in channel_names:
                 for s_id, ds in self.session.datasets.items():
-                    if ch in ds.df.columns or ch in ds.channels:
-                        ch_sources[ch] = s_id
-                        break
+                    m_t = self.session.master_time(s_id) if ch in ds.channels else None
+                    if m_t is not None:
+                        ch_sources.setdefault(ch, []).append((s_id, m_t))
 
         # Faceting
         facets: list[tuple[Any, np.ndarray]] = []
@@ -1037,13 +1073,17 @@ class AlignedViewWidget(QWidget):
                 mask = np.array([v == f_val for v in facet_vals], dtype=bool)
                 facets.append((f_val, mask))
         else:
-            facets.append((None, np.ones(len(sub), dtype=bool)))
+            facets.append((_NO_FACET, np.ones(len(sub), dtype=bool)))
+        facet_rows = sub
 
         n_facets = len(facets)
         ncols = min(self.spec.facet_cols, n_facets)
         first_plot: pg.PlotItem | None = None
 
         total_curves = 0
+        skipped = 0
+        drawn_x: list[np.ndarray] = []
+        drawn_y: list[np.ndarray] = []
         for k, (f_name, f_mask) in enumerate(facets):
             row = k // ncols
             col = k % ncols
@@ -1054,10 +1094,11 @@ class AlignedViewWidget(QWidget):
             p.getAxis("left").setPen(AXIS)
             p.getAxis("bottom").setTextPen(INK2)
             p.getAxis("left").setTextPen(INK2)
+            p.getAxis("left").enableAutoSIPrefix(False)
 
-            if f_name is not None:
-                title_f = f"≈ {f_name:.0f} °C" if isinstance(f_name, (int, float)) else str(f_name)
-                p.setTitle(title_f, color=INK)
+            if f_name is not _NO_FACET:
+                p.setTitle(facet_title(facet_rows.filter(pl.Series(f_mask)), self.spec.facet_by, f_name,
+                                       self.spec.facet_label), color=INK)
             elif self.spec.title:
                 p.setTitle(self.spec.title, color=INK)
 
@@ -1103,22 +1144,23 @@ class AlignedViewWidget(QWidget):
                     for ck, cv in self.session.campaign.evaluation.constants.items():
                         step_env[ck] = cv.value
 
+                # channels from the source covering the step; names of the step table are constants
+                # over the step; a name found nowhere gives no curve (nothing made up)
                 t_slice = None
                 ch_arrays = {}
-                if self.session is not None and ch_sources:
-                    for ch, src_id in ch_sources.items():
-                        m_t = self.session.master_time(src_id)
-                        if m_t is not None:
-                            s_mask = (m_t >= st) & (m_t <= en)
-                            if s_mask.any():
-                                t_slice = m_t[s_mask]
-                                ch_arrays[ch] = self.session.datasets[src_id].df[ch].to_numpy()[s_mask]
-
-                if t_slice is None or len(t_slice) < 2:
-                    t_slice = np.linspace(st, en, 20)
-                    for ch in channel_names:
-                        if ch not in ch_arrays:
-                            ch_arrays[ch] = np.full(len(t_slice), float(step_env.get(ch, 1.0) or 1.0))
+                for ch, candidates in ch_sources.items():
+                    best = max(((src_id, (m_t >= st) & (m_t <= en)) for src_id, m_t in candidates),
+                               key=lambda c: int(c[1].sum()))
+                    if best[1].sum() >= 2:
+                        m_t = dict(candidates)[best[0]]
+                        t_slice = m_t[best[1]]
+                        ch_arrays[ch] = self.session.datasets[best[0]].df[ch].to_numpy()[best[1]]
+                missing = [ch for ch in channel_names if ch not in ch_arrays and ch not in step_env]
+                if missing or not np.isfinite(t0) or (t_slice is None and ch_sources):
+                    skipped += 1
+                    continue
+                if t_slice is None:
+                    t_slice = np.array([st, en])
 
                 t_rel_min = (t_slice - t0) / 60.0
 
@@ -1127,9 +1169,10 @@ class AlignedViewWidget(QWidget):
                 try:
                     res_expr = compile_expr(self.spec.expr, names=list(eval_env.keys())).evaluate(eval_env)
                     val_arr = res_expr.value if hasattr(res_expr, "value") else res_expr
-                    y_arr = np.asarray(val_arr, dtype=float)
+                    y_arr = np.broadcast_to(np.asarray(val_arr, dtype=float), t_slice.shape).copy()
                 except Exception:
-                    y_arr = np.full(len(t_slice), np.nan)
+                    skipped += 1
+                    continue
 
                 if np.isfinite(y_arr).any():
                     if self.spec.rolling_s and len(t_slice) > 2:
@@ -1144,6 +1187,8 @@ class AlignedViewWidget(QWidget):
                     if valid_idx.sum() >= 2:
                         p.plot(t_rel_min[valid_idx], y_arr[valid_idx], pen=pg.mkPen(line_col, width=1.5))
                         total_curves += 1
+                        drawn_x.append(t_rel_min[valid_idx])
+                        drawn_y.append(y_arr[valid_idx])
 
                         last_t = float(t_rel_min[valid_idx][-1])
                         last_y = float(y_arr[valid_idx][-1])
@@ -1167,18 +1212,16 @@ class AlignedViewWidget(QWidget):
                 scatter.sigClicked.connect(self._on_scatter_clicked)
                 p.addItem(scatter)
 
-            if self.spec.x_lim:
-                p.setXRange(self.spec.x_lim[0], self.spec.x_lim[1], padding=0)
-            if self.spec.y_lim:
-                p.setYRange(self.spec.y_lim[0], self.spec.y_lim[1], padding=0)
 
+        shared_range(first_plot, drawn_x, drawn_y, self.spec.x_lim, self.spec.y_lim)
         add_layout_legend(
             self.glw,
             point_legend_sections(self.spec.color_by, color_map, self.spec.marker_by, marker_map,
                                   self.spec.filled if filled_mask is not None else None),
             row=0, col=ncols, rowspan=-(-n_facets // ncols),
         )
-        self.status.setText(f"{total_curves} aligned curve(s) rendered across {n_facets} facet(s).")
+        self.status.setText(f"{total_curves} aligned curve(s) rendered across {n_facets} facet(s)"
+                            + (f"; {skipped} step(s) without data." if skipped else "."))
 
     def _on_scatter_clicked(self, item: Any, points: Sequence[Any]) -> None:
         if points:
@@ -1258,29 +1301,16 @@ class BarsViewWidget(QWidget):
                     parts.append((str(p[0]), str(p[1])))
                 else:
                     parts.append((str(p), str(p)))
-        else:
-            q = self.spec.quantity
-            p1 = f"b_{q}__"
-            p2 = f"u{q}_"
-            p3 = f"u_{q}_"
-            for c in sub.columns:
-                if c.startswith(p1):
-                    lab = c[len(p1):].replace("_mgC", "").replace("_m3_h", "").replace("_", " ")
-                    parts.append((c, lab))
-                elif c.startswith(p2) or c.startswith(p3):
-                    parts.append((c, c))
-            if not parts:
-                for c in sub.columns:
-                    if c.startswith("uX_"):
-                        parts.append((c, c[3:].replace("_", " ")))
+        else:  # the budget of the quantity: one column b_<quantity>__<input> per input
+            prefix = f"b_{self.spec.quantity}__"
+            parts = [(c, c[len(prefix):]) for c in sub.columns if c.startswith(prefix)]
 
         parts = [(c, lab) for c, lab in parts if c in sub.columns]
         if not parts:
             self.status.setText("No budget parts found in table.")
             return
 
-        id_col = next((c for c in ("step_id", "interval_id", "schritt", "id") if c in sub.columns), None)
-        step_ids = sub[id_col].to_list() if id_col else [f"step_{i}" for i in range(len(sub))]
+        step_ids = step_ids_of(sub)
 
         u_col = self.spec.u_total or f"u_{self.spec.quantity}"
         if u_col in sub.columns:
@@ -1290,10 +1320,15 @@ class BarsViewWidget(QWidget):
 
         n_steps = len(sub)
         x_indices = np.arange(n_steps)
+        ok = np.isfinite(u_vals)  # a bar without total uncertainty is left out, not drawn as 0
 
         p0 = self.glw.addPlot(row=0, col=0)
         p1 = self.glw.addPlot(row=1, col=0)
         p0.setXLink(p1)
+        for p in (p0, p1):  # same plot width in both rows (x linked in pixels), no SI prefix
+            p.getAxis("left").setWidth(52)
+            p.getAxis("left").enableAutoSIPrefix(False)
+            p.getViewBox().setMouseEnabled(x=True, y=False)
 
         p0.showGrid(x=False, y=True, alpha=0.3)
         p0.getAxis("left").setPen(AXIS)
@@ -1304,8 +1339,8 @@ class BarsViewWidget(QWidget):
         p0.getAxis("bottom").setTicks([])
 
         bg0 = pg.BarGraphItem(
-            x=x_indices,
-            height=u_vals,
+            x=x_indices[ok],
+            height=u_vals[ok],
             width=0.6,
             brush=pg.mkBrush(CAT[0]),
             pen=pg.mkPen(SURFACE, width=0.8),
@@ -1317,7 +1352,9 @@ class BarsViewWidget(QWidget):
         p1.getAxis("bottom").setPen(AXIS)
         p1.getAxis("left").setTextPen(INK2)
         p1.getAxis("bottom").setTextPen(INK2)
-        p1.setLabel("left", self.spec.y_label)
+        p1.setLabel("left", self.spec.y_label or f"Anteil an u²({self.spec.quantity})")
+        if self.spec.x_label:
+            p1.setLabel("bottom", self.spec.x_label)
         p1.setYRange(0, 1, padding=0)
 
         var_matrix = np.column_stack([np.nan_to_num(sub[c].to_numpy().astype(float), nan=0.0) ** 2 for c, _ in parts])
@@ -1326,12 +1363,13 @@ class BarsViewWidget(QWidget):
         shares = var_matrix / var_sum
         bottom = np.zeros(n_steps)
 
+        colors = part_colors(len(parts))
         for k, (c, lab) in enumerate(parts):
-            col_brush = pg.mkBrush(CAT[k % len(CAT)])
+            col_brush = pg.mkBrush(colors[k])
             bg1 = pg.BarGraphItem(
-                x=x_indices,
-                y0=bottom,
-                height=shares[:, k],
+                x=x_indices[ok],
+                y0=bottom[ok],
+                height=shares[ok, k],
                 width=0.6,
                 brush=col_brush,
                 pen=pg.mkPen(SURFACE, width=0.8),
@@ -1339,26 +1377,15 @@ class BarsViewWidget(QWidget):
             p1.addItem(bg1)
             bottom += shares[:, k]
 
-        tick_labels = []
-        for i in range(n_steps):
-            s_id = step_ids[i]
-            parts_txt = [str(s_id)]
-            if "T_bett" in sub.columns:
-                tb = sub["T_bett"][i]
-                if tb is not None:
-                    parts_txt.append(f"{tb:.0f} °C")
-            if "V_MFC" in sub.columns:
-                vm = sub["V_MFC"][i]
-                if vm is not None:
-                    parts_txt.append(f"{vm:g}")
-            tick_labels.append(" · ".join(parts_txt))
-
-        ticks = list(zip(x_indices, tick_labels))
-        p1.getAxis("bottom").setTicks([ticks])
+        tick_labels = (render_template(sub, self.spec.bar_label) if self.spec.bar_label
+                       else [str(s) for s in step_ids])
+        p1.getAxis("bottom").setTicks([list(zip(x_indices, tick_labels))])
+        fit_tick_text(p1.getAxis("bottom"), tick_labels)
+        p1.setXRange(-0.6, n_steps - 0.4, padding=0)  # room for the outer labels (cut off at the axis ends)
 
         add_layout_legend(
             self.glw,
-            [("Quelle", [(swatch(CAT[k % len(CAT)]), lab) for k, (_, lab) in reversed(list(enumerate(parts)))])],
+            [("Quelle", [(swatch(colors[k]), lab) for k, (_, lab) in reversed(list(enumerate(parts)))])],
             row=1, col=1,
         )
         self.status.setText(f"Rendered uncertainty budget for {n_steps} steps across {len(parts)} parts.")
@@ -1380,6 +1407,16 @@ class BarsViewWidget(QWidget):
 
 # ------------------------------------------------------------------ Report View Widget
 # ------------------------------------------------------------------ Timeline View Widget
+def part_colors(n: int) -> list[str]:
+    """n distinct colours: the categorical palette, then its colours lightened (no repeats up to 16)."""
+    out = list(CAT[:n])
+    k = 0
+    while len(out) < n:
+        out.append(QColor(CAT[k % len(CAT)]).lighter(150 + 30 * (k // len(CAT))).name())
+        k += 1
+    return out
+
+
 def ordinal_colors(values: Sequence[Any]) -> dict[Any, str]:
     """Colours of the distinct values: the ordinal blue ramp (numbers), else the categorical palette."""
     distinct = sorted({v for v in values if v is not None}, key=lambda v: (str(type(v)), v))

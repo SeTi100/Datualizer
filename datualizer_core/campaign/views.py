@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 from typing import Annotated, Any, Literal, Mapping, Sequence, Union
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from datualizer_core.calc.expr import FUNCTIONS, compile_expr
 
@@ -243,6 +243,11 @@ class XYViewSpec(BaseModel):
         default=None, description="Column to split plot into small multiples (facets) with shared axes"
     )
     facet_cols: int = Field(default=3, ge=1, le=10, description="Number of columns in faceting grid")
+    facet_label: str | None = Field(
+        default=None,
+        description="Template of each facet title, filled from the facet's steps, e.g. '≈ {T_klasse:.0f} °C'; "
+        "None = '<facet_by> = <value>'",
+    )
     ref_lines: list[RefLine] = Field(default_factory=list, description="Horizontal or vertical reference lines")
     secondary_x: SecondaryAxis | None = Field(
         default=None, description="Optional secondary (top) x-axis with mathematical coordinate transformation"
@@ -274,6 +279,11 @@ class XYViewSpec(BaseModel):
         if v is not None and v.strip():
             compile_expr(v)
         return v
+
+    @field_validator("facet_label")
+    @classmethod
+    def _facet_label_valid(cls, v: str | None) -> str | None:
+        return check_template(v)
 
     @field_validator("x_expr")
     @classmethod
@@ -357,12 +367,18 @@ class AlignedViewSpec(BaseModel):
         description="Formula over time series channel and step constants, e.g. '1 - (fid_mgC - B) * f / c_in'",
     )
     t0: Literal["step_start", "sequence_start"] = Field(
-        default="sequence_start",
-        description="Time origin: start of step, or start of cumulative loading sequence",
+        default="step_start",
+        description="Time origin: start of the step, or the first start of the steps with the same `sequence_col`",
     )
     sequence_col: str | None = Field(
         default=None,
-        description="Column identifying cumulative sequence (default: auto-detected from 'sequenz', 'sequence', 'beladung')",
+        description="With t0='sequence_start': column naming the sequence of a step, e.g. 'beladung_lauf' "
+        "(run number of a cumulative relation)",
+    )
+    sequence_steps: str | None = Field(
+        default=None,
+        description="Condition for the steps whose start can begin a sequence, e.g. klasse == 'dosierung' "
+        "(a zero phase that resets the loading does not); None = all steps",
     )
     rolling_s: float | None = Field(
         default=None,
@@ -373,6 +389,11 @@ class AlignedViewSpec(BaseModel):
         description="Column to facet small multiples by, e.g. 'T_klasse'",
     )
     facet_cols: int = Field(default=3, ge=1, le=10)
+    facet_label: str | None = Field(
+        default=None,
+        description="Template of each facet title, filled from the facet's steps, e.g. '≈ {T_klasse:.0f} °C'; "
+        "None = '<facet_by> = <value>'",
+    )
     color_by: str | None = Field(
         default=None,
         description="Column to color curves by, e.g. 'V_MFC' (dosing level)",
@@ -390,27 +411,35 @@ class AlignedViewSpec(BaseModel):
         default=None,
         description="Filter condition on steps to include",
     )
-    x_label: str = Field(default="Minuten seit Beginn der Beladung")
-    y_label: str = Field(default="Umsatz X(t)")
+    x_label: str = Field(default="t − t0 [min]")
+    y_label: str = ""
     x_lim: tuple[float, float] | None = None
     y_lim: tuple[float, float] | None = None
     ref_lines: list[RefLine] = Field(default_factory=list)
-    footer: str | None = Field(
-        default="Fällt X während der Dosierung, speichert der Katalysator zuerst Ethanol und bricht dann durch; "
-        "erst das Plateau ist der stationäre Umsatz."
-    )
+    footer: str | None = None
 
     @field_validator("name")
     @classmethod
     def _name_valid(cls, v: str) -> str:
         return _name(v, "View name")
 
-    @field_validator("filter", "filled")
+    @field_validator("filter", "filled", "sequence_steps")
     @classmethod
     def _cond_valid(cls, v: str | None) -> str | None:
         if v is not None and v.strip():
             compile_expr(v)
         return v
+
+    @field_validator("facet_label")
+    @classmethod
+    def _facet_label_valid(cls, v: str | None) -> str | None:
+        return check_template(v)
+
+    @model_validator(mode="after")
+    def _sequence_named(self) -> "AlignedViewSpec":
+        if self.t0 == "sequence_start" and not self.sequence_col:
+            raise ValueError(f"View {self.name!r}: t0='sequence_start' needs `sequence_col` (the column naming the sequence).")
+        return self
 
     @field_validator("expr")
     @classmethod
@@ -436,21 +465,25 @@ class BarsViewSpec(BaseModel):
     )
     parts: list[Any] | None = Field(
         default=None,
-        description="Uncertainty budget component columns, or (col, label) pairs. If None, auto-detected.",
+        description="Uncertainty budget component columns, or (col, label) pairs. None = the budget columns "
+        "'b_<quantity>__<input>' of the result table, labelled with the input.",
     )
     sort_by: list[str] = Field(
-        default_factory=lambda: ["T_bett"],
-        description="Columns to sort steps by along the horizontal axis",
+        default_factory=list,
+        description="Columns to sort steps by along the horizontal axis; empty = order of the table",
+    )
+    bar_label: str | None = Field(
+        default=None,
+        description="Template of the label under each bar, e.g. '{T_bett:.0f} °C' and a second line '{v_mfc:g}'; "
+        "None = step_id",
     )
     filter: str | None = Field(
         default=None,
         description="Filter condition on steps to include, e.g. 'stationaer' or 'stat_ok'",
     )
-    x_label: str = Field(default="Messschritte")
-    y_label: str = Field(default="Anteil an u²(X)")
-    footer: str | None = Field(
-        default="Systematische Anteile (syst.) wirken auf alle Stufen eines Tages gleich."
-    )
+    x_label: str = ""
+    y_label: str = Field(default="", description="Axis label of the shares; empty = 'Anteil an u²(<quantity>)'")
+    footer: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -463,6 +496,11 @@ class BarsViewSpec(BaseModel):
         if v is not None and v.strip():
             compile_expr(v)
         return v
+
+    @field_validator("bar_label")
+    @classmethod
+    def _bar_label_valid(cls, v: str | None) -> str | None:
+        return check_template(v)
 
 
 class TimelineTrace(BaseModel):

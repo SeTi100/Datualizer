@@ -396,7 +396,7 @@ class TestRelationModels:
             "gap_s": 300.0,
         })
         assert isinstance(r2, CumulativeRelation)
-        assert r2.columns() == ("beladung",)
+        assert r2.columns() == ("beladung", "beladung_lauf")
 
         r3 = ta.validate_python({
             "name": "T_klasse", "kind": "bin", "expr": "T_bett", "width": 25.0,

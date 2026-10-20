@@ -1,6 +1,6 @@
 """Formulas with uncertainty propagation (Etappe 2b, step 8); no GUI and no campaign imports."""
 
-from datualizer_core.calc.expr import FUNCTIONS, Expr, ExprError, compile_expr, evaluate, is_text, suggest_name
+from datualizer_core.calc.expr import FUNCTIONS, NUMBER_NAMES, Expr, ExprError, compile_expr, evaluate, is_text, suggest_name
 from datualizer_core.calc.relations import (
     BinRelation,
     CumulativeRelation,
@@ -23,6 +23,7 @@ __all__ = [
     "Expr",
     "ExprError",
     "FUNCTIONS",
+    "NUMBER_NAMES",
     "FallbackValue",
     "InputInfo",
     "NearestReferenceRelation",

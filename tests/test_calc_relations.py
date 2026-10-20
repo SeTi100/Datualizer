@@ -150,6 +150,25 @@ class TestNearestReference:
         assert math.isnan(res["B_vor"][z30_row])
         assert math.isnan(res["B_nach"][z30_row])
 
+    def test_fallback_from_a_parameter_per_day(self, catalysis_steps: pl.DataFrame):
+        """PR 10e: room air baseline as step parameter (journal cell or mapping default) per measuring day."""
+        table = catalysis_steps.with_columns(
+            pl.Series("raumluft", [2.09] * 6 + [float("nan"), 1.7])  # Z25 without a day value, Z30 another day
+        )
+        rel = NearestReferenceRelation.model_validate({
+            "name": "B", "value": "S_b", "where": "klasse == 'null' and abs(dS * 60) <= 0.1",
+            "match": ["T_soll", "luft"], "fallback": {"value": "raumluft", "u": "max(2.0, raumluft)"},
+        })
+        res = apply_relations(table, [rel])
+        z25, z30 = res.row(6, named=True), res.row(7, named=True)
+        assert z30["B"] == pytest.approx(1.7) and z30["u_B"] == pytest.approx(2.0) and z30["B_art"] == "keiner"
+        assert math.isnan(z25["B"]) and math.isnan(z25["u_B"]) and z25["B_art"] == "keiner"
+        assert res.row(2, named=True)["B_art"] == "eingeklammert"  # references still win
+        with pytest.raises(ExprError, match="fallback value of 'B'.*unknown name 'raum'"):
+            nearest_reference(table, name="B", value="S_b", where="klasse == 'null'", fallback={"value": "raum"})
+        with pytest.raises(ValidationError, match="syntax"):
+            FallbackValue(value="raumluft +")
+
     def test_one_sided_when_only_before_or_after_exists(self, catalysis_steps: pl.DataFrame):
         """Z25 at 175 °C has no matching zero phase at 175 °C either.
         If we match without T_soll (only luft), Z25 has Z6 before and none after -> einseitig."""

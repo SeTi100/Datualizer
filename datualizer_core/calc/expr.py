@@ -3,7 +3,9 @@
 A formula is parsed with Python's `ast` and checked against a positive list; it is never handed
 to `eval` or `exec`. Allowed are:
 
-- numbers; names, also dotted (``fid.mean`` is one name, not an attribute access);
+- numbers, also the named numbers ``nan`` and ``inf`` (`NUMBER_NAMES`, e.g.
+  ``where(ok, x, nan)`` blanks values out); names, also dotted (``fid.mean`` is one name, not an
+  attribute access);
 - ``+ - * / **``, unary ``-`` and ``+``, comparisons (also chained, ``0 < x <= 1``),
   ``and``, ``or``, ``not``, ``a if c else b``;
 - the functions in `FUNCTIONS`: log (natural), log10, exp, sqrt, abs, min, max (two or more
@@ -68,6 +70,9 @@ FUNCTIONS: dict[str, tuple[int, int | None, str]] = {
     "isfinite": (1, 1, "true for finite numbers"),
     "round": (1, 2, "round(x, n=0), half to even; carries no uncertainty"),
 }
+
+# names that stand for a number, never for a column (like the function names, they cannot be used as names)
+NUMBER_NAMES: dict[str, float] = {"nan": math.nan, "inf": math.inf}
 
 _TYPOGRAPHIC = str.maketrans({"−": "-", "·": "*", "×": "*"})
 
@@ -273,6 +278,8 @@ class _Compiler:
             if isinstance(v, bytes):
                 raise self.fail("byte strings are not allowed, only numbers and text", node)
             raise self.fail(f"constant {v!r} is not allowed, only numbers", node)
+        if isinstance(node, ast.Name) and node.id in NUMBER_NAMES:
+            return _Num(p, NUMBER_NAMES[node.id])
         if isinstance(node, (ast.Name, ast.Attribute)):
             return self.name(node)
         if isinstance(node, ast.UnaryOp):
@@ -801,4 +808,4 @@ def evaluate(text: str, env: Mapping[str, Any]) -> UArray:
     return compile_expr(text, env.keys()).evaluate(env)
 
 
-__all__ = ["FUNCTIONS", "Expr", "ExprError", "compile_expr", "evaluate", "is_text", "suggest_name"]
+__all__ = ["FUNCTIONS", "NUMBER_NAMES", "Expr", "ExprError", "compile_expr", "evaluate", "is_text", "suggest_name"]

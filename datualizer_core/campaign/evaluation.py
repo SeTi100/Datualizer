@@ -25,9 +25,9 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from datualizer_core.calc.analyses import Analysis
-from datualizer_core.calc.expr import FUNCTIONS, ExprError, compile_expr
+from datualizer_core.calc.expr import FUNCTIONS, NUMBER_NAMES, ExprError, compile_expr
 from datualizer_core.calc.relations import Relation
-from datualizer_core.calc.uncertain import Constant
+from datualizer_core.calc.uncertain import Constant, Kind
 from datualizer_core.campaign.views import ViewSpec
 from datualizer_core.campaign.intervals import DEFAULT_WINDOW, ResolvedInterval, WindowRule
 from datualizer_core.stats.window import WindowResult
@@ -78,8 +78,8 @@ def measure_value(r: WindowResult, stat: str, reading_u: float = 0.0) -> tuple[f
 
 
 def _name(value: str, what: str) -> str:
-    if not value.isidentifier() or value in FUNCTIONS:
-        raise ValueError(f"{what} {value!r} must be a name usable in formulas (letters, digits, '_', no function name).")
+    if not value.isidentifier() or value in FUNCTIONS or value in NUMBER_NAMES:
+        raise ValueError(f"{what} {value!r} must be a name usable in formulas (letters, digits, '_', no function name, not nan or inf).")
     return value
 
 
@@ -116,20 +116,50 @@ class NamedWindow(BaseModel):
 
 
 class Measure(BaseModel):
-    """One number per step: `stat` of `source/channel` in window `window`, called `alias`."""
+    """One number per step: `stat` of `source/channel` in window `window`, called `alias`.
+
+    `sources` instead of `source`: several sources with the same channel, in order of preference
+    (the FID in two files, the balance from a database and a video, one source per measuring day).
+    Each step takes the first source with enough points in the window (`min_n`, `min_coverage`);
+    which one is in the column `<alias>_quelle`. With one source the same thresholds apply: too
+    few points leave the value empty, with the counts in the checks.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     alias: str
-    source: str
+    source: str | None = None
+    sources: list[str] = Field(default_factory=list, description="Sources in order of preference (instead of source).")
     channel: str
     window: str = DEFAULT_WINDOW
     stat: str = "mean"
+    min_n: int = Field(1, ge=1, description="Fewest usable points in the window for a source to count.")
+    min_coverage: float = Field(
+        0.0, ge=0.0, le=1.0, description="Least covered share of the window (gaps, empty values do not cover)."
+    )
 
     @field_validator("alias")
     @classmethod
     def _alias(cls, v: str) -> str:
         return _name(v, "Alias")
+
+    @model_validator(mode="after")
+    def _one_way(self) -> "Measure":
+        if (self.source is None) == (not self.sources):
+            raise ValueError(f"Measure {self.alias!r}: give either source or sources (a list), not both or neither.")
+        if len(set(self.sources)) != len(self.sources):
+            raise ValueError(f"Measure {self.alias!r}: a source is listed twice in sources.")
+        return self
+
+    @property
+    def source_ids(self) -> list[str]:
+        """The sources tried, in order."""
+        return list(self.sources) if self.sources else [self.source]  # type: ignore[list-item]
+
+    @property
+    def source_column(self) -> str | None:
+        """Column with the source each step took (only with `sources`)."""
+        return f"{self.alias}_quelle" if self.sources else None
 
     @field_validator("stat")
     @classmethod
@@ -144,7 +174,14 @@ class Measure(BaseModel):
 
 
 class Calculation(BaseModel):
-    """A formula evaluated per step, propagating uncertainties via dual numbers."""
+    """A formula evaluated per step, propagating uncertainties via dual numbers.
+
+    `u_expr` adds an uncertainty of its own, given by a formula (e.g. the residual drift
+    ``abs(dXdt) * 10`` or the GUM uncertainty of a mass flow from two readings): an independent
+    input called like the calculation, of kind `kind` (and `group`), on top of what the inputs of
+    `expr` propagate. Only the value of `u_expr` counts, its own uncertainty does not. A negative
+    u fails loudly; where `u_expr` is NaN, u is NaN (nothing is assumed).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -153,6 +190,11 @@ class Calculation(BaseModel):
         min_length=1,
         description="Formula over step parameters, measures, relations, constants and earlier calculations.",
     )
+    u_expr: str | None = Field(
+        None, description="Formula of an additional standard uncertainty (an input named like the calculation)."
+    )
+    kind: Kind = Field("zufall", description="Kind of the u_expr input: 'zufall' (random) or 'syst'.")
+    group: str | None = Field(None, description="Group of the u_expr input (systematic inputs of one group correlate).")
     unit: str = ""
     note: str = ""
 
@@ -161,10 +203,11 @@ class Calculation(BaseModel):
     def _name_valid(cls, v: str) -> str:
         return _name(v, "Calculation")
 
-    @field_validator("expr")
+    @field_validator("expr", "u_expr")
     @classmethod
-    def _expr_valid(cls, v: str) -> str:
-        compile_expr(v)
+    def _expr_valid(cls, v: str | None) -> str | None:
+        if v is not None:
+            compile_expr(v)
         return v
 
     def columns(self) -> tuple[str, str, str, str]:
@@ -308,7 +351,7 @@ class Evaluation(BaseModel):
         for m in self.measures:
             if m.window != DEFAULT_WINDOW and m.window not in windows:
                 raise ValueError(f"Measure {m.alias!r}: unknown window {m.window!r}; defined are {[DEFAULT_WINDOW, *windows]}.")
-            for col in m.columns():
+            for col in [*m.columns(), *([m.source_column] if m.source_column else [])]:
                 if col in taken:
                     raise ValueError(f"Measure {m.alias!r}: column {col!r} is already {taken[col]}.")
                 taken[col] = f"a column of measure {m.alias!r}"

@@ -29,6 +29,7 @@ from datualizer_core.ingestion.readers import ExcelOptions, SqliteOptions, cell_
 SA = Path(__file__).parent / "fixtures" / "sa_12_10"
 FID_DAT = SA / "fid_ifid_12_10_extract.dat"
 FID_XLS = SA / "fid_ifid_05_10.xls"
+FID_CSV = SA / "fid_ifid_17_10_extract.csv"
 PICO = SA / "picolog_12_10_extract.csv"
 DB = SA / "instrument_reader_12_10_extract.db"
 OCR = SA / "ocr_recording_105012_extract.csv"
@@ -51,6 +52,7 @@ class TestProfiles:
     @pytest.mark.parametrize("path, name", [
         (FID_DAT, "testa_ifid_dat"),
         (FID_XLS, "testa_ifid_xls"),
+        (FID_CSV, "testa_ifid_csv"),
         (PICO, "picolog_csv"),
         (DB, "instrument_reader_db"),
         (OCR, "instrument_reader_ocr_csv"),
@@ -84,6 +86,16 @@ class TestAnalyzerExports:
         assert ds.units["conc"] == "mgC"
         # 11 s without samples in the device export (FID time 14:29:05-14:29:16)
         assert ds.quality_summary.filter(ds.quality_summary["flag"] == "gap")["n"].to_list() == [1]
+
+    def test_ifid_csv_export_has_the_columns_of_the_dat_export(self) -> None:
+        # from 15.10. the iFID wrote .csv: ';', every value quoted (PR 10a)
+        ds = load_source(FID_CSV)
+        assert ds.source_meta["profile"] == "testa_ifid_csv"
+        assert ds.shape == (30, 11)
+        assert ds.channels == load_source(FID_DAT).channels
+        assert ds.time_abs.dt.replace_time_zone(None)[0] == datetime(2026, 10, 17, 11, 24, 53)
+        assert ds.units["conc"] == "mgC"
+        assert ds.df["signal"][0] == pytest.approx(9.127)
 
     def test_ifid_xls_with_metadata_sheets(self) -> None:
         ds = load_source(FID_XLS)

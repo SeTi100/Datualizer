@@ -48,6 +48,7 @@ from datualizer_core.campaign.views import (
 )
 from datualizer_core.campaign.intervals import (
     CellValue,
+    ParameterLookup,
     Interval,
     IntervalConfigError,
     IntervalMapping,
@@ -115,6 +116,7 @@ __all__ = [
     "XYViewSpec",
     "classify_steps",
     "CellValue",
+    "ParameterLookup",
     "Interval",
     "IntervalConfigError",
     "IntervalMapping",

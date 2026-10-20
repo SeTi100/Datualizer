@@ -25,7 +25,7 @@ import numpy as np
 import polars as pl
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from datualizer_core.calc.expr import FUNCTIONS, Expr, ExprError, compile_expr
+from datualizer_core.calc.expr import FUNCTIONS, NUMBER_NAMES, Expr, ExprError, compile_expr
 from datualizer_core.calc.uncertain import UArray
 
 # Function available in relation expressions
@@ -35,21 +35,33 @@ RELATION_FUNCTIONS: dict[str, tuple[int, int | None, str]] = {
 
 
 def _name(value: str, what: str) -> str:
-    if not value.isidentifier() or value in FUNCTIONS:
+    if not value.isidentifier() or value in FUNCTIONS or value in NUMBER_NAMES:
         raise ValueError(
-            f"{what} {value!r} must be a name usable in formulas (letters, digits, '_', no function name)."
+            f"{what} {value!r} must be a name usable in formulas (letters, digits, '_', no function name, not nan or inf)."
         )
     return value
 
 
 # ------------------------------------------------------------------ Pydantic models
 class FallbackValue(BaseModel):
-    """Fallback reference value and standard uncertainty when no reference step is found."""
+    """Fallback reference value and standard uncertainty when no reference step is found.
+
+    Each is a number or a formula over the step table (PR 10e), e.g. the parameter ``raumluft``
+    that a journal cell (`CellValue`) or a mapping's `parameter_defaults` gives every step of a
+    measuring day. Where the formula is NaN the step has no reference (kind "keiner", value NaN).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    value: float
-    u: float = 0.0
+    value: float | str
+    u: float | str = 0.0
+
+    @field_validator("value", "u")
+    @classmethod
+    def _formula(cls, v: float | str) -> float | str:
+        if isinstance(v, str):
+            compile_expr(v)
+        return v
 
 
 class NearestReferenceRelation(BaseModel):
@@ -304,14 +316,15 @@ def nearest_reference(
     if name is None:
         name = value
 
-    # Normalize fallback
-    fb_val: float | None = None
-    fb_u: float | None = None
+    # Normalize fallback (numbers, or formulas evaluated over the table below)
+    fb_val: float | str | None = None
+    fb_u: float | str | None = None
     if fallback is not None:
         if isinstance(fallback, FallbackValue):
             fb_val, fb_u = fallback.value, fallback.u
         elif isinstance(fallback, dict):
-            fb_val, fb_u = float(fallback["value"]), float(fallback.get("u", 0.0))
+            fb = FallbackValue.model_validate(fallback)
+            fb_val, fb_u = fb.value, fb.u
         elif isinstance(fallback, (tuple, list)):
             fb_val = float(fallback[0])
             fb_u = float(fallback[1]) if len(fallback) > 1 else 0.0
@@ -344,6 +357,19 @@ def nearest_reference(
     expr = compile_expr(where, names=table.columns, text_names=text_names)
     where_res = expr.evaluate(env)
     where_arr = (where_res.value != 0) & ~np.isnan(where_res.value.astype(float))
+
+    def _per_row(spec: float | str | None, what: str) -> np.ndarray | None:
+        if spec is None:
+            return None
+        if not isinstance(spec, str):
+            return np.full(n, float(spec))
+        try:
+            res = compile_expr(spec, names=table.columns, text_names=text_names).evaluate(env)
+        except ExprError as e:
+            raise ExprError(f"fallback {what} of {name!r}: {e.message}", e.text, e.pos, e.known) from None
+        return np.broadcast_to(np.asarray(res.value, dtype=float), (n,)).copy()
+
+    fb_vals, fb_us = _per_row(fb_val, "value"), _per_row(fb_u, "u")
 
     # Times and IDs
     t_start, t_end = _time_columns(table)
@@ -441,9 +467,9 @@ def nearest_reference(
             out_art.append("einseitig")
         else:
             # None found
-            if fb_val is not None:
-                out_val[i] = fb_val
-                out_u[i] = fb_u if fb_u is not None else 0.0
+            if fb_vals is not None and np.isfinite(fb_vals[i]):
+                out_val[i] = fb_vals[i]
+                out_u[i] = fb_us[i] if fb_us is not None else 0.0
             out_quelle.append("")
             out_art.append("keiner")
 

@@ -315,6 +315,42 @@ class TestResultsComputation:
         with pytest.raises(KeyError, match="No scenario 'nonexistent'"):
             session.results(scenario="nonexistent", spec=ev)
 
+    def test_uncertainty_from_a_formula(self):
+        # PR 10c: 17.10. Z16, mass flow from the journal readings (GUM: 0.01 g/√12, ±5 s per time)
+        # and the residual drift |dX/dt| · 10 min of the script as inputs of their own
+        ev = Evaluation(
+            constants={"u_masse": Constant(value=0.01 / 12**0.5), "u_zeit": Constant(value=5.0)},
+            calculations=[
+                Calculation(
+                    name="mdot", expr="-(masse_0 - masse_1) / dauer_s", unit="g/s",
+                    u_expr="sqrt((sqrt(2) * u_masse / dauer_s)**2 + ((masse_0 - masse_1) * sqrt(2) * u_zeit / dauer_s**2)**2)",
+                ),
+                Calculation(name="drift", expr="0", u_expr="abs(dXdt) * 10", kind="zufall"),
+                Calculation(name="X", expr="0.5685 + drift"),
+            ],
+        )
+        df = pl.DataFrame({
+            "step_id": ["Z16", "Z99"], "dauer_s": [3114.0, 3114.0],
+            "masse_0": [9650.0, 9650.0], "masse_1": [9638.3, 9638.3], "dXdt": [0.00088, float("nan")],
+        })
+        session = CampaignSession()
+        session.step_table = lambda spec=None, config=None: df
+        res = session.results(spec=ev)
+        assert res["mdot"][0] * 3600 == pytest.approx(-13.526, abs=0.001)
+        assert res["u_mdot"][0] * 3600 == pytest.approx(0.0311, abs=0.0001)  # as the script
+        assert res["u_mdot_zufall"][0] == res["u_mdot"][0]
+        assert res["u_X"][0] == pytest.approx(0.0088, abs=1e-6)
+        assert res["b_X__drift"][0] == pytest.approx(0.0088, abs=1e-6)
+        assert np.isnan(res["u_X"][1])  # no drift known: u unknown, not 0
+
+        ev_syst = Evaluation(calculations=[Calculation(name="a", expr="2", u_expr="0.1", kind="syst", group="g")])
+        res = session.results(spec=ev_syst)
+        assert res["u_a_syst"][0] == pytest.approx(0.1) and res["u_a_zufall"][0] == 0.0
+
+        ev_neg = Evaluation(calculations=[Calculation(name="a", expr="1", u_expr="-dauer_s")])
+        with pytest.raises(ValueError, match="negative"):
+            session.results(spec=ev_neg)
+
     def test_unknown_variable_in_calculation_fails_loudly(self):
         ev = Evaluation(
             calculations=[Calculation(name="bad", expr="nonexistent_var * 2")],
@@ -377,6 +413,19 @@ class TestResultsPanelGui:
 
         panel._on_calc_expr_changed("1 - * 2")
         assert "✗" in panel.calc_syntax_label.text()
+
+        # An own uncertainty (PR 10c) is shown, kept when saving and can be set in the form
+        x_row = [c.name for c in session.campaign.evaluation.calculations].index("X")
+        panel.calc_table.selectRow(x_row)
+        assert panel.calc_u_edit.text() == ""
+        panel.calc_u_edit.setText("abs(dS) * 600")
+        panel._save_calc()
+        x = next(c for c in session.campaign.evaluation.calculations if c.name == "X")
+        assert x.u_expr == "abs(dS) * 600" and x.kind == "zufall"
+        assert panel.calc_table.item(x_row, 4).text() == "abs(dS) * 600 (zufall)"
+        panel.calc_table.clearSelection()
+        panel.calc_table.selectRow(x_row)
+        assert panel.calc_u_edit.text() == "abs(dS) * 600"
 
         # Check filter
         panel.filter_edit.setText("Z16")

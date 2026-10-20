@@ -14,6 +14,7 @@ from datualizer_core import TimeConfigError, load_csv
 from datualizer_core.campaign import (
     Campaign,
     CampaignSession,
+    CampaignSource,
     ClockAnchor,
     NO_VALUES,
     TIME_GAP,
@@ -152,6 +153,24 @@ class TestCampaignSession:
         assert "changed" in CampaignSession.open(tmp_path / "c.json").warnings[0]
         f.unlink()
         assert "not found" in CampaignSession.open(tmp_path / "c.json").warnings[0]
+
+    def test_data_folder_from_an_environment_variable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # PR 10: the example campaign lives in the repository, the measured data outside of it
+        data = tmp_path / "daten"
+        data.mkdir()
+        shutil.copyfile(FID_DAT, data / FID_DAT.name)
+        camp = tmp_path / "repo" / "campaign.json"
+        camp.parent.mkdir()
+        Campaign(sources=[CampaignSource(id="fid", path="${DATUALIZER_TEST_DIR}/" + FID_DAT.name)]).save(camp)
+        monkeypatch.delenv("DATUALIZER_TEST_DIR", raising=False)
+        s = CampaignSession.open(camp)
+        assert s.datasets == {}
+        assert s.warnings[0].startswith("fid: file not found") and "DATUALIZER_TEST_DIR not set" in s.warnings[0]
+        monkeypatch.setenv("DATUALIZER_TEST_DIR", str(data))
+        s = CampaignSession.open(camp)
+        assert s.warnings == [] and len(s.datasets["fid"].df) == 300
+        s.save(camp)  # the variable stays in the file, not the folder of this machine
+        assert Campaign.load(camp).source("fid").path == "${DATUALIZER_TEST_DIR}/" + FID_DAT.name
 
     def test_unknown_zone_fails_loudly(self) -> None:
         with pytest.raises(TimeConfigError):

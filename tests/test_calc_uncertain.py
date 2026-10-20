@@ -221,3 +221,13 @@ def test_arithmetic_operators_on_uarray():
     assert float(r.grads["a"]) == pytest.approx(-1.5 + 4.0)
     r2 = np.array([1.0, 2.0]) * a
     assert isinstance(r2, UArray) and r2.shape == (2,)
+
+
+def test_unused_branch_with_nan_uncertainty_does_not_spoil_the_budget():
+    # 12.10.: the OCR mass flow has no data (u NaN) where the journal value is taken (PR 10)
+    journal = UArray.input("mj", np.array([1.0, np.nan]), np.array([0.1, np.nan]))
+    ocr = UArray.input("mo", np.array([np.nan, 2.0]), np.array([np.nan, 0.2]))
+    r = evaluate("where(isfinite(mj), mj, mo)", {"mj": journal, "mo": ocr})
+    np.testing.assert_allclose(r.value, [1.0, 2.0])
+    np.testing.assert_allclose(r.u(), [0.1, 0.2])
+    np.testing.assert_allclose(r.budget()["mo"], [0.0, 0.2])

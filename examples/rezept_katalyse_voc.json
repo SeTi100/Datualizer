@@ -1,0 +1,550 @@
+{
+  "name": "Katalyse VOC (Umsatz am Monolith, FID vor/nach)",
+  "description": "Auswertung ohne Quellen: Messgrössen lesen Quellen-IDs (fid_*, pico_*, db_*), die eine neue Kampagne gleich benennt oder in 'measures' anpasst. Konstanten je Anlage ändern.",
+  "stats": {
+    "reading_u": {
+      "fid_12/fid_mgc": 0.1,
+      "fid_15a/fid_mgc": 0.1,
+      "fid_15b/fid_mgc": 0.1,
+      "fid_17/fid_mgc": 0.1
+    }
+  },
+  "evaluation": {
+    "constants": {
+      "f": {
+        "name": "f",
+        "value": 2.701,
+        "u": 0.135,
+        "note": "mgC -> mg Ethanol, RF 0.71 (5 %)"
+      },
+      "k_kal": {
+        "name": "k_kal",
+        "value": 1.0,
+        "u": 0.02,
+        "note": "Prüfgas-Zertifikat 2 %"
+      },
+      "k_luft": {
+        "name": "k_luft",
+        "value": 1.0,
+        "u": 0.072,
+        "scope": "tag",
+        "note": "Venturi/DS200 vs. Testo: Rechteck ±12.5 % -> 7.2 %"
+      },
+      "k_mdot": {
+        "name": "k_mdot",
+        "value": 1.0,
+        "u": 0.03,
+        "note": "Massenstrom OCR gegen Journal ±3 %"
+      },
+      "T_ref": {
+        "name": "T_ref",
+        "value": 24.4,
+        "u": 3.0,
+        "unit": "°C",
+        "note": "Einstell-Temperatur des Luftstroms"
+      },
+      "V_kat": {
+        "name": "V_kat",
+        "value": 0.0135,
+        "unit": "m3",
+        "note": "4 Monolithe 150³ mm"
+      },
+      "u_masse": {
+        "name": "u_masse",
+        "value": 0.0029,
+        "unit": "g",
+        "note": "Journal-Ablesung: 0.01 g / √12"
+      },
+      "u_zeit": {
+        "name": "u_zeit",
+        "value": 5.0,
+        "unit": "s",
+        "note": "Journal-Ablesezeit je Zeitpunkt"
+      },
+      "drift_h": {
+        "name": "drift_h",
+        "value": 10.0,
+        "unit": "min",
+        "note": "Horizont der Restdrift"
+      }
+    },
+    "step_classes": [
+      {
+        "name": "dosierung",
+        "when": "v_mfc > 0"
+      },
+      {
+        "name": "null",
+        "when": "v_mfc == 0"
+      }
+    ],
+    "windows": [
+      {
+        "name": "ende",
+        "rule": {
+          "length_s": 120.0
+        }
+      },
+      {
+        "name": "blank",
+        "rule": {
+          "length_s": 180.0
+        },
+        "classes": [
+          "null"
+        ]
+      },
+      {
+        "name": "steig",
+        "rule": {
+          "length_s": 300.0
+        }
+      },
+      {
+        "name": "tdrift",
+        "rule": {
+          "length_s": 600.0
+        }
+      },
+      {
+        "name": "masse",
+        "rule": {
+          "skip_start_s": 60.0
+        },
+        "classes": [
+          "dosierung"
+        ]
+      }
+    ],
+    "measures": [
+      {
+        "alias": "S",
+        "sources": [
+          "fid_12",
+          "fid_15a",
+          "fid_15b",
+          "fid_17"
+        ],
+        "channel": "fid_mgc",
+        "window": "ende",
+        "min_coverage": 0.5
+      },
+      {
+        "alias": "S_b",
+        "sources": [
+          "fid_12",
+          "fid_15a",
+          "fid_15b",
+          "fid_17"
+        ],
+        "channel": "fid_mgc",
+        "window": "blank",
+        "min_coverage": 0.5
+      },
+      {
+        "alias": "dS",
+        "sources": [
+          "fid_12",
+          "fid_15a",
+          "fid_15b",
+          "fid_17"
+        ],
+        "channel": "fid_mgc",
+        "window": "steig",
+        "stat": "slope",
+        "min_coverage": 0.5
+      },
+      {
+        "alias": "K1",
+        "sources": [
+          "pico_12",
+          "pico_15",
+          "pico_17"
+        ],
+        "channel": "kanal_1_kat_oben",
+        "window": "steig"
+      },
+      {
+        "alias": "K2",
+        "sources": [
+          "pico_12",
+          "pico_15",
+          "pico_17"
+        ],
+        "channel": "kanal_2_kat_unten",
+        "window": "steig"
+      },
+      {
+        "alias": "dK1",
+        "sources": [
+          "pico_12",
+          "pico_15",
+          "pico_17"
+        ],
+        "channel": "kanal_1_kat_oben",
+        "window": "tdrift",
+        "stat": "slope"
+      },
+      {
+        "alias": "mdot_w",
+        "sources": [
+          "db_12",
+          "ocr_12",
+          "db_15",
+          "db_17"
+        ],
+        "channel": "masse",
+        "window": "masse",
+        "stat": "slope",
+        "min_n": 30,
+        "min_coverage": 0.3
+      }
+    ],
+    "relations": [
+      {
+        "name": "B",
+        "value": "S_b",
+        "where": "klasse == 'null' and abs(dS * 60) <= 0.1",
+        "match": [
+          "temperatur",
+          "luft",
+          "tag"
+        ],
+        "fallback": {
+          "value": "raumluft",
+          "u": 2.0
+        },
+        "kind": "nearest_reference"
+      },
+      {
+        "name": "beladung",
+        "expr": "-(where(isfinite(-(masse_0 - masse_1) / where(isfinite(dauer_journal_s), dauer_journal_s, dauer_s)), -(masse_0 - masse_1) / where(isfinite(dauer_journal_s), dauer_journal_s, dauer_s), mdot_w)) * dauer_s",
+        "reset_when": "(klasse == 'null' and dauer_s >= 300) or changed(temperatur)",
+        "kind": "cumulative"
+      },
+      {
+        "name": "T_klasse",
+        "expr": "(K1 + K2) / 2",
+        "width": 25.0,
+        "kind": "bin"
+      }
+    ],
+    "calculations": [
+      {
+        "name": "mdot_j",
+        "expr": "-(masse_0 - masse_1) / where(isfinite(dauer_journal_s), dauer_journal_s, dauer_s)",
+        "u_expr": "sqrt((sqrt(2) * u_masse / where(isfinite(dauer_journal_s), dauer_journal_s, dauer_s))**2 + ((masse_0 - masse_1) * sqrt(2) * u_zeit / where(isfinite(dauer_journal_s), dauer_journal_s, dauer_s)**2)**2)",
+        "unit": "g/s",
+        "note": "Journal: Start- und Endmasse"
+      },
+      {
+        "name": "mdot",
+        "expr": "where(isfinite(mdot_j), mdot_j, mdot_w) * k_mdot",
+        "unit": "g/s",
+        "note": "Journal, sonst Regression der Waage"
+      },
+      {
+        "name": "V_N",
+        "expr": "luft * k_luft * 273.15 / (T_ref + 273.15)",
+        "unit": "Nm3/h"
+      },
+      {
+        "name": "c_in",
+        "expr": "-mdot * 3600 * 1000 / V_N",
+        "unit": "mg/Nm3"
+      },
+      {
+        "name": "dXdt",
+        "expr": "-dS * 60 * f / c_in",
+        "unit": "1/min"
+      },
+      {
+        "name": "drift",
+        "expr": "0",
+        "u_expr": "where(isfinite(dXdt), abs(dXdt) * drift_h, 0)",
+        "note": "Restdrift: so weit kann X nach dem Stufenende noch wandern"
+      },
+      {
+        "name": "X",
+        "expr": "1 - (S - B) * f * k_kal / c_in + drift"
+      },
+      {
+        "name": "T_bett",
+        "expr": "(K1 + K2) / 2",
+        "u_expr": "sqrt(1.5**2 + (K1 - K2)**2 / 12)",
+        "unit": "°C",
+        "note": "Thermoelement ⊕ Bett-Gradient (Rechteck)"
+      },
+      {
+        "name": "k",
+        "expr": "V_N * (T_bett + 273.15) / 273.15 / V_kat / 3600 * -log(1 - X)",
+        "unit": "1/s"
+      }
+    ],
+    "criteria": [
+      {
+        "name": "c_ok",
+        "expr": "c_in >= 60",
+        "text": "c_in < 60"
+      },
+      {
+        "name": "flach",
+        "expr": "abs(dS * 60) <= 0.1 or abs(dXdt) <= 0.004",
+        "text": "nicht stationär: FID nicht flach"
+      },
+      {
+        "name": "t_ok",
+        "expr": "not (abs(dK1 * 600) > 5)",
+        "text": "nicht stationär: Temperatur driftet"
+      },
+      {
+        "name": "geladen",
+        "expr": "beladung >= 3",
+        "text": "nicht stationär: Speicherphase (< 3 g dosiert)"
+      },
+      {
+        "name": "stationaer",
+        "expr": "flach and t_ok and geladen",
+        "text": "nicht stationär"
+      },
+      {
+        "name": "b_ok",
+        "expr": "B_art != 'keiner'",
+        "text": "kein Blindwert"
+      },
+      {
+        "name": "spread_ok",
+        "expr": "(abs(B_vor - B_nach) if B_art == 'eingeklammert' else 1) * f / c_in <= 0.05",
+        "text": "Blindwahl ändert X > Grenze"
+      }
+    ],
+    "ratings": [
+      {
+        "label": "gut",
+        "all_of": [
+          "c_ok",
+          "stationaer",
+          "b_ok",
+          "spread_ok"
+        ]
+      },
+      {
+        "label": "brauchbar",
+        "all_of": [
+          "c_ok"
+        ],
+        "any_of": [
+          "stationaer",
+          "b_ok"
+        ]
+      },
+      {
+        "label": "unsicher"
+      }
+    ],
+    "analyses": [
+      {
+        "name": "T50",
+        "x": "T_bett",
+        "y": "X",
+        "level": 0.5,
+        "group": "v_mfc",
+        "u_y": "u_X",
+        "where": "stationaer and bewertung != 'unsicher' and c_ok and luft == 100",
+        "unit": "°C",
+        "kind": "crossing"
+      },
+      {
+        "name": "T90",
+        "x": "T_bett",
+        "y": "X",
+        "level": 0.9,
+        "group": "v_mfc",
+        "u_y": "u_X",
+        "where": "stationaer and bewertung != 'unsicher' and c_ok and luft == 100",
+        "unit": "°C",
+        "kind": "crossing"
+      },
+      {
+        "name": "Arrhenius",
+        "x_expr": "1000 / (T_bett + 273.15)",
+        "y_expr": "log(k)",
+        "u_x": "1000 * u_T_bett / (T_bett + 273.15)**2",
+        "u_y": "u_X_zufall / ((1 - X) * -log(1 - X))",
+        "where": "stationaer and bewertung != 'unsicher' and c_ok and luft == 100 and X > 0.05 and X < 0.8",
+        "derived": {
+          "Ea_kJ_mol": "-m * 8.314"
+        },
+        "kind": "fit_line"
+      }
+    ],
+    "views": [
+      {
+        "name": "ergebnisse",
+        "title": "Alle stationären Ergebnisse",
+        "columns": [
+          "tag",
+          "step_label",
+          "temperatur",
+          "v_mfc",
+          "T_bett",
+          "c_in",
+          "X",
+          "u_X",
+          "B",
+          "B_art",
+          "bewertung",
+          "grund"
+        ],
+        "filter": "klasse == 'dosierung'",
+        "sort_by": [
+          "tag",
+          "step_start"
+        ],
+        "kind": "table"
+      },
+      {
+        "name": "umsatz_matrix",
+        "title": "Umsatz je Temperatur und Dosierstufe",
+        "rows": "T_klasse",
+        "cols": "v_mfc",
+        "value": "X",
+        "status": "stationaer and bewertung != 'unsicher'",
+        "filter": "klasse == 'dosierung' and luft == 100 and c_ok",
+        "x_label": "V_MFC [Nl/min]",
+        "y_label": "T_bett (25 K)",
+        "footer": "* nur nicht stationäre Stufen: Wert am Stufenende, zur Orientierung",
+        "kind": "matrix"
+      },
+      {
+        "name": "light_off",
+        "title": "Light-off",
+        "x": "T_bett",
+        "y": "X",
+        "u_y": "u_X",
+        "color_by": "v_mfc",
+        "color_mode": "ordinal",
+        "marker_by": "tag",
+        "filled": "stationaer",
+        "ref_lines": [
+          {
+            "value": 0.5,
+            "label": "T50",
+            "linestyle": "--"
+          },
+          {
+            "value": 0.9,
+            "label": "T90",
+            "linestyle": ":"
+          }
+        ],
+        "filter": "klasse == 'dosierung' and luft == 100 and c_ok and bewertung != 'unsicher'",
+        "x_label": "T_bett [°C]",
+        "y_label": "X",
+        "y_lim": [
+          0.0,
+          1.05
+        ],
+        "kind": "xy"
+      },
+      {
+        "name": "konzentration",
+        "title": "Umsatz gegen c_ein",
+        "x": "c_in",
+        "y": "X",
+        "u_y": "u_X",
+        "color_by": "v_mfc",
+        "color_mode": "ordinal",
+        "marker_by": "tag",
+        "filled": "stationaer",
+        "facet_by": "T_klasse",
+        "filter": "klasse == 'dosierung' and luft == 100 and c_ok",
+        "x_label": "c_ein [mg/Nm³]",
+        "y_label": "X",
+        "kind": "xy"
+      },
+      {
+        "name": "durchbruch",
+        "title": "Durchbruch seit Beginn der Beladung",
+        "expr": "1 - (fid_mgc - B) * f / c_in",
+        "rolling_s": 10.0,
+        "facet_by": "T_klasse",
+        "color_by": "v_mfc",
+        "marker_by": "tag",
+        "filled": "stationaer",
+        "filter": "klasse == 'dosierung' and c_ok",
+        "kind": "aligned"
+      },
+      {
+        "name": "arrhenius",
+        "title": "Arrhenius (scheinbare Ea)",
+        "x_expr": "1000 / (T_bett + 273.15)",
+        "y_expr": "log(k)",
+        "u_y": "u_X_zufall / ((1 - X) * -log(1 - X))",
+        "color_by": "v_mfc",
+        "color_mode": "ordinal",
+        "marker_by": "tag",
+        "secondary_x": {
+          "label": "T [°C]",
+          "forward_expr": "1000 / x - 273.15",
+          "inverse_expr": "1000 / (x + 273.15)"
+        },
+        "filter": "stationaer and bewertung != 'unsicher' and c_ok and luft == 100 and X > 0.05 and X < 0.8",
+        "x_label": "1000 / T [1/K]",
+        "y_label": "ln k",
+        "kind": "xy"
+      },
+      {
+        "name": "blindwerte",
+        "title": "FID am Ende der Null-Phasen",
+        "x": "temperatur",
+        "y": "S_b",
+        "marker_by": "tag",
+        "filled": "abs(dS * 60) <= 0.1",
+        "filter": "klasse == 'null'",
+        "x_label": "T_soll [°C]",
+        "y_label": "FID [mgC]",
+        "kind": "xy"
+      },
+      {
+        "name": "reproduzierbarkeit",
+        "title": "Gleiche Bedingungen an verschiedenen Tagen",
+        "x": "T_bett",
+        "y": "X",
+        "u_y": "u_X",
+        "color_by": "tag",
+        "color_mode": "categorical",
+        "marker_by": "tag",
+        "filled": "stationaer",
+        "facet_by": "v_mfc",
+        "filter": "klasse == 'dosierung' and luft == 100 and c_ok",
+        "x_label": "T_bett [°C]",
+        "y_label": "X",
+        "kind": "xy"
+      },
+      {
+        "name": "unsicherheit",
+        "title": "Unsicherheitsbudget von X",
+        "filter": "stationaer and klasse == 'dosierung'",
+        "kind": "bars"
+      },
+      {
+        "name": "bericht",
+        "title": "Messkampagne Ethanol",
+        "subtitle": "SA, 12./15./17.10.2026",
+        "views": [
+          "umsatz_matrix",
+          "light_off",
+          "konzentration",
+          "durchbruch",
+          "arrhenius",
+          "blindwerte",
+          "reproduzierbarkeit",
+          "unsicherheit",
+          "ergebnisse"
+        ],
+        "kind": "report"
+      }
+    ]
+  }
+}

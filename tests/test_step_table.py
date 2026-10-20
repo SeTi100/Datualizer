@@ -277,6 +277,44 @@ class TestStepTable:
         with pytest.raises(KeyError, match="no channel 'nope'"):
             session.step_table(Evaluation(measures=[Measure(alias="x", source="scale", channel="nope")]))
 
+    def test_measure_from_several_sources(self, session: CampaignSession) -> None:
+        # PR 10d: the scale of 12.10. in the database (afternoon) and in a video (morning, clock 15 s late);
+        # invalid OCR readings blanked out with nan (PR 10b) in a calculated channel of the same name
+        from datualizer_core.campaign import ClockModel
+        from datualizer_core.campaign.derived import DerivedChannel
+
+        session.add_source(SA / "ocr_recording_105012_extract.csv", source_id="ocr")
+        session.set_clock("ocr", ClockModel(offset_s=-15, method="manual"))
+        session.add_derived("ocr", DerivedChannel(
+            name="masse", expr="where(is_valid == 1 and mass_g > 9600 and mass_g < 9700, mass_g, nan)", unit="g"))
+        m = Measure(alias="mdot", sources=["scale", "ocr"], channel="masse", stat="slope", min_n=30)
+        table = session.step_table(Evaluation(step_classes=CLASSES, measures=[m]))
+        by_id = {r["step_id"]: r for r in table.iter_rows(named=True)}
+        assert by_id["journal:2"]["mdot_quelle"] == "ocr" and by_id["journal:2"]["mdot"] < 0
+        assert by_id[T155_V1]["mdot_quelle"] == "scale" and by_id[T155_V1]["u_mdot"] > 0
+        assert "not taken: scale: n = 0" in by_id["journal:2"]["checks_mdot"]
+        few = by_id["journal:1"]  # 7 OCR readings at the end of the step: not enough
+        assert few["mdot"] is None and few["mdot_quelle"] is None
+        assert few["checks_mdot"].startswith("no source with enough points: scale: n = 0")
+        assert "ocr: n = 7" in few["checks_mdot"] and "needs n ≥ 30" in few["checks_mdot"]
+
+        # a single source with a threshold: too few points leave the value empty
+        one = Measure(alias="m1", source="ocr", channel="masse", stat="slope", min_coverage=0.9)
+        row = session.step_table(Evaluation(measures=[one])).filter(lambda_id("journal:2")).row(0, named=True)
+        assert row["m1"] is None and row["checks_m1"].startswith("too few points: ocr: n = ")
+        assert "m1_quelle" not in session.step_table(Evaluation(measures=[one])).columns
+
+    def test_measure_needs_one_way_to_its_source(self) -> None:
+        with pytest.raises(ValidationError, match="either source or sources"):
+            Measure(alias="m", channel="masse")
+        with pytest.raises(ValidationError, match="either source or sources"):
+            Measure(alias="m", source="a", sources=["b"], channel="masse")
+        with pytest.raises(ValidationError, match="listed twice"):
+            Measure(alias="m", sources=["a", "a"], channel="masse")
+        with pytest.raises(ValidationError, match="m_quelle"):
+            Evaluation(measures=[Measure(alias="m", sources=["a"], channel="x"),
+                                 Measure(alias="m_quelle", source="a", channel="x")])
+
     def test_campaign_json_roundtrip(self, session: CampaignSession, tmp_path: Path) -> None:
         session.set_evaluation(self._spec())
         session.save(tmp_path / "campaign.json")

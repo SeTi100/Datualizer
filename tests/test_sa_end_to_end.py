@@ -3,7 +3,8 @@
 `examples/campaign_SA_ethanol.json` on the real data of 12., 15. and 17.10.2026 must give what
 `SA/auswertung/sa_auswertung.py` wrote to `ergebnisse_auto/<tag>/schritte.csv` (plan, section 7):
 X ± 0.005, c_in ± 0.5 %, u(X) ± 10 %, T_bett ± 0.2 K, rating and stationarity equal, and across
-all days T50 (10 Nl/min 179 °C, 20 Nl/min 203 °C) and Ea 21 ± 4 kJ/mol from 8 steps.
+all days T50 (10 Nl/min 179 °C, 20 Nl/min 203 °C) and Ea 21 ± 4 kJ/mol from 8 steps. PR 11 adds the
+carbon balance per dosing cycle (`bilanz.csv`) and the page count of the report (`katalyse_bericht.pdf`).
 
 The data never go into the repository: the test runs only where DATUALIZER_SA_DIR names the SA
 folder (with `auswertung/ergebnisse_auto`), otherwise it is skipped. Steps the reference names
@@ -149,3 +150,52 @@ def test_arrhenius_over_all_days(session: CampaignSession) -> None:
     assert ours == pytest.approx(ea, abs=0.5) and u_ours == pytest.approx(u_ea, abs=0.5)
     gls, u_gls, _ = fit.derived["Ea_kJ_mol"]
     assert abs(gls - ea) < u_gls  # the two readings agree within the uncertainty
+
+
+def test_carbon_balance_per_dosing_cycle(results: pl.DataFrame) -> None:
+    """Cycle = dosing step + following zero phases up to the next dosing (≤ 60 min), as `balance()`
+    in sa_auswertung.py: ∫(FID − blank before) · f · V̇_N dt over the cycle / dosed mass.
+    The script sums samples × median spacing, the campaign integrates by trapezoids (gaps not bridged)."""
+    parts = []
+    for day in DAYS:
+        ref = pl.read_csv(REFERENCE / day / "bilanz.csv", separator=";", decimal_comma=True)
+        parts.append(ref.select(pl.lit(day).alias("tag"), "schritt", "dosiert_mg", "anteil_sichtbar"))
+    ref = pl.concat(parts)
+    ours = results.filter(pl.col("klasse") == "dosierung").select("tag", "schritt", "dosiert", "anteil", "u_anteil")
+    both = ref.join(ours, on=["tag", "schritt"], how="full", coalesce=True)
+    assert both.filter(pl.col("anteil").is_null() | pl.col("anteil_sichtbar").is_null()).is_empty()
+    off = both.filter(
+        ((pl.col("dosiert") / pl.col("dosiert_mg") - 1).abs() > 1e-3)
+        | ((pl.col("anteil") - pl.col("anteil_sichtbar")).abs() > pl.max_horizontal(0.005, 0.01 * pl.col("anteil_sichtbar").abs()))
+    )
+    assert off.is_empty(), off.to_dicts()
+    assert both["u_anteil"].is_finite().all()
+
+
+def test_report_has_the_pages_of_the_script(tmp_path: Path) -> None:
+    """Cover, matrix, light-off, c_in, breakthrough, Arrhenius, one course per day, blanks, balance,
+    reproducibility, budget, table: as many pages as katalyse_bericht.pdf."""
+    import tempfile
+
+    from PySide6.QtCore import QSettings
+
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, tempfile.mkdtemp())
+    from PySide6.QtPdf import QPdfDocument
+    from PySide6.QtWidgets import QApplication
+
+    from datualizer_gui.campaign_window import CampaignWindow
+
+    app = QApplication.instance() or QApplication([])
+    win = CampaignWindow()
+    win.open_campaign(EXAMPLE)
+    out = win.export_report(tmp_path / "bericht.pdf")
+    pages = []
+    for pdf in (out, REFERENCE / "katalyse" / "katalyse_bericht.pdf"):
+        doc = QPdfDocument()
+        doc.load(str(pdf))
+        pages.append(doc.pageCount())
+        doc.close()
+    win.close()
+    win.deleteLater()
+    app.processEvents()
+    assert pages[0] == pages[1] == 14

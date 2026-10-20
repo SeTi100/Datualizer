@@ -30,7 +30,7 @@ from datualizer_core.calc.relations import Relation
 from datualizer_core.calc.uncertain import Constant, Kind
 from datualizer_core.campaign.views import ViewSpec
 from datualizer_core.campaign.intervals import DEFAULT_WINDOW, ResolvedInterval, WindowRule
-from datualizer_core.stats.window import WindowResult
+from datualizer_core.stats.window import StatsConfig, WindowResult
 
 # Columns of the step table before the parameters; parameters and aliases must not take these names
 STEP_COLUMNS = ("step_id", "step_label", "step_start", "step_end", "dauer_s", "klasse", "klasse_hinweis")
@@ -43,6 +43,8 @@ MEASURE_U: dict[str, str | None] = {
     "slope": "slope_se_eff",
     "two_point": "two_point_u",
     "integral": "integral_u",
+    "covered_s": "0 (counted time, e.g. to subtract a baseline from an integral)",
+    "n": "0 (a count)",
 }
 _NOT_A_NUMBER = {"quantiles", "slope_ts_ci", "checks", "assumptions"}
 MEASURE_STATS: tuple[str, ...] = tuple(
@@ -55,7 +57,8 @@ def measure_value(r: WindowResult, stat: str, reading_u: float = 0.0) -> tuple[f
     """(value, standard uncertainty) of a statistic; truth values as 1/0, u None where none is defined.
 
     mean: √(sem_eff² + reading_u²) – the reading uncertainty (type B, e.g. the zero point) does not
-    average out; slope: the larger of the HAC and AR(1) SE; two_point: its GUM u; integral: integral_u.
+    average out; slope: the larger of the HAC and AR(1) SE; two_point: its GUM u; integral: integral_u;
+    covered_s and n: 0 (counted, not estimated).
     """
     value = getattr(r, stat)
     if isinstance(value, bool):
@@ -72,6 +75,8 @@ def measure_value(r: WindowResult, stat: str, reading_u: float = 0.0) -> tuple[f
         u = r.two_point_u
     elif stat == "integral":
         u = r.integral_u
+    elif stat in ("covered_s", "n"):
+        u = 0.0
     else:
         u = None
     return value, u
@@ -99,13 +104,27 @@ class StepClass(BaseModel):
 
 
 class NamedWindow(BaseModel):
-    """A window rule with a name; `classes` = only for steps of these classes (empty = all steps)."""
+    """A window rule with a name; `classes` = only for steps of these classes (empty = all steps).
+
+    `until_next`: the window reaches past the step's end up to the start of the next step of this
+    class (a cycle: a dosing step and the zero phases after it), at most `max_extend_s` past the
+    end. Without a next step it ends `max_extend_s` after the step (or at the step's end if that is
+    not set; the note says so). The rule then applies to the extended span.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
     rule: WindowRule = Field(default_factory=WindowRule)
     classes: list[str] = Field(default_factory=list)
+    until_next: str | None = Field(None, description="Extend up to the start of the next step of this class.")
+    max_extend_s: float | None = Field(None, gt=0.0, description="With until_next: at most this long past the step's end.")
+
+    @model_validator(mode="after")
+    def _extend_needs_class(self) -> "NamedWindow":
+        if self.max_extend_s is not None and self.until_next is None:
+            raise ValueError(f"Window {self.name!r}: max_extend_s only applies with until_next (a step class).")
+        return self
 
     @field_validator("name")
     @classmethod
@@ -123,6 +142,10 @@ class Measure(BaseModel):
     Each step takes the first source with enough points in the window (`min_n`, `min_coverage`);
     which one is in the column `<alias>_quelle`. With one source the same thresholds apply: too
     few points leave the value empty, with the counts in the checks.
+
+    `exclude_flags`: quality flags left out for this measure instead of `StatsConfig.exclude_flags`
+    (e.g. only ``["masked"]`` for an integral over a fast rise, where the spike flag would cut
+    real peaks out; flagged points are never bridged).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -136,6 +159,9 @@ class Measure(BaseModel):
     min_n: int = Field(1, ge=1, description="Fewest usable points in the window for a source to count.")
     min_coverage: float = Field(
         0.0, ge=0.0, le=1.0, description="Least covered share of the window (gaps, empty values do not cover)."
+    )
+    exclude_flags: list[str] | None = Field(
+        None, description="Flags left out for this measure; None = those of the campaign's stats settings."
     )
 
     @field_validator("alias")
@@ -167,6 +193,12 @@ class Measure(BaseModel):
         if v not in MEASURE_STATS:
             raise ValueError(f"Unknown statistic {v!r}; possible are {', '.join(MEASURE_STATS)}.")
         return v
+
+    def stats_config(self, cfg: StatsConfig) -> StatsConfig:
+        """The statistics settings this measure uses (`exclude_flags` replaced if given)."""
+        if self.exclude_flags is None or self.exclude_flags == cfg.exclude_flags:
+            return cfg
+        return cfg.model_copy(update={"exclude_flags": list(self.exclude_flags)})
 
     def columns(self) -> tuple[str, str, str]:
         """Its columns in the step table: value, standard uncertainty, checks."""
@@ -329,6 +361,15 @@ class Evaluation(BaseModel):
             unknown = [c for c in w.classes if c not in classes]
             if unknown:
                 raise ValueError(f"Window {w.name!r}: unknown class(es) {', '.join(unknown)}; defined are {classes}.")
+            if w.until_next is not None and w.until_next not in classes:
+                raise ValueError(f"Window {w.name!r}: until_next names unknown class {w.until_next!r}; defined are {classes}.")
+
+        window_names = set(self.window_names())
+        for v in self.views:
+            for panel in getattr(v, "panels", []):
+                for mk in panel.marks:
+                    if mk.at == "window" and mk.window not in window_names:
+                        raise ValueError(f"View {v.name!r}: marks over unknown window {mk.window!r}; defined are {sorted(window_names)}.")
 
         known_criteria = set(crit_names)
         for rat in self.ratings:

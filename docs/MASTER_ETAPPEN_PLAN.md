@@ -155,7 +155,7 @@ flowchart TD
    - PR 6–8 ✅ Auswertungen über Schritte (`crossing`, `fit_line`, `aggregate`, Korrelation je `scope`), Ergebnisfenster mit Ansichten, `aligned`, `bars`, PDF-Bericht.
    - PR 10 ✅ Lücken aus dem Probelauf: Profil `testa_ifid_csv`, `nan`/`inf` im Formelkern, `Calculation.u_expr` (Unsicherheit aus einer Formel), `Measure.sources` mit `min_n`/`min_coverage`, Rückfall des Blindwerts als Formel (`raumluft` je Tag), `ParameterLookup` (Parameter aus der nächsten Zeile einer zweiten Tabelle), Pfade über Umgebungsvariablen, `FitLineResult.derived_zufall`, `session.apply_recipe` und Menü *Evaluation from Template…*.
 9. ⏳ **Video-Spur:** Frame-Ansicht synchron zur Kampagnenuhr, Anker aus im Bild abgelesener Uhrzeit.
-10. ✅ **Beispielkampagne + Doku:** `examples/campaign_SA_ethanol.json` (drei Messtage, Daten über `DATUALIZER_SA_DIR`), Rezept `examples/rezept_katalyse_voc.json`, Orakeltest `tests/test_sa_end_to_end.py` gegen die Skript-Auswertung (alle 61 Dosierstufen in den Toleranzen), Rundgang in [`BENUTZUNG.md`](BENUTZUNG.md#rundgang-die-sa-kampagne-mit-echten-daten). Offen: Tagesverlauf und Kohlenstoff-Bilanz als Berichtsseiten.
+10. ✅ **Beispielkampagne + Doku:** `examples/campaign_SA_ethanol.json` (drei Messtage, Daten über `DATUALIZER_SA_DIR`), Rezept `examples/rezept_katalyse_voc.json`, Orakeltest `tests/test_sa_end_to_end.py` gegen die Skript-Auswertung (alle 61 Dosierstufen in den Toleranzen), Rundgang in [`BENUTZUNG.md`](BENUTZUNG.md#rundgang-die-sa-kampagne-mit-echten-daten). PR 11 ✅: Tagesverlauf (Ansicht `timeline`, eine Seite je Tag) und Kohlenstoff-Bilanz (Zyklus-Fenster `until_next`, Statistik `covered_s`) als Berichtsseiten; der Bericht hat 14 Seiten wie die Skript-Auswertung.
 
 ---
 

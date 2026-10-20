@@ -36,6 +36,7 @@ from datualizer_core.campaign.evaluation import (
     DEFAULT_WINDOW,
     STEP_COLUMNS,
     Evaluation,
+    NamedWindow,
     Scenario,
     StepClassification,
     StepWindow,
@@ -837,14 +838,15 @@ class CampaignSession:
 
     def step_window(
         self, step: str | ResolvedInterval, window: str = DEFAULT_WINDOW, klasse: str | None | bool = False,
-        evaluation: Evaluation | None = None,
+        evaluation: Evaluation | None = None, classes: StepClassification | None = None,
     ) -> StepWindow:
         """Window `window` of one step on master time (KeyError for an unknown step or window).
 
         `default` is the step's window from the window rule (or set by hand). A named window
         applies its rule to the step, unless it is only for other classes (then `applies` is
         False). `klasse`: the step's class if already known (False = look it up).
-        `evaluation`: where the named windows are defined (default the campaign's).
+        `evaluation`: where the named windows are defined (default the campaign's). `classes`:
+        the classes of all steps if already known (for windows that reach to the next step).
         """
         iv = self.intervals().get(step) if isinstance(step, str) else step
         nw = (evaluation or self.campaign.evaluation).window(window)
@@ -859,8 +861,32 @@ class CampaignSession:
         if ov is not None:
             zone = self.campaign.timezone
             return StepWindow(window, (to_epoch_s(ov.start, zone), to_epoch_s(ov.end, zone)), True, True)
-        w = nw.rule.apply(iv.start, iv.end)
-        return StepWindow(window, w, True, note="" if w is not None else f"window rule '{window}' leaves nothing")
+        end, note = iv.end, ""
+        if nw.until_next is not None:
+            end, note = self._extended_end(iv, nw, classes, evaluation)
+        w = nw.rule.apply(iv.start, end)
+        if w is None:
+            note = f"window rule '{window}' leaves nothing"
+        return StepWindow(window, w, True, note=note)
+
+    def _extended_end(
+        self, iv: ResolvedInterval, nw: NamedWindow, classes: StepClassification | None, evaluation: Evaluation | None,
+    ) -> tuple[float, str]:
+        """End of a window that reaches up to the next step of class `nw.until_next` (see `NamedWindow`)."""
+        if classes is None:
+            ev = evaluation or self.campaign.evaluation
+            classes = self.step_classes() if evaluation is None else classify_steps(self.intervals().intervals, ev.step_classes)
+        later = [s.start for s in self.intervals().intervals
+                 if s.start > iv.start and s.id != iv.id and classes.of(s.id) == nw.until_next]
+        cap = iv.end + nw.max_extend_s if nw.max_extend_s is not None else None
+        if later:
+            nxt = min(later)
+            if cap is not None and cap < nxt:
+                return cap, f"ends {nw.max_extend_s:g} s after the step (next '{nw.until_next}' step later)"
+            return max(nxt, iv.end), ""
+        if cap is not None:
+            return cap, f"no later '{nw.until_next}' step: ends {nw.max_extend_s:g} s after the step"
+        return iv.end, f"no later '{nw.until_next}' step: ends with the step"
 
     def preview_steps(self, m: IntervalMapping):
         """Steps a mapping would give (without storing it); unknown columns raise IntervalConfigError."""
@@ -1115,9 +1141,10 @@ class CampaignSession:
         for m in ev.measures:
             ev.window(m.window)
         have = {src.id for src in self.campaign.sources}
+        flags = lambda m: tuple(m.stats_config(cfg).exclude_flags)  # noqa: E731
         inputs = {
-            (sid, m.channel): (
-                self._stats_input(sid, m.channel, cfg) if sid in have or len(m.source_ids) == 1
+            (sid, m.channel, flags(m)): (
+                self._stats_input(sid, m.channel, m.stats_config(cfg)) if sid in have or len(m.source_ids) == 1
                 else _StatsInput(sid, m.channel, "", "not in this campaign", 0.0, None, None)
             )
             for m in ev.measures for sid in m.source_ids
@@ -1139,7 +1166,7 @@ class CampaignSession:
                 row[col] = row[u_col] = row[checks_col] = None
                 if m.source_column:
                     row[m.source_column] = None
-                sw = self.step_window(iv, m.window, klasse, ev)
+                sw = self.step_window(iv, m.window, klasse, ev, classes)
                 if not sw.applies:
                     continue
                 if sw.window is None:
@@ -1150,16 +1177,16 @@ class CampaignSession:
                 strict = len(m.source_ids) > 1 or m.min_n > 1 or m.min_coverage > 0
                 needs = f"n ≥ {m.min_n}" + (f", coverage ≥ {m.min_coverage:.0%}" if m.min_coverage > 0 else "")
                 for sid in m.source_ids:
-                    inp = inputs[(sid, m.channel)]
+                    inp = inputs[(sid, m.channel, flags(m))]
                     if isinstance(inp.data, str):
                         if len(m.source_ids) == 1:
                             row[checks_col] = inp.data
                             break
                         passed.append(f"{sid}: {inp.data}")
                         continue
-                    key = (sid, m.channel, sw.window)
+                    key = (sid, m.channel, sw.window, flags(m))
                     if key not in results:
-                        results[key] = inp.run(WindowSpec(*sw.window), cfg)
+                        results[key] = inp.run(WindowSpec(*sw.window), m.stats_config(cfg))
                     r = results[key]
                     if strict and (r.n < m.min_n or r.coverage < m.min_coverage):
                         passed.append(f"{sid}: n = {r.n}, coverage {r.coverage:.0%} (needs {needs})")

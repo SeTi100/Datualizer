@@ -3,7 +3,13 @@
 Defines serializable ViewSpec models:
 - TableViewSpec (columns, filter expression, sort)
 - XYViewSpec (scatter and line plots with error bars, styling, faceting, ref lines, secondary axis)
-- MatrixViewSpec (rows, cols, value, status expression, subtext, sequential color scale)
+- MatrixViewSpec (rows, cols, value, status expression, subtext template, sequential color scale)
+- TimelineViewSpec (time course of channels with step bands and per-step marks, one page per
+  value of `page_by`, e.g. one page per measuring day)
+
+Texts with fields (`MatrixViewSpec.subtext`, `TimelineViewSpec.band_label`, `page_title`) are
+templates: `{formula:format}` takes a column or formula of the result table, e.g.
+``"{c_in:.0f} mg/Nm³"`` (`render_template`).
 
 These models are referenced in Evaluation.views in campaign.json and rendered in datualizer_gui/results_window.py.
 Import rule: No GUI dependencies here (principle from AGENTS.md).
@@ -11,6 +17,7 @@ Import rule: No GUI dependencies here (principle from AGENTS.md).
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal, Sequence, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -23,6 +30,83 @@ def _name(value: str, what: str) -> str:
             f"{what} {value!r} must be a name usable in formulas (letters, digits, '_', no function name)."
         )
     return value
+
+
+_FIELD = re.compile(r"\{([^{}]+)\}")
+_OPEN, _CLOSE = "\x00", "\x01"  # stand-ins for literal braces '{{' and '}}'
+
+
+def template_fields(template: str) -> list[tuple[str, str]]:
+    """(formula, format spec) of every `{formula:format}` field; `{{` and `}}` are literal braces."""
+    out = []
+    for m in _FIELD.finditer(template.replace("{{", _OPEN).replace("}}", _CLOSE)):
+        expr, _, fmt = m.group(1).partition(":")
+        out.append((expr.strip(), fmt))
+    return out
+
+
+def check_template(template: str | None) -> str | None:
+    """Raise ValueError if a field is no valid formula or format (names are checked on use)."""
+    if template:
+        for expr, fmt in template_fields(template):
+            if not expr:
+                raise ValueError(f"Empty field in template {template!r}.")
+            compile_expr(expr)
+            try:
+                format(1.0, fmt)
+            except ValueError:
+                raise ValueError(f"Format {fmt!r} in template {template!r} is not a number format.") from None
+    return template
+
+
+def _format_value(value: Any, fmt: str) -> str:
+    if value is None or (isinstance(value, float) and value != value):
+        return "–"
+    if isinstance(value, (bool, str)):
+        return str(value)
+    try:
+        return format(float(value), fmt or "g")
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def render_template(table: Any, template: str, reduce: bool = False) -> list[str] | str:
+    """The template filled from a result table: one text per row, or one for all rows (`reduce`).
+
+    `reduce`: numbers are averaged over the rows (NaN left out), differing texts joined with ", ".
+    A field without a value gives "–". Unknown names raise ExprError (with suggestions).
+    """
+    import numpy as np
+
+    fields = template_fields(template)
+    n = len(table)
+    columns: list[np.ndarray] = []
+    for expr, _ in fields:
+        vals = eval_table_expr(table, expr) if n else None
+        columns.append(np.broadcast_to(np.asarray(vals), (n,)) if n else np.array([]))
+
+    def value(j: int, i: int | None) -> Any:
+        arr = columns[j]
+        if i is not None:
+            v = arr[i]
+            return v.item() if hasattr(v, "item") else v
+        if not len(arr):
+            return None
+        if arr.dtype == object:
+            texts = sorted({str(v) for v in arr if v is not None})
+            return ", ".join(texts) if texts else None
+        f = arr.astype(float)
+        return float(np.nanmean(f)) if np.isfinite(f).any() else None
+
+    def fill(i: int | None) -> str:
+        k = iter(range(len(fields)))
+        text = template.replace("{{", _OPEN).replace("}}", _CLOSE)
+        out = _FIELD.sub(lambda m: (lambda j: _format_value(value(j, i), fields[j][1]))(next(k)), text)
+        return out.replace(_OPEN, "{").replace(_CLOSE, "}")
+
+    if reduce:
+        return fill(None)
+    return [fill(i) for i in range(n)]
 
 
 class RefLine(BaseModel):
@@ -186,7 +270,8 @@ class MatrixViewSpec(BaseModel):
     )
     subtext: str | None = Field(
         default=None,
-        description="Subtext expression or template in each cell, e.g. '{c_in_mg_m3:.0f} mg/Nm³'",
+        description="Template of the second line in each cell, averaged over its stationary steps, e.g. "
+        "'{c_in:.0f} mg/Nm³'; ' · n Stufen' is added for more than one step. None = 'n Stufe(n)'.",
     )
     cmap: str = Field(default="seq", description="Colormap name ('seq' = sequential blue ramp)")
     vmin: float | None = Field(default=0.0, description="Minimum value for color scaling")
@@ -195,11 +280,17 @@ class MatrixViewSpec(BaseModel):
     x_label: str = Field(default="", description="Axis label for columns (bottom)")
     y_label: str = Field(default="", description="Axis label for rows (left)")
     footer: str | None = Field(default=None, description="Optional explanation footer below the matrix")
+    rows_descending: bool = Field(default=True, description="Largest row value at the top (e.g. hottest first)")
 
     @field_validator("name")
     @classmethod
     def _name_valid(cls, v: str) -> str:
         return _name(v, "View name")
+
+    @field_validator("subtext")
+    @classmethod
+    def _subtext_valid(cls, v: str | None) -> str | None:
+        return check_template(v)
 
     @field_validator("filter", "status")
     @classmethod
@@ -331,6 +422,101 @@ class BarsViewSpec(BaseModel):
         return v
 
 
+class TimelineTrace(BaseModel):
+    """A channel drawn over time: from every source that has it, or only from `sources`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    channel: str = Field(min_length=1, description="Channel name, e.g. 'fid_mgc' (calculated channels too)")
+    sources: list[str] = Field(default_factory=list, description="Sources to take it from; empty = all that have it")
+    label: str = ""
+    color: str | None = Field(default=None, description="Line colour, e.g. '#2a78d6'; None = next of the palette")
+
+
+class TimelineMarks(BaseModel):
+    """One mark per step from the result table: a point at the step's start or end (with error bar),
+    or a horizontal segment over a named window (e.g. the blank value of each zero phase)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    y: str = Field(min_length=1, description="Column or formula of the result table, e.g. 'X' or 'S_b'")
+    u_y: str | None = Field(default=None, description="Standard uncertainty (column or formula) as error bar")
+    at: Literal["end", "start", "window"] = "end"
+    window: str = Field(default="default", description="With at='window': the named window the segment spans")
+    filter: str | None = Field(default=None, description="Steps that get a mark, e.g. klasse == 'dosierung'")
+    filled: str | None = Field(default=None, description="Condition for filled (true) vs open or muted (false) marks")
+    color_by_band: bool = Field(default=True, description="Colour of the step's band (else the ink colour)")
+    label: str = ""
+    label_open: str = Field(default="", description="Legend text of open or muted marks (with `filled`)")
+
+    @field_validator("y", "u_y", "filter", "filled")
+    @classmethod
+    def _expr_valid(cls, v: str | None) -> str | None:
+        if v is not None and v.strip():
+            compile_expr(v)
+        return v
+
+
+class TimelinePanel(BaseModel):
+    """One plot of a timeline: channels and marks sharing a y axis."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    traces: list[TimelineTrace] = Field(default_factory=list)
+    marks: list[TimelineMarks] = Field(default_factory=list)
+    y_label: str = ""
+    y_lim: tuple[float, float] | None = None
+    y_robust: float | None = Field(
+        default=None, gt=0.0, le=100.0,
+        description="Upper y limit from this percentile of the traces (x 1.12), lower limit 0; e.g. 99.7 against spikes",
+    )
+    height: float = Field(default=1.0, gt=0.0, description="Relative height of the panel")
+    ref_lines: list[RefLine] = Field(default_factory=list)
+
+
+class TimelineViewSpec(BaseModel):
+    """Time course on master time: channels in stacked panels, steps as coloured bands, marks per step.
+
+    `page_by`: a column of the result table (e.g. 'tag'); each value is a page in the report and a
+    choice in the view, its time range from the first start to the last end of its steps.
+    `bands`: which steps are drawn as bands, coloured by `band_color_by` (ordinal ramp as in the
+    other views) and labelled with the template `band_label` where the band is wide enough.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["timeline"] = "timeline"
+    name: str = Field(min_length=1)
+    title: str = ""
+    subtitle: str | None = None
+    panels: list[TimelinePanel] = Field(min_length=1)
+    page_by: str | None = Field(default=None, description="Column with one page per value, e.g. 'tag'")
+    filter: str | None = Field(default=None, description="Steps of the view (time range, bands, marks)")
+    bands: str | None = Field(default=None, description="Condition for steps drawn as bands; None = no bands")
+    band_color_by: str | None = Field(default=None, description="Column colouring the bands, e.g. 'v_mfc'")
+    band_label: str | None = Field(default=None, description="Template on the band, e.g. '{v_mfc:g}'")
+    band_legend: str = Field(default="", description="Text after each band value in the legend, e.g. 'Nl/min'")
+    page_title: str | None = Field(default=None, description="Template of the page title, e.g. 'Messtag {tag}'")
+    footer: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _name_valid(cls, v: str) -> str:
+        return _name(v, "View name")
+
+    @field_validator("filter", "bands")
+    @classmethod
+    def _cond_valid(cls, v: str | None) -> str | None:
+        if v is not None and v.strip():
+            compile_expr(v)
+        return v
+
+    @field_validator("band_label", "page_title")
+    @classmethod
+    def _template_valid(cls, v: str | None) -> str | None:
+        return check_template(v)
+
+
 class ReportViewSpec(BaseModel):
     """Multi-page report view specification combining views and a title/summary page."""
 
@@ -358,7 +544,9 @@ class ReportViewSpec(BaseModel):
 
 
 ViewSpec = Annotated[
-    Union[TableViewSpec, XYViewSpec, MatrixViewSpec, AlignedViewSpec, BarsViewSpec, ReportViewSpec],
+    Union[
+        TableViewSpec, XYViewSpec, MatrixViewSpec, AlignedViewSpec, BarsViewSpec, TimelineViewSpec, ReportViewSpec
+    ],
     Field(discriminator="kind"),
 ]
 
@@ -433,9 +621,16 @@ __all__ = [
     "ReportViewSpec",
     "SecondaryAxis",
     "TableViewSpec",
+    "TimelineMarks",
+    "TimelinePanel",
+    "TimelineTrace",
+    "TimelineViewSpec",
     "ViewSpec",
     "XYViewSpec",
+    "check_template",
     "eval_table_expr",
     "filter_table",
+    "render_template",
     "table_env",
+    "template_fields",
 ]

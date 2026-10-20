@@ -8,6 +8,7 @@ Die Probleme der ganzen Kampagne stehen in [`docs/DATENKATALOG_SA_KAMPAGNE.md`](
 | Datei | Gerät / Quelle | Ausschnitt | Besonderheit |
 |---|---|---|---|
 | `fid_ifid_12_10_extract.dat` | Testa iFID Mobile, Text-Export | Datenzeilen 14050–14349 (300 Zeilen) | Tab-getrennt, deutsches Datum, Geräteuhr ≈ 16 min hinter der PC-Uhr; enthält die einzige Lücke der Datei (11 s, FID-Zeit 14:29:05–14:29:16) |
+| `fid_ifid_17_10_extract.csv` | Testa iFID Mobile, CSV-Export (ab 15.10.) | Kopfzeile und Datenzeilen 1–30 von `data-11-24-51.csv` | Semikolon, jeder Wert in Anführungszeichen, sonst gleiche Spalten wie `.dat`; Geräteuhr ≈ 16 min hinter der PC-Uhr |
 | `fid_ifid_05_10.xls` | Testa iFID Mobile, Excel-Export (BIFF) | vollständig (6512 Zeilen) | Messwerte im Blatt `Data01`, Geräteeinstellungen und Kalibrierung (Prüfgas, Sensitivität in pA/ppm) in eigenen Blättern. Vollständig, weil sich `.xls` ohne Zusatzpaket nicht kürzen lässt |
 | `picolog_12_10_extract.csv` | PicoLog (Thermoelement-Logger) | Datenzeilen 25260–25419 (160 Zeilen) | Nur verstrichene Zeit `HH:MM:SS`, Dezimalkomma, Kopf mit `Letzte (C)`; Ende eines 78-min-Aussetzers (76 leere Zeilen, Zeit läuft weiter) |
 | `instrument_reader_12_10_extract.db` | instrument_reader (OCR der Waage), SQLite | Schema, alle `experiments` und `runs`, `readings` nur von Run 9 und 10, `roi_presets` Nr. 7 | `runs.started_at` in UTC, `readings.timestamp` in Lokalzeit; Experiment 2 und Runs 4–7 gelöscht (Lücken in den IDs) |

@@ -119,6 +119,22 @@ def test_fit_line_derived_quantities() -> None:
     assert u_ea == pytest.approx(res.u_m * 8.314, rel=1e-4)
 
 
+def test_fit_line_reports_the_random_only_fit_too() -> None:
+    """PR 10: the script fits with random uncertainties only; that fit is kept next to the GLS fit."""
+    x = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    y = np.array([1.1, 2.9, 5.2, 6.8, 9.1, 11.2])
+    df = pl.DataFrame({"x": x, "y": y, "uy": [0.2] * 6})
+    res = fit_line(df, x_expr="x", y_expr="y", u_y="uy", derived={"two_m": "2 * m"})
+    (m_ref, b_ref), cov = np.polyfit(x, y, 1, w=np.full(6, 1 / 0.2), cov="unscaled")
+    chi2 = float(np.sum(((y - (m_ref * x + b_ref)) / 0.2) ** 2) / 4)
+    assert res.m_zufall == pytest.approx(m_ref) and res.b_zufall == pytest.approx(b_ref)
+    assert res.chi2_red_zufall == pytest.approx(chi2)
+    val, u = res.derived_zufall["two_m"]
+    assert val == pytest.approx(2 * m_ref)
+    assert u == pytest.approx(2 * np.sqrt(cov[0, 0]) * max(1.0, np.sqrt(chi2)))
+    assert u == pytest.approx(res.derived["two_m"][2])
+
+
 # ------------------------------------------------------------------ 3. Scope & Covariance tests
 def test_fit_line_scope_same_day_vs_multi_day() -> None:
     """Requirement 4:

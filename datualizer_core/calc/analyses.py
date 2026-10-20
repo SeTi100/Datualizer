@@ -224,6 +224,11 @@ class FitLineResult:
     derived: dict[str, tuple[float, float, float]] = field(default_factory=dict)  # name -> (val, u_corr, u_rand)
     table: pl.DataFrame = field(default_factory=pl.DataFrame)
     mc_results: dict[str, float] = field(default_factory=dict)
+    # the fit with random uncertainties only (effective variance, Birge factor): no correlation between rows
+    m_zufall: float = math.nan
+    b_zufall: float = math.nan
+    chi2_red_zufall: float = math.nan
+    derived_zufall: dict[str, tuple[float, float]] = field(default_factory=dict)  # name -> (val, u) of that fit
 
     @property
     def df(self) -> pl.DataFrame:
@@ -858,6 +863,7 @@ def fit_line(
 
     # 5. Derived quantities (e.g. Ea = -m * 8.314)
     derived_res: dict[str, tuple[float, float, float]] = {}  # name -> (val, u_corr, u_rand)
+    derived_rand: dict[str, tuple[float, float]] = {}  # name -> (val, u) of the random-only fit
     if derived:
         for d_name, d_expr in derived.items():
             # Build env with m and b as UArray
@@ -877,6 +883,7 @@ def fit_line(
             u_d_rand = float(eval_rand.u())
 
             derived_res[d_name] = (val_d, u_d, u_d_rand)
+            derived_rand[d_name] = (float(eval_rand.value), u_d_rand)
 
     # 6. Monte Carlo (optional)
     mc_res: dict[str, float] = {}
@@ -943,6 +950,10 @@ def fit_line(
         derived=derived_res,
         table=res_df,
         mc_results=mc_res,
+        m_zufall=m_rand,
+        b_zufall=b_rand,
+        chi2_red_zufall=chi2_red_rand,
+        derived_zufall=derived_rand,
     )
 
 

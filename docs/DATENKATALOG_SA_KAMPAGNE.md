@@ -1,4 +1,4 @@
-# Datenkatalog: Messkampagne SA (Stand 2026-10-13)
+# Datenkatalog: Messkampagne SA (Stand 2026-10-20)
 
 > Zweck: Anforderungen für **Etappe 2b (Messkampagne)** aus einer echten Mehrgeräte-Messung ableiten.
 > Fixtures: [`tests/fixtures/sa_12_10/`](../tests/fixtures/sa_12_10/README.md). Die Nummerierung schliesst an [`DATENKATALOG_RUNS_EXPORT.md`](DATENKATALOG_RUNS_EXPORT.md) an (P1–P20).
@@ -32,6 +32,11 @@ Katalytische Oxidation von Ethanol in einer Versuchsanlage. Pro Solltemperatur w
 | P33 | Das Journal ändert sich laufend: neue Spalte „Index“ (Daten eine Spalte nach rechts, Uhrenpaare von C3/D3 nach D3/E3), Schritte eines anderen Tages im selben Blatt, fehlende Endzeiten, Parameter fehlen in manchen Runs | Spalten und Zellen nur über ihren Text finden, Zeilen auswählen und laut scheitern, Änderungen beim Öffnen melden | ✅ PR 9b: Überschriften ohne Gross/klein, Leerzeichen und Einheit, Kopfzeile = erste Zeile mit allen Überschriften, fehlende Überschrift mit Vorschlag; `RowSelection` (Bereich, `stop="time_jump"`, `where`, `skip_rows`); `EndRule.fallback`; `parameter_defaults`; `id_column`; `CellValue` und `CellPair` über die Beschriftung; Unterschiede beim Öffnen in `session.warnings`; Dialog am Tabellenblatt. Fixture `labjournal_17_10_extract.xlsx` |
 | P31 | OCR-Fehllesungen in beide Richtungen | Zweiseitiges `spike`-Flag; in der Anzeige zusätzlich robuste Y-Skala mit Randmarkern (`YScale`) | ✅ Hampel-Detektor (`spike`): Zeitfenster in Sekunden, Schwelle k · 1,4826 · MAD, Auflösung als Untergrenze, alles in `QualityConfig` und Spec; im Video-OCR-Auszug genau die 33 Fehllesungen markiert (28 mit `is_valid = 0`, 5 vom Leser für gültig gehalten, z. B. 9628 statt 9672,8 g); die Fenster-Statistik lässt markierte Werte aus, zählt sie und zeigt sie im Fenster-Inspektor als Kreuze |
 | P32 | Video ohne Frame-Zeitstempel (MP4) | Zeitachse über Anker (im Bild abgelesene Uhr) | ⏳ Schritt 9 |
+| P34 | Der FID exportiert ab 15.10. `.csv` (Semikolon, jeder Wert in Anführungszeichen) statt `.dat` | Gleiche Kanäle, gleiche Zeitbasis, ohne Code-Änderung | ✅ Profil `testa_ifid_csv` (PR 10), Fixture `fid_ifid_17_10_extract.csv` |
+| P35 | Eine Messgrösse liegt in mehreren Quellen: FID in zwei Dateien (15.10.), Waage in Datenbank und Video-OCR (12.10.), je Messtag andere Dateien | Je Schritt die Quelle mit genug Punkten im Fenster, mit Begründung | ✅ `Measure.sources`, `min_n`, `min_coverage`, Spalte `<alias>_quelle` (PR 10). Am 15.10. liegt ein 300-s-Fenster über der Dateigrenze: `min_coverage` sorgt dafür, dass nicht die Datei mit wenigen Punkten gewinnt |
+| P36 | Werte je Messtag oder aus einer zweiten Tabelle: Raumluft-Grundlinie (1.7 / 1.9 / 2.09 mgC), Start-/Endmasse im Journal zu Schritten aus der Datenbank (15.10.), ungültige OCR-Werte | Als Parameter am Schritt, nicht als Konstante im Code | ✅ `FallbackValue` als Formel (`raumluft`), `parameter_defaults` je Zuordnung, `CellValue`; `ParameterLookup` (gleiche Dosierung, Start ±240 s, Herkunft in der Notiz); `nan` im Formelkern (PR 10) |
+
+**Gesamtabnahme (PR 10):** [`examples/campaign_SA_ethanol.json`](../examples/campaign_SA_ethanol.json) liest alle drei Messtage über diese Profile und Regeln; `tests/test_sa_end_to_end.py` vergleicht mit der Skript-Auswertung (alle 61 Dosierstufen in den Toleranzen, siehe [Benutzung](BENUTZUNG.md#rundgang-die-sa-kampagne-mit-echten-daten)).
 
 ## 3. Grundsatz
 

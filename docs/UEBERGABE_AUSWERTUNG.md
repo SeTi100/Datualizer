@@ -379,7 +379,9 @@ Abnahme: Im Probeskript entfällt der Workaround "Journal"; die Schritte des 17.
 
 ---
 
-## PR 10 – SA-Kampagne als Beispiel, End-to-End-Abnahme
+## PR 10 – SA-Kampagne als Beispiel, End-to-End-Abnahme (✅, Prompt nur noch zur Nachvollziehbarkeit)
+
+> Umgesetzt am 20.10.: siehe Plan, Abschnitt 7 (Ergebnis) und [Rundgang in BENUTZUNG.md](BENUTZUNG.md#rundgang-die-sa-kampagne-mit-echten-daten). Zusätzlich zu 1a–e war `ParameterLookup` nötig (Journal-Massen zu den DB-Runs des 15.10., wie `journal_massen` in der Tageskonfiguration). Offen: Tagesverlauf je Messtag und Kohlenstoff-Bilanz als Berichtsseiten; das Probeskript im SA-Ordner kann durch `CampaignSession.open("examples/campaign_SA_ethanol.json")` ersetzt werden.
 
 ```text
 Repo: C:\Users\timkl\Desktop\Coding\EEU\Datualizer. Lies AGENTS.md, CLAUDE.md,

@@ -251,7 +251,7 @@ Die Namen der Kanäle/Quellen sind Beispiele. Geladene Spalten stehen in bereini
 | 8 ✅ | `aligned` + `broadcast_steps`, `bars`, Bericht als PDF | 2, 7 | 2b-8 |
 | 9 ✅ | Uhr-Anker aus Zellpaaren, Kreuzkorrelation, Dialog | – | 2b-7 |
 | 9b ✅ | Robuste Schrittzuordnung (Überschriften, Zeilenauswahl, End-Rückfall, Parameter-Standardwerte, stabile IDs, Zellwerte über Beschriftung) und Tabellenansicht zum Anklicken | 3, 9 | 2b-5 |
-| 10 | SA-Kampagne (3 Tage) als Beispiel + Rezept, End-to-End-Orakel, Doku; Lücken aus dem Probelauf (Profil FID-.csv, `nan`, Unsicherheit aus Formel, Messgrösse aus mehreren Quellen, Konstanten je Tag) | 1–9, 9b | 2b-10 |
+| 10 ✅ | SA-Kampagne (3 Tage) als Beispiel + Rezept, End-to-End-Orakel, Doku; Lücken aus dem Probelauf (Profil FID-.csv, `nan`, Unsicherheit aus Formel, Messgrösse aus mehreren Quellen, Konstanten je Tag, Parameter aus einer zweiten Tabelle) | 1–9, 9b | 2b-10 |
 
 Parallel möglich: PR 2, 3 und 9 (PR 1 ist in main).
 
@@ -262,6 +262,8 @@ Mit `examples/campaign_SA_ethanol.json` auf die echten Dateien (lokal, Test übe
 - Stichproben 17.10.: Z16 (200 °C, 10 Nl/min) c_in 144.4, X 0.560, u 0.047, gut; Z23 (150 °C) X 0.392; Z29 (220 °C) X 0.642, Blindwert „keiner“.
 - Light-off: T50 179 °C (10 Nl/min), 203 °C (20 Nl/min); Arrhenius Ea 21 ± 4 kJ/mol aus 8 Stufen.
 - Alle Ansichten aus Abschnitt 3.7 lassen sich aus der Kampagne erzeugen; der Bericht hat dieselben Seiten wie `katalyse_bericht.pdf`.
+
+**Ergebnis (20.10., Referenz vom 19.10. 16:42):** erfüllt für alle 61 Dosierstufen der drei Tage (`tests/test_sa_end_to_end.py`). Die Stichproben oben stammen aus dem Stand vor dem 19.10.; seither nimmt die Skript-Auswertung den Massenstrom zuerst aus Start- und Endmasse im Journal (`massenstrom_quelle = ["journal", "ocr"]`), am 15.10. aus der Journalzeile gleicher Dosierung mit Start ±240 s zum DB-Run. Deshalb heute Z16: c_in 147.3, X 0.568, u 0.046, gut. Die Beispielkampagne bildet das mit `mdot_j` (Journal, u nach GUM per `u_expr`) vor `mdot_w` (Waage) und `ParameterLookup` ab. Light-off T50 178 °C (10 Nl/min) und 203 °C (20 Nl/min) wie `light_off_kennwerte.csv`; Ea aus denselben 8 Stufen 22 ± 4 kJ/mol mit dem Fit des Skripts (`FitLineResult.derived_zufall`), 19 ± 5 kJ/mol mit GLS und Korrelation je Tag. Bericht: 10 statt 14 Seiten, es fehlen Tagesverlauf je Messtag und Kohlenstoff-Bilanz (offen).
 
 ### 3.9 Robuste Schrittzuordnung – PR 9b ✅
 Umgesetzt in `datualizer_core/ingestion/grid.py` (Raster, Überschriften, Beschriftung), `ingestion/steps.py` (`RowSelection`, `EndRule.fallback`, `CellRef`), `campaign/intervals.py` (`derive_steps`, `StepDerivation` mit Zustand jeder Zeile, `CellValue`, `MappingSnapshot`, `diff_snapshot`) und dem Dialog `datualizer_gui/components/step_mapping_dialog.py`. Probelauf 19.10. mit dem geänderten Journal: Schritte aus `IntervalMapping` gleich wie die Skript-Auswertung (12.10.: 37/37, 17.10.: 9/9 mit Start, Ende, T_soll, V_MFC); 15.10.: mit `parameter_defaults={"volumenstrom": 100}` passt der Blindwert-`match` über den Luftstrom (Run52 9,32 statt 7,36 mgC wie das Skript).

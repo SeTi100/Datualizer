@@ -184,8 +184,8 @@ class ResultsPanel(QWidget):
         left_layout.setContentsMargins(0, 0, 0, 0)
 
         left_layout.addWidget(QLabel("<b>Calculated Quantities</b> (evaluated in list order):"))
-        self.calc_table = QTableWidget(0, 4)
-        self.calc_table.setHorizontalHeaderLabels(["Name", "Expression", "Unit", "Note"])
+        self.calc_table = QTableWidget(0, 5)
+        self.calc_table.setHorizontalHeaderLabels(["Name", "Expression", "Unit", "Note", "Own u"])
         self.calc_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.calc_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.calc_table.itemSelectionChanged.connect(self._on_calc_selected)
@@ -231,6 +231,17 @@ class ResultsPanel(QWidget):
         self.calc_note_edit = QLineEdit()
         self.calc_note_edit.setPlaceholderText("Optional description")
         form.addRow("Note:", self.calc_note_edit)
+
+        # an uncertainty of its own, given by a formula (residual drift, two readings)
+        u_row = QHBoxLayout()
+        self.calc_u_edit = QLineEdit()
+        self.calc_u_edit.setPlaceholderText("optional, e.g. abs(dXdt) * 10")
+        self.calc_u_edit.setToolTip("Formula of an additional standard uncertainty, an input named like the calculation.")
+        self.calc_kind_combo = QComboBox()
+        self.calc_kind_combo.addItems(["zufall", "syst"])
+        u_row.addWidget(self.calc_u_edit, stretch=1)
+        u_row.addWidget(self.calc_kind_combo)
+        form.addRow("Own u:", u_row)
 
         self.btn_save_calc = QPushButton("Save Calculation")
         self.btn_save_calc.clicked.connect(self._save_calc)
@@ -483,6 +494,7 @@ class ResultsPanel(QWidget):
             self.calc_table.setItem(i, 1, QTableWidgetItem(c.expr))
             self.calc_table.setItem(i, 2, QTableWidgetItem(c.unit))
             self.calc_table.setItem(i, 3, QTableWidgetItem(c.note))
+            self.calc_table.setItem(i, 4, QTableWidgetItem(f"{c.u_expr} ({c.kind})" if c.u_expr else ""))
         self.calc_table.resizeColumnsToContents()
 
         # Constants table
@@ -744,6 +756,10 @@ class ResultsPanel(QWidget):
             self.calc_expr_edit.setText(self.calc_table.item(row, 1).text())
             self.calc_unit_edit.setText(self.calc_table.item(row, 2).text())
             self.calc_note_edit.setText(self.calc_table.item(row, 3).text())
+            calc = next((c for c in self._session.campaign.evaluation.calculations
+                         if c.name == self.calc_name_edit.text()), None) if self._session else None
+            self.calc_u_edit.setText(calc.u_expr or "" if calc is not None else "")
+            self.calc_kind_combo.setCurrentText(calc.kind if calc is not None else "zufall")
 
     def _clear_calc_form(self) -> None:
         self.calc_table.clearSelection()
@@ -751,6 +767,8 @@ class ResultsPanel(QWidget):
         self.calc_expr_edit.clear()
         self.calc_unit_edit.clear()
         self.calc_note_edit.clear()
+        self.calc_u_edit.clear()
+        self.calc_kind_combo.setCurrentText("zufall")
 
     def _save_calc(self) -> None:
         if not self._session:
@@ -759,16 +777,19 @@ class ResultsPanel(QWidget):
         expr = self.calc_expr_edit.text().strip()
         unit = self.calc_unit_edit.text().strip()
         note = self.calc_note_edit.text().strip()
+        u_expr = self.calc_u_edit.text().strip() or None
         if not name or not expr:
             QMessageBox.warning(self, "Invalid Calculation", "Calculation requires a Name and an Expression.")
             return
+        ev = self._session.campaign.evaluation
+        old = next((c for c in ev.calculations if c.name == name), None)
         try:
-            calc = Calculation(name=name, expr=expr, unit=unit, note=note)
+            calc = Calculation(name=name, expr=expr, unit=unit, note=note, u_expr=u_expr,
+                               kind=self.calc_kind_combo.currentText(), group=old.group if old else None)
         except Exception as exc:
             QMessageBox.critical(self, "Invalid Calculation", str(exc))
             return
 
-        ev = self._session.campaign.evaluation
         idx = next((i for i, c in enumerate(ev.calculations) if c.name == name), None)
         new_calcs = list(ev.calculations)
         if idx is not None:

@@ -172,6 +172,7 @@ class CampaignWindow(QMainWindow):
             ("&Reset Zoom", "Ctrl+R", self.canvas.reset_zoom),
             ("&Export Plot...", "Ctrl+E", self._on_export),
             ("&Export Report...", "Ctrl+Shift+E", self._on_export_report),
+            ("Evaluation from &Template...", "", self._on_apply_recipe),
         ]:
             action = QAction(text, self)
             action.setShortcut(QKeySequence(key))
@@ -551,6 +552,29 @@ class CampaignWindow(QMainWindow):
         self.refresh_plot()
         name = self._session.campaign.name
         self.setWindowTitle(f"Datualizer – Campaign: {name}" + (f" ({self._path.name})" if self._path else ""))
+
+    def apply_recipe(self, path: str | Path) -> list[str]:
+        """Take the evaluation of a recipe (examples/rezept_katalyse_voc.json); returns what does not fit yet."""
+        notes = self._session.apply_recipe(path)
+        self._refresh_all()
+        self.status_bar.showMessage(f"Evaluation from {Path(path).name}" + (f" · {len(notes)} notes" if notes else ""))
+        return notes
+
+    def _on_apply_recipe(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Evaluation from Template", "", "Recipe or campaign (*.json)")
+        if not path:
+            return
+        if self._session.campaign.evaluation.measures and QMessageBox.question(
+            self, "Evaluation from Template", "Replace the evaluation of this campaign (sources and steps stay)?"
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            notes = self.apply_recipe(path)
+        except Exception as exc:  # show, do not crash the window
+            QMessageBox.critical(self, "Evaluation from Template", str(exc))
+            return
+        if notes:
+            QMessageBox.information(self, "Evaluation from Template", "\n".join(notes))
 
     def _on_evaluation_changed(self) -> None:
         self.refresh_steps()

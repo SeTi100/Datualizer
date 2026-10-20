@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 from typing import Sequence
 
 import numpy as np
@@ -54,6 +55,7 @@ from datualizer_core.campaign.intervals import (
     StepDerivation,
     WindowOverride,
     WindowRule,
+    apply_lookup,
     derive_steps,
     diff_snapshot,
     grid_from_dataset,
@@ -68,6 +70,7 @@ from datualizer_core.ingestion.grid import Grid, GridError, Located, display_tex
 from datualizer_core.ingestion.readers.base import ReaderError
 from datualizer_core.ingestion.readers.excel import read_sheet
 from datualizer_core.ingestion.profiles import SourceProfile, detect_profile
+from datualizer_core.ingestion.steps import StepColumns
 from datualizer_core.ingestion.source_loader import load_source
 from datualizer_core.schema import PlotStyle
 from datualizer_core.stats.window import Check, StatsConfig, WindowResult, WindowSpec, window_stats
@@ -240,6 +243,19 @@ def _to_datetimes(df: pl.DataFrame, columns: Sequence[str], zone: str) -> pl.Dat
     )
 
 
+_VARIABLE = re.compile(r"\$\{(\w+)\}|\$(\w+)")
+
+
+def expand_path(path: str) -> str:
+    """`${NAME}` and `$NAME` replaced by the environment variable (left as written if it is not set)."""
+    return _VARIABLE.sub(lambda m: os.environ.get(m.group(1) or m.group(2), m.group(0)), path)
+
+
+def unset_variables(path: str) -> list[str]:
+    """Environment variables a path names that are not set."""
+    return [n for m in _VARIABLE.finditer(path) if (n := m.group(1) or m.group(2)) not in os.environ]
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -272,13 +288,16 @@ class CampaignSession:
 
     # ---------------------------------------------------------------- sources
     def resolve(self, src: CampaignSource) -> Path:
-        p = Path(src.path)
+        """Path of a source: environment variables (`${NAME}`) expanded, relative to `base_dir`."""
+        p = Path(expand_path(src.path))
         return p if p.is_absolute() else self.base_dir / p
 
     def _load(self, src: CampaignSource) -> None:
         path = self.resolve(src)
         if not path.is_file():
-            self.warnings.append(f"{src.id}: file not found: {path}")
+            unset = unset_variables(src.path)
+            hint = f" (environment variable {', '.join(unset)} not set)" if unset else ""
+            self.warnings.append(f"{src.id}: file not found: {path}{hint}")
             return
         changed = bool(src.sha256) and _sha256(path) != src.sha256
         if changed:
@@ -775,6 +794,36 @@ class CampaignSession:
         """Replace step classes, named windows and measures (checked by the model)."""
         self.campaign.evaluation = Evaluation.model_validate(evaluation.model_dump())
 
+    def apply_recipe(self, recipe: str | Path | dict) -> list[str]:
+        """Take the evaluation (and window statistics settings) of a recipe, e.g. examples/rezept_katalyse_voc.json.
+
+        A recipe is a JSON object with `evaluation` (and optionally `stats`), or a campaign.json
+        whose evaluation is taken; sources, steps and clocks of this campaign stay. Settings of the
+        statistics are merged (the recipe's entries win). Returns what does not fit this campaign
+        yet (measures naming sources it does not have), also added to `warnings`; nothing is
+        changed silently. A recipe that is not valid raises ValueError (pydantic).
+        """
+        data = recipe if isinstance(recipe, dict) else json.loads(Path(recipe).read_text(encoding="utf-8"))
+        if "evaluation" not in data:
+            raise ValueError("A recipe needs an 'evaluation' (e.g. from examples/rezept_katalyse_voc.json).")
+        ev = Evaluation.model_validate(data["evaluation"])
+        stats = self.campaign.stats
+        if data.get("stats"):
+            stats = StatsConfig.model_validate({**stats.model_dump(), **data["stats"]})
+        self.campaign.evaluation = ev
+        self.campaign.stats = stats
+        have = {s.id for s in self.campaign.sources}
+        notes = []
+        for m in ev.measures:
+            missing = [sid for sid in m.source_ids if sid not in have]
+            if len(missing) == len(m.source_ids):
+                notes.append(f"recipe: measure '{m.alias}' reads {', '.join(missing)}, not in this campaign: "
+                             "rename the sources or change the measure.")
+            elif missing:
+                notes.append(f"recipe: measure '{m.alias}': {', '.join(missing)} not in this campaign (only the others are read).")
+        self.warnings += notes
+        return notes
+
     def step_classes(self) -> StepClassification:
         """Class of every step (`Evaluation.step_classes`); raises ExprError for a formula that does not fit."""
         ivs = self.intervals()
@@ -896,11 +945,19 @@ class CampaignSession:
             extra[cv.name] = value
             where = f" ({cv.describe()})" if cv.label else ""
             notes.append(f"{m.source_id}: '{cv.name}' = {display_text(hit.value)} from cell {hit.address}{where}.")
-        return derive_steps(
+        d = derive_steps(
             grid, m, self.campaign.timezone, clock, self.campaign.window_rule,
             day=cfg.time.clock_date, datetime_formats=cfg.time.datetime_formats,
             time_name=self._time_name(src), extra_params=extra, extra_notes=notes,
         )
+        for lk in m.lookups:
+            if lk.source_id not in self._raw:
+                raise IntervalConfigError(f"{m.source_id}: lookup in {lk.source_id}: source not loaded.")
+            roles = {k: getattr(lk, k) for k in StepColumns.model_fields}
+            other = self.derive_mapping(IntervalMapping(source_id=lk.source_id, sheet=lk.sheet, day=lk.day, **roles))
+            steps, probs = apply_lookup(d.intervals, other.intervals, lk, m.source_id)
+            d = replace(d, intervals=steps, problems=[*d.problems, *probs])
+        return d
 
     def _check_step_tables(self) -> None:
         """On open: compare every step table with how it was saved; windows set by hand follow their steps."""
@@ -1039,7 +1096,8 @@ class CampaignSession:
         Columns: step_id, step_label, step_start, step_end (campaign zone), dauer_s, the step
         parameters, klasse, klasse_hinweis (no class matches, or several did), then per measure
         `<alias>`, `u_<alias>` (see `evaluation.MEASURE_U`; null where none is defined) and
-        `checks_<alias>` (the window's findings joined with "; ").
+        `checks_<alias>` (the window's findings joined with "; "); a measure over several sources
+        adds `<alias>_quelle`, the source the step took (the first with enough points, see `Measure`).
 
         A window that is not for the step's class leaves its measures empty (value, u and checks
         null). A window the rule leaves nothing of, or a source without data, gives a null value
@@ -1050,13 +1108,20 @@ class CampaignSession:
         cfg = config if config is not None else self.campaign.stats
         steps = self.intervals().intervals
         params = parameter_columns(steps)
-        measure_cols = [col for m in ev.measures for col in m.columns()]
+        measure_cols = [col for m in ev.measures for col in [*m.columns(), m.source_column] if col]
         clash = sorted(set(params.values()) & set(measure_cols))
         if clash:
             raise ValueError(f"Measure column(s) {', '.join(clash)} are also step parameters; choose another alias.")
         for m in ev.measures:
             ev.window(m.window)
-        inputs = {(m.source, m.channel): self._stats_input(m.source, m.channel, cfg) for m in ev.measures}
+        have = {src.id for src in self.campaign.sources}
+        inputs = {
+            (sid, m.channel): (
+                self._stats_input(sid, m.channel, cfg) if sid in have or len(m.source_ids) == 1
+                else _StatsInput(sid, m.channel, "", "not in this campaign", 0.0, None, None)
+            )
+            for m in ev.measures for sid in m.source_ids
+        }
         classes = self.step_classes() if spec is None else classify_steps(steps, ev.step_classes)
 
         rows = []
@@ -1072,21 +1137,40 @@ class CampaignSession:
             for m in ev.measures:
                 col, u_col, checks_col = m.columns()
                 row[col] = row[u_col] = row[checks_col] = None
+                if m.source_column:
+                    row[m.source_column] = None
                 sw = self.step_window(iv, m.window, klasse, ev)
                 if not sw.applies:
                     continue
-                inp = inputs[(m.source, m.channel)]
                 if sw.window is None:
                     row[checks_col] = sw.note or "window rule leaves nothing"
-                elif isinstance(inp.data, str):
-                    row[checks_col] = inp.data
-                else:
-                    key = (m.source, m.channel, sw.window)
+                    continue
+                passed: list[str] = []  # why a source was not taken
+                # one source with the default thresholds: as before, an empty window says so in its checks
+                strict = len(m.source_ids) > 1 or m.min_n > 1 or m.min_coverage > 0
+                needs = f"n ≥ {m.min_n}" + (f", coverage ≥ {m.min_coverage:.0%}" if m.min_coverage > 0 else "")
+                for sid in m.source_ids:
+                    inp = inputs[(sid, m.channel)]
+                    if isinstance(inp.data, str):
+                        if len(m.source_ids) == 1:
+                            row[checks_col] = inp.data
+                            break
+                        passed.append(f"{sid}: {inp.data}")
+                        continue
+                    key = (sid, m.channel, sw.window)
                     if key not in results:
                         results[key] = inp.run(WindowSpec(*sw.window), cfg)
                     r = results[key]
+                    if strict and (r.n < m.min_n or r.coverage < m.min_coverage):
+                        passed.append(f"{sid}: n = {r.n}, coverage {r.coverage:.0%} (needs {needs})")
+                        continue
                     row[col], row[u_col] = measure_value(r, m.stat, inp.reading_u)
-                    row[checks_col] = "; ".join(r.checks)
+                    row[checks_col] = "; ".join([*r.checks, *(f"not taken: {p}" for p in passed)])
+                    if m.source_column:
+                        row[m.source_column] = sid
+                    break
+                else:
+                    row[checks_col] = ("no source with enough points: " if len(m.source_ids) > 1 else "too few points: ") + "; ".join(passed)
             rows.append(row)
 
         types: dict[str, pl.DataType] = {
@@ -1096,6 +1180,8 @@ class CampaignSession:
         for m in ev.measures:
             col, u_col, checks_col = m.columns()
             types.update({col: pl.Float64, u_col: pl.Float64, checks_col: pl.String})
+            if m.source_column:
+                types[m.source_column] = pl.String
         if rows:
             df = pl.DataFrame(rows, infer_schema_length=None)
             df = df.with_columns(pl.col(c).cast(t) for c, t in types.items())
@@ -1182,6 +1268,15 @@ class CampaignSession:
             expr = compile_expr(calc.expr, names=list(env.keys()), text_names=text_names)
             res = expr.evaluate(env)
             res_u = UArray.of(res)
+            if calc.u_expr is not None:
+                u_compiled = compile_expr(calc.u_expr, names=list(env.keys()), text_names=text_names)
+                u_own = np.asarray(UArray.of(u_compiled.evaluate(env)).value, dtype=float)
+                if n_steps > 0:
+                    u_own = np.broadcast_to(u_own, (n_steps,)).copy()
+                if np.any(u_own < 0):
+                    raise ValueError(f"Calculation {calc.name!r}: u_expr {calc.u_expr!r} is negative in some steps.")
+                own = UArray.input(calc.name, np.zeros_like(u_own), u_own, kind=calc.kind, group=calc.group)
+                res_u = res_u + own
 
             if n_steps > 0:
                 val_arr = np.broadcast_to(np.asarray(res_u.value, dtype=float), (n_steps,)).copy()
@@ -1446,6 +1541,8 @@ class CampaignSession:
                 continue
             out.interval_mappings[i] = m.model_copy(update={"resolved": snap})
         for src in out.sources:
+            if _VARIABLE.search(src.path):
+                continue  # a path over an environment variable (data outside the repository) stays as written
             p = self.resolve(src).resolve()
             try:
                 src.path = Path(os.path.relpath(p, path.parent)).as_posix()

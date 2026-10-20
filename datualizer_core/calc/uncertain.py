@@ -155,11 +155,16 @@ class UArray:
         return self.value.shape
 
     def budget(self) -> dict[str, np.ndarray]:
-        """Signed contribution cᵢ = ∂f/∂xᵢ · uᵢ of every uncertain input, broadcast to the value shape."""
+        """Signed contribution cᵢ = ∂f/∂xᵢ · uᵢ of every uncertain input, broadcast to the value shape.
+
+        Where the result does not depend on an input (∂f/∂xᵢ = 0, e.g. the branch `where` did not
+        take), its contribution is 0 even if its u is NaN there (a measure without data in that row).
+        """
         out: dict[str, np.ndarray] = {}
         with np.errstate(invalid="ignore", over="ignore"):
             for name, grad in self.grads.items():
-                out[name] = np.broadcast_to(grad * self.inputs[name].u, self.value.shape).copy()
+                c = np.where(grad == 0, 0.0, grad * self.inputs[name].u)
+                out[name] = np.broadcast_to(c, self.value.shape).copy()
         return out
 
     def u_random(self) -> np.ndarray:

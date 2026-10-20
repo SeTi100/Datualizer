@@ -116,6 +116,7 @@ for step in s.intervals().intervals:
 - *Ende mit Rückfall:* `EndRule(column="Zeit_1", fallback=EndRule(kind="next_start"))` nimmt die Endspalte und, wo sie leer ist, den nächsten Start; das steht je Zeile in `problems` und in `step.note`.
 - *Standardwerte:* `parameter_defaults={"luft": 100}` füllt einen Parameter, dessen Spalte (oder JSON-Schlüssel) fehlt oder dessen Zelle leer ist. Bezüge mit `match` scheitern dann nicht an NaN.
 - *Stabile Schritt-IDs:* `id_column="Index"` gibt die ID `<quelle>:<wert>` statt der Zeile. Ohne ID-Spalte folgen von Hand gesetzte Fenster (`WindowOverride`) ihrem Schritt über Name und Start, wenn sich die Zeilen verschieben; das steht in `session.warnings`.
+- *Parameter aus einer zweiten Tabelle:* `ParameterLookup` in `IntervalMapping.lookups`. Beispiel 15.10.: Die Schritte kommen aus den Runs der Datenbank, Start- und Endmasse aus dem Journal. Der Lookup liest das Journal mit eigenen Spaltenrollen (`source_id`, `sheet`, `day`, `start_column`, `end`, `parameter_columns`, `rows`) und gibt jedem Schritt die Werte `take` der unbenutzten Journalzeile, deren `match`-Parameter gleich sind und deren Start höchstens `tolerance_s` entfernt liegt (die nächste). `duration_as` speichert die Dauer der Journalzeile (für einen Massenstrom über deren Zeiten), `when` beschränkt die Schritte (`"v_mfc > 0"`), `prefix` vermeidet Namensgleichheit. Zeilen ohne Wert zählen nicht; ein Schritt ohne Zeile wird gemeldet, nichts wird geraten. Die Herkunft steht in der Notiz des Schritts („masse_0, masse_1 from journal_17:row 34 (start −34 s)“).
 - *Zellwerte über ihre Beschriftung:* `CellValue(name="raumluft", label="Baseline mgC")` sucht die Zelle mit diesem Text und nimmt den ersten Wert rechts davon (`direction="below"`, `nth`, oder `cell="E5"`); der Wert hängt als Parameter an jedem Schritt der Zuordnung, aus einer anderen Quelle oder einem anderen Blatt über `source_id`/`sheet`.
 - *Geänderte Datei:* Beim Speichern merkt sich die Zuordnung Kopfzeile, Spalten und Schritte (`resolved`). Beim Öffnen meldet `session.warnings`, was sich geändert hat: neue oder fehlende Spalten, Kopfzeile verschoben, mehr Zeilen, neue, entfallene oder geänderte Schritte. Passt die gespeicherte Lese-Spec nicht mehr zur geänderten Datei, wird sie mit dem Profil neu gelesen (statt abzubrechen) und das gemeldet.
 
@@ -159,6 +160,7 @@ Im Kampagnenfenster zeigt das Dock *Steps* die Schritte (Doppelklick zoomt und �
 - `StepClass(name, when)`: Eine Schrittart ist eine Formel über die Schrittparameter, Zahlen und Text (`"v_mfc > 0"`, `"Probe == 'Eingang'"`). Bekannt sind ausserdem `step_id`, `step_label` (Text) und `dauer_s`. Es gewinnt die erste Klasse, deren Formel wahr ist. Passt keine, bleibt die Klasse leer; passen mehrere, nimmt der Datualizer die erste. In beiden Fällen steht ein Hinweis in `step_classes().notes` bzw. in der Spalte `klasse_hinweis`. Eine Formel mit unbekanntem Parameter schlägt laut fehl (`ExprError` mit Vorschlag).
 - `NamedWindow(name, rule, classes=[])`: Fensterregel mit Namen, wahlweise nur für bestimmte Klassen. Die bisherige `window_rule` ist das Fenster `default`, ältere `campaign.json` lesen sich unverändert. `s.step_window(schritt, "blank")` liefert das Fenster eines Schritts, `s.window_stats(schritt, quelle, kanal, window="blank")` die Kennwerte darin. Ein Override von Hand gilt pro Fenster: `s.set_window_override(id, start, ende, window="blank")`, gespeichert unter `"<id>@blank"`.
 - `Measure(alias, source, channel, window, stat)`: eine Zahl pro Schritt, `stat` ist ein Feld von `WindowResult` (`mean`, `slope`, `two_point`, `integral`, `median`, `stationary_practical` als 1/0 …). Die Standardunsicherheit kommt mit: `mean` → √(`sem_eff`² + `reading_u`²), `slope` → `slope_se_eff`, `two_point` → `two_point_u`, `integral` → `integral_u`, sonst leer.
+- *Mehrere Quellen:* `Measure(alias, sources=[…], channel, …)` statt `source`, in Vorrangreihenfolge (der FID in zwei Dateien, die Waage aus Datenbank und Video, eine Quelle je Messtag). Jeder Schritt nimmt die erste Quelle mit genug Punkten im Fenster: `min_n` (Punkte) und `min_coverage` (abgedeckter Anteil des Fensters, Lücken und leere Werte zählen nicht). Welche, steht in der Spalte `<alias>_quelle`; warum eine Quelle nicht genommen wurde, in `checks_<alias>` („not taken: fid_15a: n = 12, coverage 4 % …“). Mit nur einer Quelle gelten die Schwellen genauso (zu wenig Punkte → Wert leer, mit Begründung). Quellen, die es in der Kampagne nicht gibt, werden übersprungen, solange eine andere bleibt; eine einzelne unbekannte Quelle schlägt laut fehl.
 
 `s.step_table()` (oder `s.step_table(spec)` mit einer eigenen `Evaluation`, ohne die Kampagne zu ändern) liefert eine Zeile pro Schritt: `step_id`, `step_label`, `step_start`, `step_end`, `dauer_s`, die Parameter, `klasse`, `klasse_hinweis` und je Messgrösse `<alias>`, `u_<alias>` und `checks_<alias>`. Ein Fenster, das nicht zur Klasse des Schritts passt, lässt seine Messgrössen leer. Liefert es keine Daten, steht der Grund in `checks_<alias>`.
 
@@ -224,7 +226,7 @@ window.export_plot("bericht_12_10.pdf", ExportOptions(width_mm=170, font_pt=8, l
 
 `datualizer_core/calc/` ist der Formelkern für Rechengrössen (Etappe 2b, Schritt 8). Er kennt weder Kampagne noch GUI. Die Schrittarten der Schritt-Tabelle nutzen ihn bereits (siehe oben), Rechenkanäle und Rechengrössen folgen.
 
-**Was eine Formel enthalten darf:** Zahlen, Namen (auch mit Punkt, `fid.mean` ist *ein* Name), `+ - * / **`, unäres Minus, Vergleiche (auch verkettet, `0 < X <= 1`), `and`, `or`, `not`, `a if c else b` und die Funktionen `log` (natürlich), `log10`, `exp`, `sqrt`, `abs`, `min`, `max` (zwei oder mehr Argumente), `where(c, a, b)`, `isfinite`, `round(x, n=0)`. Die Zeichen − · × werden als `-` und `*` gelesen. Text in einfachen oder doppelten Anführungszeichen und Textspalten sind nur mit `==` und `!=` erlaubt (`klasse == 'null'`, `probe != "Eingang" and v_mfc > 0`). Das Ergebnis ist ein Wahrheitswert ohne Ableitung. Fehlender Text (null) ist weder gleich noch ungleich: Beide Vergleiche ergeben falsch, damit eine fehlende Klasse keine Bedingung zufällig erfüllt. Welche Namen Text sind, sagt `compile_expr(…, text_names=[…])`. Ohne Angabe gilt ein Name, der direkt mit Text verglichen wird, als Text; `evaluate` prüft das an den Werten (str, Objekt-Arrays, Polars-String-Spalten). Alles andere (Attribute, Methodenaufrufe, Indizes, Lambdas, Comprehensions, Rechnen oder `<` mit Text, Text mit Zahl verglichen) lehnt `compile_expr` mit einem `ExprError` ab, der die Spalte und die bekannten Namen nennt. Bei Tippfehlern schlägt es bevorzugt einen Namen mit gleichem Anfangsbuchstaben vor bzw. einen, der sich nur in Gross/klein unterscheidet:
+**Was eine Formel enthalten darf:** Zahlen, Namen (auch mit Punkt, `fid.mean` ist *ein* Name), `+ - * / **`, unäres Minus, Vergleiche (auch verkettet, `0 < X <= 1`), `and`, `or`, `not`, `a if c else b` und die Funktionen `log` (natürlich), `log10`, `exp`, `sqrt`, `abs`, `min`, `max` (zwei oder mehr Argumente), `where(c, a, b)`, `isfinite`, `round(x, n=0)` sowie die Zahlen `nan` und `inf` (z. B. `where(is_valid == 1, mass_g, nan)` blendet ungültige Lesungen aus; `nan` und `inf` sind deshalb keine Namen für Spalten oder Rechengrössen). Die Zeichen − · × werden als `-` und `*` gelesen. Text in einfachen oder doppelten Anführungszeichen und Textspalten sind nur mit `==` und `!=` erlaubt (`klasse == 'null'`, `probe != "Eingang" and v_mfc > 0`). Das Ergebnis ist ein Wahrheitswert ohne Ableitung. Fehlender Text (null) ist weder gleich noch ungleich: Beide Vergleiche ergeben falsch, damit eine fehlende Klasse keine Bedingung zufällig erfüllt. Welche Namen Text sind, sagt `compile_expr(…, text_names=[…])`. Ohne Angabe gilt ein Name, der direkt mit Text verglichen wird, als Text; `evaluate` prüft das an den Werten (str, Objekt-Arrays, Polars-String-Spalten). Alles andere (Attribute, Methodenaufrufe, Indizes, Lambdas, Comprehensions, Rechnen oder `<` mit Text, Text mit Zahl verglichen) lehnt `compile_expr` mit einem `ExprError` ab, der die Spalte und die bekannten Namen nennt. Bei Tippfehlern schlägt es bevorzugt einen Namen mit gleichem Anfangsbuchstaben vor bzw. einen, der sich nur in Gross/klein unterscheidet:
 
 ```python
 from datualizer_core.calc import ExprError, compile_expr
@@ -271,7 +273,7 @@ evaluate("a - b", {"a": a, "b": b}).u()     # 0.0: derselbe Fehler hebt sich in 
   - `match`: Spalten, die zwischen Schritt und Referenz übereinstimmen müssen (z. B. `["temperatur", "luft"]`).
   - `combine`: Wenn davor und danach ein Schritt gefunden wird (`art == "eingeklammert"`): Mittelwert beider Schritte, Unsicherheit nach Rechteckverteilung $u = \max(|\Delta| / (2\sqrt{3}), u_{\min})$.
   - Wenn nur einseitig gefunden (`art == "einseitig"`): Wert dieses Schritts, $u = u_{\text{one}}$.
-  - Wenn keiner gefunden (`art == "keiner"`): Konfigurierter `fallback: FallbackValue(value, u)` oder `NaN`.
+  - Wenn keiner gefunden (`art == "keiner"`): Konfigurierter `fallback: FallbackValue(value, u)` oder `NaN`. `value` und `u` sind Zahlen oder Formeln über die Schritt-Tabelle: `{"value": "raumluft", "u": 2.0}` nimmt die Raumluft des jeweiligen Messtags, die als Parameter an jedem Schritt hängt (aus einer Journalzelle über `CellValue` oder aus `parameter_defaults` der Zuordnung). Wo die Formel NaN ergibt, bleibt der Bezug leer.
   - Erzeugt 6 Spalten: `<name>`, `u_<name>`, `<name>_quelle` (Schritt-IDs), `<name>_art`, `<name>_vor`, `<name>_nach`.
 
 - **Laufende Summe (`cumulative`)**: Berechnet eine kumulative Summe in Zeitreihenfolge (z. B. Katalysator-Beladung $\Sigma \dot{m} \cdot \Delta t$).
@@ -310,6 +312,7 @@ Schritt-Tabelle → Bezüge (Relations) → Rechengrössen (Calculations) → Kr
 
 - **Konstanten (`constants`)**: Physikalische Eingangsgrössen (`Constant(name, value, u, kind, scope, unit, note)`). Unsicherheiten (`kind="zufall"` oder `"syst"`) werden über Dual-Zahlen linear fortgepflanzt. `scope` (z. B. `"tag"`) definiert den Gültigkeitsbereich für spätere Zeilenkorrelationen (PR 6).
 - **Rechengrössen (`calculations`)**: `Calculation(name, expr, unit, note)` wertet mathematische Formeln in Listenreihenfolge aus; jede Rechengrösse darf alle Spalten der Schritt-Tabelle, Bezüge, Konstanten sowie alle zuvor berechneten Grössen nutzen.
+  - *Unsicherheit aus einer Formel:* `u_expr` (mit `kind` „zufall“ oder „syst“ und optional `group`) fügt einen eigenen Eingang hinzu, der heisst wie die Rechengrösse. Beispiele: die Restdrift `Calculation(name="drift", expr="0", u_expr="abs(dXdt) * 10")` und dann `X = … + drift`, oder der Massenstrom aus zwei Journal-Ablesungen mit `u_expr="sqrt((sqrt(2) * u_masse / dauer_s)**2 + ((masse_0 - masse_1) * sqrt(2) * u_zeit / dauer_s**2)**2)"` (GUM: 0.01 g/√12 Auflösung, ±5 s Ablesezeit). Nur der Wert von `u_expr` zählt; ein negatives u schlägt laut fehl, NaN bleibt NaN. Im Dock „Results“ steht das Feld als *Own u* neben der Formel.
   - Erzeugt Spalten `<name>`, Standardunsicherheit `u_<name>`, zufälligen Anteil `u_<name>_zufall` und systematischen Anteil `u_<name>_syst`.
   - Erzeugt für jeden unsicheren Eingang `inp` eine Budget-Spalte `b_<name>__<inp>` mit dem vorzeichenbehafteten Beitrag $c_i = \frac{\partial \text{name}}{\partial \text{inp}} \cdot u_i$.
 - **Kriterien (`criteria`)**: `Criterion(name, expr, text)` liefert pro Schritt eine boolesche Spalte. `text` beschreibt die Begründung, falls das Kriterium verletzt ist (`expr` ist falsch oder NaN).
@@ -395,6 +398,7 @@ results = session.analyses()
    - Effektive Varianz $\sigma_i^2 = u_{y, i}^2 + m^2 \cdot u_{x, i}^2$ über 5 Iterationen.
    - Berechnet reduziertes $\chi^2_{\text{red}}$ und den Birge-Faktor $\max(1, \sqrt{\chi^2_{\text{red}}})$, der die Unsicherheit vergrössert, wenn Punkte stärker streuen, als ihre Fehlerbudgets erklären.
    - Weist $m$, $u_m$ (nur zufällig), $u_m$ (mit Korrelation) und $u_b$ aus.
+   - Zwei Lesarten nebeneinander: `m`, `b`, `derived` aus dem GLS-Fit mit der Korrelation systematischer Eingänge je `scope`; `m_zufall`, `b_zufall`, `chi2_red_zufall` und `derived_zufall` aus dem Fit nur mit den zufälligen Unsicherheiten (so rechnet die SA-Skript-Auswertung). SA-Kampagne: Ea = 22 ± 4 kJ/mol (zufällig, wie das Skript) bzw. 19 ± 5 kJ/mol (GLS, Luftstrom und Prüfgas je Tag korreliert).
    - `derived`: Berechnet abgeleitete Grössen als Formel (z. B. scheinbare Aktivierungsenergie $E_a = -m \cdot 8.314$).
    - Optional Monte Carlo (`mc_samples`): Zieht multivariate Zufallsstichproben aus der Kovarianzmatrix.
 
@@ -562,6 +566,60 @@ df_fid = session.broadcast_steps(["B", "c_in"], source_id="fid")
 - **Szenario-Umschalter**: Wechselt das Szenario (z. B. alternative Kalibrierungen); alle Diagramme und Tabellen aktualisieren sich live.
 - **Vektor- und Bildexport**: Jede Ansicht lässt sich über die Schaltfläche *Export Current View...* als PNG (mit definierter Auflösung/DPI), SVG oder PDF (in millimetergenauen Druckmaßen) exportieren.
 - **Mehrseitiger PDF-Bericht**: Über das Menü *Campaign → Export Report...* (oder den Tab der `report`-Ansicht) wird ein vollständiger A4-Querformat-PDF-Bericht erzeugt: inklusive professioneller Titelseite mit Kampagnenmetadaten, Messtagen und Kennwert-Kacheln (T50, Ea) aus den Analysen, gefolgt von allen ausgewählten Diagrammen mit Kopfzeilen, Fußnoten und Seitennummerierung.
+
+## Rundgang: die SA-Kampagne mit echten Daten
+
+`examples/campaign_SA_ethanol.json` ist die ganze Skript-Auswertung der SA-Messkampagne (katalytische Ethanol-Oxidation, 12., 15. und 17.10.2026) als Konfiguration: 15 Quellen über drei Tage, Uhren, FID-Skalen als Rechenkanäle, Prüfgas-Masken, Schritte aus Journal und Datenbank und die vollständige `evaluation`. Im Code steht davon nichts; die Datei schreibt `tools/sa_example_campaign.py`, damit sie lesbar bleibt.
+
+**Daten:** Sie liegen nie im Repository. Jeder Pfad beginnt mit `${DATUALIZER_SA_DIR}`; die Umgebungsvariable zeigt auf den SA-Ordner (mit `Data-2026-10-1x`, den PicoLog-Dateien, `SA_Labjournal_xlsx.xlsx`, `Settings_17_10.xml`):
+
+```bat
+set DATUALIZER_SA_DIR=C:\Users\<du>\OneDrive - OST\Dokumente\SA
+.venv\Scripts\python.exe -m datualizer_gui.app
+```
+
+Dann *Campaign → Open Campaign…* und die Beispieldatei wählen. Fehlt die Variable, öffnet die Kampagne trotzdem; im Quellen-Dock steht dann je Quelle „file not found … (environment variable DATUALIZER_SA_DIR not set)“. Beim Speichern bleibt `${…}` im Pfad stehen, er wird nicht durch den Ordner dieses Rechners ersetzt. In Python:
+
+```python
+import os
+os.environ["DATUALIZER_SA_DIR"] = r"C:\…\SA"
+from datualizer_core.campaign import CampaignSession
+
+s = CampaignSession.open("examples/campaign_SA_ethanol.json")
+res = s.results()            # 94 Schritte, davon 61 Dosierstufen
+an = s.analyses()            # T50, T90, Arrhenius
+```
+
+**Was wo steht:**
+
+| Teil | Konfiguration |
+|---|---|
+| FID 12.10. (`.dat`), 15.10. (zwei `.csv`), 17.10. (`.csv`, Profil `testa_ifid_csv`) | Rechenkanal `fid_mgc = a · signal + b` je Tag (12.10.: 0.38384/−2.36953, die Anzeige war 3× zu hoch; 15.10.: 0.38/−1.786; 17.10.: aus `Settings_17_10.xml`) |
+| Uhren | 12.10. +970 s, 15.10. +975 s (Tageskonfiguration), 17.10. aus den Journal-Paaren „Start FID“/„Start Real“ (974.5 ± 0.5 s), Video-OCR −15 s |
+| Masken | 15.10. 09:05–09:25 Prüfgas, 17.10. Ende des Prüfgases bis 11:43:30 |
+| PicoLog | Start fest im Profil (Speicherzeit minus Dauer), weil sich die Dateizeit beim Kopieren ändert |
+| Schritte | 12.10. und 17.10. aus dem Journal (Überschriften, Zeitsprung, fehlendes Ende = nächster Start am 17.10.), 12.10. drei Null-Phasen von Hand, 15.10. DB-Runs der Experimente 7 und 8 (SQL mit `json_extract` für `v_mfc` und `luft`) mit Start-/Endmasse aus dem Journal-Blatt `15.10.2026_1` (`ParameterLookup`, ±240 s, gleiche Dosierung) |
+| Parameter je Tag | `tag` und `raumluft` (12.10.: 1.7, 15.10.: 1.9 über `parameter_defaults`; 17.10.: 2.09 aus der Zelle „Baseline mgC“), `luft` = 100 m³/h, wo nichts anderes steht |
+| Messgrössen | `S`, `S_b`, `dS` aus `fid_12`/`fid_15a`/`fid_15b`/`fid_17` (`min_coverage=0.5`), `K1`, `K2`, `dK1` aus `pico_*`, `mdot_w` aus `db_12`/`ocr_12`/`db_15`/`db_17` (`min_n=30`, `min_coverage=0.3`) |
+| Massenstrom | zuerst aus dem Journal (`mdot_j`, u nach GUM über `u_expr`), sonst Regression der Waage; ×`k_mdot` (3 % syst.) |
+| Blindwert | `B`: nächste flache Null-Phase gleicher Temperatur, gleichen Luftstroms, gleichen Tages; sonst `raumluft` ± 2 mgC |
+| Bewertung | gut / brauchbar / unsicher wie im Skript (c_ein ≥ 60, stationär = FID flach, Temperatur stabil, ≥ 3 g dosiert; Blindwert vorhanden; Blindwahl ändert X ≤ 0.05) |
+| Analysen | T50, T90 je Dosierstufe, Arrhenius (nur stationäre, relevante Stufen mit 0.05 < X < 0.8) |
+| Ansichten | Ergebnistabelle, Umsatz-Matrix, Light-off, Konzentration, Durchbruch, Arrhenius, Blindwerte, Reproduzierbarkeit, Unsicherheitsbudget, Bericht |
+
+![Umsatz-Matrix der SA-Kampagne](img/sa_umsatz_matrix.png)
+
+![Light-off](img/sa_light_off.png)
+
+**Abgleich mit der Skript-Auswertung** (`tests/test_sa_end_to_end.py`, läuft nur mit `DATUALIZER_SA_DIR`): Alle 61 Dosierstufen der drei Tage stimmen mit `SA/auswertung/ergebnisse_auto/<tag>/schritte.csv` überein: X ± 0.005, c_ein ± 0.5 %, u(X) ± 10 %, T_bett ± 0.2 K, Bewertung und Stationarität gleich. Light-off T50 178 °C (10 Nl/min) und 203 °C (20 Nl/min), T90 243 / 237 / 234 °C wie `light_off_kennwerte.csv`. Arrhenius aus denselben 8 Stufen: 22 ± 4 kJ/mol mit dem Fit des Skripts (`derived_zufall`), 19 ± 5 kJ/mol mit dem GLS-Fit, der Luftstrom und Prüfgas je Tag korreliert (`derived`). Der Bericht (*Campaign → Export Report…*) hat 10 Seiten statt 14: Es fehlen der Tagesverlauf je Messtag (im Kampagnenfenster als Plot-Export) und die Kohlenstoff-Bilanz (noch nicht als Konfiguration möglich).
+
+**Neue Kampagne der gleichen Art:** `examples/rezept_katalyse_voc.json` ist dieselbe Auswertung ohne Quellen. *Campaign → Evaluation from Template…* (oder `session.apply_recipe(pfad)`) übernimmt sie; Quellen, Schritte und Uhren bleiben. Was noch nicht passt, wird gemeldet, zum Beispiel Messgrössen, deren Quellen-IDs die neue Kampagne nicht hat („recipe: measure 'S' reads fid_12, … not in this campaign“). Dann die Quellen gleich benennen oder `sources` der Messgrösse anpassen, Konstanten (Katalysatorvolumen, Response-Faktor) für die eigene Anlage setzen.
+
+```python
+s = CampaignSession.open("meine_kampagne.json")
+for note in s.apply_recipe("examples/rezept_katalyse_voc.json"):
+    print(note)
+```
 
 ## Absolute Zeit
 

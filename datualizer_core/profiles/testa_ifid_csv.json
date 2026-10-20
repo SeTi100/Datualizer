@@ -1,0 +1,19 @@
+{
+  "name": "testa_ifid_csv",
+  "description": "Testa iFID Mobile, CSV-Export (ab Firmware/Software vom 15.10.2026): Semikolon, jeder Wert in Anführungszeichen, deutsches Datum, Geräteuhr; gleiche Spalten wie der .dat-Export.",
+  "reader": "delimited",
+  "file_patterns": [
+    "*.csv"
+  ],
+  "header_hints": [
+    "Conc [mgC]",
+    "Signal",
+    "TempFID"
+  ],
+  "ingestion": {
+    "time_column": "Time",
+    "time": {
+      "timezone": "Europe/Zurich"
+    }
+  }
+}

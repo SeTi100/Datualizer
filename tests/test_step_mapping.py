@@ -329,3 +329,45 @@ def test_table_grid_from_csv() -> None:
     s.add_source(path, source_id="pico")
     grid = s.step_grid("pico")
     assert isinstance(grid, Grid) and grid.kind == "table" and len(grid.rows) == len(s.datasets["pico"].df) + 1
+
+
+def test_parameters_from_the_nearest_journal_row(tmp_path: Path) -> None:
+    """PR 10: 15.10. steps from the database runs, start and end masses from the journal (rows 31-62)."""
+    from datualizer_core.campaign import ParameterLookup
+    from datualizer_core.ingestion.config import IngestionConfig, TimeConfig
+    from datualizer_core.ingestion.profiles import SourceProfile
+
+    runs = tmp_path / "runs.csv"
+    runs.write_text(
+        "started_at;ended_at;v_mfc;temperatur\n"
+        "2026-10-15 10:09:30;2026-10-15 10:14:40;10;220\n"  # journal row 34 starts 34 s earlier
+        "2026-10-15 10:15:30;2026-10-15 10:17:00;0;220\n"  # zero phase: does not look up
+        "2026-10-15 11:45:00;2026-10-15 12:32:10;10;200\n"  # row 44 is 245 s earlier: too far
+        "2026-10-15 13:08:00;2026-10-15 13:21:22;20;250\n",  # row 47, 56 s
+        encoding="utf-8",
+    )
+    s = session_for(JOURNAL)
+    prof = SourceProfile(name="runs", ingestion=IngestionConfig(time_column="started_at", time=TimeConfig(timezone=ZONE)))
+    s.add_source(runs, prof, source_id="runs")
+    lookup = ParameterLookup(
+        source_id="journal", day=date(2026, 10, 15), start_column="Zeit_0", end=EndRule(column="Zeit_1"),
+        parameter_columns=["V_MFC", "Masse_0", "Masse_1"], rows=RowSelection(first_row=31),
+        match=["v_mfc"], take=["Masse_0", "Masse_1"], prefix="j_", duration_as="j_dauer_s",
+        when="v_mfc > 0", tolerance_s=240,
+    )
+    assert lookup.names() == ["j_masse_0", "j_masse_1", "j_dauer_s"]
+    s.set_mapping(IntervalMapping(source_id="runs", end=EndRule(column="ended_at"),
+                                  parameter_columns=["v_mfc", "temperatur"], lookups=[lookup]))
+    ivs = s.intervals()
+    steps = sorted((iv for iv in ivs.intervals if iv.origin.startswith("runs")), key=lambda iv: iv.start)
+    first, zero, far, last = steps
+    assert first.params["j_masse_0"] == 9657.45 and first.params["j_masse_1"] == 9655.86
+    assert first.params["j_dauer_s"] == 344.0  # 10:08:56-10:14:40 in the journal
+    assert "j_masse_0, j_masse_1 from journal:row 34 (start -34 s)" in first.note
+    assert last.params["j_masse_0"] == 9627.68
+    assert zero.params["j_masse_0"] is None and far.params["j_masse_0"] is None
+    assert "runs: lookup in journal: 2 of 3 steps found a row; none for runs row 4." in ivs.problems
+
+    with pytest.raises(IntervalConfigError, match="'when'.*unknown name"):
+        s.derive_mapping(IntervalMapping(source_id="runs", end=EndRule(column="ended_at"), parameter_columns=["v_mfc"],
+                                         lookups=[lookup.model_copy(update={"when": "vmfc > 0"})]))

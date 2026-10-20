@@ -7,6 +7,7 @@ import math
 
 import numpy as np
 import polars as pl
+import pydantic
 import pytest
 
 from datualizer_core.calc import FUNCTIONS, Constant, ExprError, UArray, compile_expr, evaluate
@@ -226,3 +227,26 @@ def test_evaluate_returns_uarray_and_accepts_inputs():
     assert isinstance(r, UArray)
     np.testing.assert_allclose(r.value, [3.0, 5.0])
     np.testing.assert_allclose(r.u(), [0.2, 0.2])
+
+
+# --- named numbers nan and inf (PR 10b) ---------------------------------------------------------
+
+
+def test_nan_and_inf_are_numbers_in_both_targets():
+    # OCR scale: invalid or implausible readings blanked out instead of dividing by zero
+    text = "where(is_valid == 1 and mass_g > 9600, mass_g, nan)"
+    df = pl.DataFrame({"is_valid": [1.0, 0.0, 1.0], "mass_g": [9650.0, 9651.0, 12.0]})
+    e = compile_expr(text, names=df.columns)
+    assert e.names == ("is_valid", "mass_g")  # nan is no name
+    got = df.select(e.to_polars().alias("v"))["v"].to_list()
+    assert got[0] == 9650.0 and math.isnan(got[1]) and math.isnan(got[2])
+    np.testing.assert_array_equal(e.evaluate({c: df[c] for c in df.columns}).value, [9650.0, np.nan, np.nan])
+    assert float(evaluate("-inf < x", {"x": 1.0}).value) == 1.0
+    assert float(evaluate("min(x, inf)", {"x": 2.0}).value) == 2.0
+
+
+def test_nan_and_inf_cannot_be_names():
+    from datualizer_core.campaign.evaluation import Calculation
+
+    with pytest.raises(pydantic.ValidationError, match="not nan or inf"):
+        Calculation(name="nan", expr="1")

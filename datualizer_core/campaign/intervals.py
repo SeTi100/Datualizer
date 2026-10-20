@@ -14,13 +14,16 @@ headers of the mapping. `RowSelection` picks the rows (range, stop rule, formula
 A missing header fails loudly with a suggestion; every row that does not become a step is in
 `StepDerivation.rows` and `problems` with its reason, never dropped silently.
 
+`ParameterLookup` adds parameters from the nearest row of a second step table (journal readings
+for steps from a database), matched by equal parameters and the start time within a tolerance.
+
 `WindowRule` cuts the part of each step that is evaluated (skip the settling, keep the last
 minutes).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dataclass_replace
 from datetime import date, datetime, time, timedelta
 import math
 import re
@@ -91,6 +94,43 @@ class MappingSnapshot(BaseModel):
     steps: list[StepStamp] = Field(default_factory=list)
 
 
+class ParameterLookup(StepColumns):
+    """Parameters of a step taken from the nearest row of another step table.
+
+    Example (15.10.): the steps come from the runs of a database, the start and end masses from
+    the lab journal. The journal is read with these column roles (`StepColumns`, from source
+    `source_id`, sheet `sheet`); a step takes the parameters `take` of the unused journal row
+    whose `match` parameters are equal and whose start lies within `tolerance_s` of its own,
+    the nearest one. Rows where a `take` value is empty do not count. `when` (formula over the
+    step's parameters) limits which steps look. A step without a row is reported, its values stay
+    empty; nothing is guessed.
+    """
+
+    source_id: str = Field(description="Source with the other table (e.g. the journal workbook).")
+    sheet: str | None = Field(None, description="Sheet of a workbook; None = the sheet the source was loaded from.")
+    day: date | None = Field(None, description="Date of clock times without date in the other table.")
+    match: list[str] = Field(default_factory=list, description="Parameters that must be equal (cleaned names).")
+    tolerance_s: float = Field(240.0, gt=0, description="Largest distance of the starts in seconds.")
+    take: list[str] = Field(min_length=1, description="Parameters of the other row kept with the step (cleaned names).")
+    prefix: str = Field("", description="Put before the names of the taken parameters (e.g. 'journal_').")
+    duration_as: str | None = Field(
+        None, description="Parameter name for the duration (s) of the other row, e.g. for a rate over its times."
+    )
+    when: str | None = Field(None, description="Formula over the step's parameters: only these steps look up.")
+
+    @field_validator("when")
+    @classmethod
+    def _parses(cls, v: str | None) -> str | None:
+        if v is not None:
+            compile_expr(v)
+        return v
+
+    def names(self) -> list[str]:
+        """Parameters it adds to each step."""
+        own = [f"{self.prefix}{clean_column_name(k)}" for k in self.take]
+        return own + ([self.duration_as] if self.duration_as else [])
+
+
 class IntervalMapping(StepColumns):
     """Column roles of one source that lists measurement steps."""
 
@@ -104,6 +144,9 @@ class IntervalMapping(StepColumns):
         None, description="Date of clock times without date; None = the source's clock date (TimeConfig.clock_date)."
     )
     cell_values: list[CellValue] = Field(default_factory=list, description="Labelled cells kept with every step.")
+    lookups: list[ParameterLookup] = Field(
+        default_factory=list, description="Parameters from the nearest row of other step tables."
+    )
     resolved: MappingSnapshot | None = Field(
         None, description="Header, columns and steps when last saved (written by the session, compared on open)."
     )
@@ -457,6 +500,68 @@ def row_names(grid: Grid, header: HeaderMatch) -> tuple[list[str], set[str]]:
     last = grid.last_used_row()
     env, text = _row_env(grid, header, list(range(header.row + 1, last + 1)))
     return list(env), text
+
+
+def _same(a: Any, b: Any) -> bool:
+    if a is None or b is None:
+        return False
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return math.isclose(float(a), float(b), rel_tol=1e-9, abs_tol=1e-12)
+    return a == b
+
+
+def apply_lookup(
+    steps: Sequence[ResolvedInterval], rows: Sequence[ResolvedInterval], lookup: ParameterLookup, source_id: str
+) -> tuple[list[ResolvedInterval], list[str]]:
+    """Steps with the parameters `lookup.take` of their row in `rows` (see `ParameterLookup`), and the problems."""
+    take = {clean_column_name(k): f"{lookup.prefix}{clean_column_name(k)}" for k in lookup.take}
+    match = [clean_column_name(k) for k in lookup.match]
+    usable = [r for r in rows if all(r.params.get(k) is not None for k in take)]
+    if lookup.when is not None:
+        from datualizer_core.campaign.evaluation import _truth, step_env
+
+        env = step_env(steps)
+        text = [k for k, v in env.items() if v.dtype == object]
+        try:
+            hit = _truth(compile_expr(lookup.when, env.keys(), text_names=text).evaluate(env).value, len(steps))
+        except ExprError as e:
+            raise IntervalConfigError(f"{source_id}: lookup in {lookup.source_id}: 'when': {e.message}") from None
+        wanted = {iv.id for iv, h in zip(steps, hit) if h}
+    else:
+        wanted = {iv.id for iv in steps}
+    used: set[str] = set()
+    found: dict[str, ResolvedInterval] = {}
+    missing: list[str] = []
+    for iv in sorted(steps, key=lambda iv: iv.start):
+        if iv.id not in wanted:
+            continue
+        cand = [
+            r for r in usable
+            if r.id not in used and abs(r.start - iv.start) <= lookup.tolerance_s
+            and all(_same(iv.params.get(k), r.params.get(k)) for k in match)
+        ]
+        if not cand:
+            missing.append(iv.label or iv.id)
+            continue
+        best = min(cand, key=lambda r: abs(r.start - iv.start))
+        used.add(best.id)
+        found[iv.id] = best
+    out = []
+    for iv in steps:
+        r = found.get(iv.id)
+        params = dict(iv.params)
+        for k, name in take.items():
+            params[name] = None if r is None else r.params.get(k)
+        if lookup.duration_as:
+            params[lookup.duration_as] = None if r is None else r.end - r.start
+        note = iv.note
+        if r is not None:
+            what = ", ".join(take.values())
+            note = "; ".join(x for x in (note, f"{what} from {r.origin} (start {r.start - iv.start:+.0f} s)") if x)
+        out.append(dataclass_replace(iv, params=params, note=note))
+    text = f"{source_id}: lookup in {lookup.source_id}: {len(found)} of {len(wanted)} steps found a row"
+    problems = [text + (f"; none for {', '.join(missing)}." if missing else ".")]
+    return out, problems
 
 
 def derive_steps(

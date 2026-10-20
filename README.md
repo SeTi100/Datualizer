@@ -79,6 +79,12 @@ Dazu pro Kanal: Anzeigename, Stil (Linie, Punkte, Treppe), Farbe und Y-Skalierun
 </tr>
 </table>
 
+### 6. Eine ganze Auswertung als Konfiguration
+
+<img src="docs/img/sa_umsatz_matrix.png" alt="Umsatz-Matrix der SA-Kampagne: mittlerer Umsatz je Bett-Temperatur und Dosierstufe" width="100%">
+
+Die Auswertung einer echten Kampagne (Ethanol-Oxidation am Katalysator, drei Messtage) steht vollständig in [`examples/campaign_SA_ethanol.json`](examples/campaign_SA_ethanol.json): Messgrössen aus Fenstern, Blindwert aus der nächsten Null-Phase, Beladung, Umsatz mit Unsicherheitsbudget, Kriterien, Bewertung, Light-off, Arrhenius und der Bericht. Ein Test vergleicht sie mit der bisherigen Skript-Auswertung: alle 61 Dosierstufen stimmen in den Toleranzen. Für eine neue Kampagne der gleichen Art übernimmt *Campaign → Evaluation from Template…* das Rezept [`examples/rezept_katalyse_voc.json`](examples/rezept_katalyse_voc.json) ([Rundgang](docs/BENUTZUNG.md#rundgang-die-sa-kampagne-mit-echten-daten)).
+
 ---
 
 ## Features
@@ -251,7 +257,7 @@ Datualizer/
 |:---:|---|:---:|
 | 1 | Minimal End-to-End Tracer Bullet | ✅ |
 | 2 | Ingestion-Festung für chaotische Realdaten | 🔜 grösstenteils fertig |
-| 2b | Messkampagne: mehrere Geräte, Uhren, Schritte, Fenster-Statistik, Rechengrössen | 🔜 Schritte 1–7 fertig, Schritt 8 begonnen |
+| 2b | Messkampagne: mehrere Geräte, Uhren, Schritte, Fenster-Statistik, Rechengrössen | 🔜 Schritte 1–8 und 10 fertig, Video-Spur offen |
 | 3 | Tidy- & Reshaping-DSL (JSON-AST, 10 Operatoren, `join_asof`) | ⏳ |
 | 4 | Tidy-Axiom-Validierung & KI-gestützte Recipe-Reparatur | ⏳ |
 | 5 | High-Performance-Visualisierung (LTTB, Multi-Y, ROI) | ⏳ |

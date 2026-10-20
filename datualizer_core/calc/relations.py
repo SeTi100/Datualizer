@@ -144,8 +144,9 @@ class CumulativeRelation(BaseModel):
             compile_expr(v, extra_functions=RELATION_FUNCTIONS)
         return v
 
-    def columns(self) -> tuple[str]:
-        return (self.name,)
+    def columns(self) -> tuple[str, str]:
+        """The running sum and the run number of each step."""
+        return (self.name, f"{self.name}_lauf")
 
 
 class BinRelation(BaseModel):
@@ -500,8 +501,9 @@ def cumulative(
     reset_when: str | None = None,
     gap_s: float = 300.0,
     keep_nan: bool = True,
+    runs: bool = False,
     **kwargs: Any,
-) -> pl.Series:
+) -> pl.Series | tuple[pl.Series, pl.Series]:
     """Running sum across steps in time order with reset conditions.
 
     Resets to 0.0 when `reset_when` evaluates to true (before adding the current increment)
@@ -523,11 +525,15 @@ def cumulative(
         Time gap threshold in seconds.
     keep_nan : bool, default True
         If True, rows where `expr` evaluates to NaN get NaN in the output.
+    runs : bool, default False
+        Also return the run number of each step (`<name>_lauf`): 1 for the first step in time order,
+        one more at every reset. Steps of one run share it, e.g. to align curves on the start of a
+        loading sequence.
 
     Returns
     -------
     pl.Series
-        Cumulative sum Series.
+        Cumulative sum Series (and the run numbers with `runs`).
     """
     pos_args = list(args)
     if expr is None and pos_args:
@@ -556,7 +562,8 @@ def cumulative(
 
     n = len(table)
     if n == 0:
-        return pl.Series(name, [], dtype=pl.Float64)
+        empty = pl.Series(name, [], dtype=pl.Float64)
+        return (empty, pl.Series(f"{name}_lauf", [], dtype=pl.Int64)) if runs else empty
 
     # Time order
     has_time = any(c in table.columns for c in ("step_start", "start"))
@@ -625,18 +632,21 @@ def cumulative(
 
     # Calculate cumulative sum
     out = np.full(n, np.nan)
+    run = np.zeros(n, dtype=np.int64)
+    run_no = 1
     total = 0.0
     last_end: float | None = None
 
-    for idx in order:
+    for k, idx in enumerate(order):
+        reset = bool(reset_arr[idx])
         # Gap reset
         if last_end is not None and has_time and gap_s is not None and gap_s >= 0:
             if (t_start[idx] - last_end) >= gap_s:
-                total = 0.0
-
-        # Formula reset
-        if reset_arr[idx]:
+                reset = True
+        if reset:
             total = 0.0
+            run_no += 1 if k > 0 else 0
+        run[idx] = run_no
 
         inc = inc_arr[idx]
         if np.isfinite(inc):
@@ -648,6 +658,8 @@ def cumulative(
         if has_time:
             last_end = t_end[idx] if last_end is None else max(last_end, t_end[idx])
 
+    if runs:
+        return pl.Series(name, out, dtype=pl.Float64), pl.Series(f"{name}_lauf", run, dtype=pl.Int64)
     return pl.Series(name, out, dtype=pl.Float64)
 
 
@@ -728,8 +740,9 @@ def apply_relation(table: pl.DataFrame, rel: Relation) -> pl.DataFrame:
             expr=rel.expr,
             reset_when=rel.reset_when,
             gap_s=rel.gap_s,
+            runs=True,
         )
-        return table.with_columns(s)
+        return table.with_columns(*s)
     elif isinstance(rel, BinRelation):
         s = bin(table, rel.expr, rel.width, name=rel.name)
         return table.with_columns(s)

@@ -280,6 +280,7 @@ evaluate("a - b", {"a": a, "b": b}).u()     # 0.0: derselbe Fehler hebt sich in 
   - `expr`: Zuwachs pro Schritt (z. B. `-mdot * dauer_s`).
   - `gap_s`: Zeitliche Lücke zwischen zwei Schritten $\ge \text{gap\_s}$ setzt die Summe vor dem aktuellen Schritt auf 0 zurück.
   - `reset_when`: Formelbedingung für das Zurücksetzen. Unterstützt die Spezialfunktion `changed(spalte)`, die genau dann wahr ist, wenn sich der Wert der Spalte gegenüber der *vorherigen Dosierzeile* geändert hat (intervenierende Nullphasen verändern den getrackten Dosierwert nicht).
+  - Erzeugt 2 Spalten: `<name>` (die Summe) und `<name>_lauf` (Nummer des Laufs: 1 für den ersten Schritt, eins mehr bei jedem Zurücksetzen). Schritte eines Laufs teilen sie, z. B. für Durchbruchskurven seit Beginn der Beladung (`AlignedViewSpec.sequence_col`).
 
 - **Gitter-Rundung (`bin`)**: Rundet Werte auf das nächste Vielfache einer Schrittweite (`round(x / width) * width`), z. B. `bin(table, "T_bett", 25.0, name="T_klasse")`.
 
@@ -524,8 +525,11 @@ ev = Evaluation(
             title="Durchbruch",
             subtitle="Umsatz X(t) seit Beginn der Beladung",
             expr="1 - (fid_mgC - B) * f / c_in",
-            t0="sequence_start",        # Zeitursprung: Beginn der Beladungssequenz oder Schrittstart
+            t0="sequence_start",        # Zeitursprung: erster Start der Schritte gleicher sequence_col
+            sequence_col="beladung_lauf",   # Lauf der laufenden Summe "beladung"
+            sequence_steps="klasse == 'dosierung'",  # nur Dosierungen beginnen eine Beladung
             facet_by="T_klasse",        # Kleinvielfache je Temperaturklasse
+            facet_label="≈ {T_klasse:.0f} °C",  # Titel je Facette (Vorlage), sonst "T_klasse = 175"
             color_by="V_MFC",           # Farbe nach Dosierstufe (blaue Ordinal-Farbskala)
             marker_by="tag",            # Symbol nach Messtag
             filled="stationaer",        # Endpunkt gefüllt = stationär, offen = nicht stationär
@@ -537,9 +541,10 @@ ev = Evaluation(
             name="unsicherheit",
             title="Unsicherheit des Umsatzes",
             quantity="X",
-            sort_by=["T_bett"],         # Sortierung der Schritte entlang der x-Achse
+            sort_by=["T_bett"],         # Sortierung der Schritte entlang der x-Achse (ohne: Tabellenreihenfolge)
+            bar_label="{T_bett:.0f} °C\n{v_mfc:g}",  # Beschriftung je Balken (Vorlage), sonst step_id
             filter="stationaer",        # Nur stationäre Stufen
-            # Zeigt oben u(X) als eigene Balkenreihe, darunter gestapelte Varianzen
+            # Zeigt oben u(X) als eigene Balkenreihe, darunter die Anteile der Budget-Spalten b_X__<eingang>
         ),
         # 8. Mehrseitiger Kampagnenbericht (report)
         ReportViewSpec(
@@ -578,6 +583,7 @@ df_fid = session.broadcast_steps(["B", "c_in"], source_id="fid")
 - **Vektor- und Bildexport**: Jede Ansicht lässt sich über die Schaltfläche *Export Current View...* als PNG (mit definierter Auflösung/DPI), SVG oder PDF (in millimetergenauen Druckmaßen) exportieren.
 - **Tagesverlauf (`timeline`)**: Kanäle über Master-Zeit in gestapelten Panels (`TimelinePanel` mit `traces` und `marks`), Schritte als farbige Bänder (`bands`, `band_color_by`, Beschriftung `band_label`), Marken pro Schritt aus der Ergebnistabelle: Punkt am Stufenende mit Fehlerbalken oder Strich über ein benanntes Fenster (Blindwert der Null-Phase). `page_by="tag"` ergibt eine Seite je Messtag, im Fenster eine Auswahl, im Bericht je eine Seite (`page_title="Messtag {tag}"`). Kurven laufen über `curves.add_curve` (Lücken nie überbrückt), die Legenden stehen im Bild und damit auch im PDF.
 - **Vorlagen-Texte**: `MatrixViewSpec.subtext`, `row_label`, `band_label`, `page_title` und die Kacheln des Berichts (`ReportTile.value`) sind Vorlagen mit Feldern `{formel:format}` aus der Ergebnistabelle, z. B. `"{c_in:.0f} mg/Nm³"`; in der Matrix gemittelt über die stationären Stufen der Zelle, bei mehreren Stufen mit „· n Stufen“. Ein Feld `{formel|agg:format}` fasst die Formel vorher über alle Zeilen zusammen: `mean`, `median`, `min`, `max`, `sum`, `n` (Anzahl vorhandener Werte), z. B. `"({T_bett|min:.0f}–{T_bett|max:.0f})"` als zweite Zeile der Matrix-Beschriftung (über alle Schritte der Zeile) oder `"{step_id|n}"` als Anzahl. Falsche Formeln, Aggregate oder Formate schlagen beim Laden fehl. Die Matrix zeigt die grösste Zeile oben (`rows_descending`) und beschriftet jede Zeile auch in kleinen Exporten; ohne `row_label` steht dort nur der Zeilenwert, ohne Einheit.
+- **Keine Spaltennamen im Code**: Facetten-Titel kommen aus `facet_label` (Vorlage über die Schritte der Facette, sonst „spalte = wert“), Balken-Beschriftungen aus `bar_label` (sonst `step_id`), die Anteile von `bars` aus den Budget-Spalten `b_<grösse>__<eingang>` der Ergebnistabelle (oder ausdrücklich `parts`). `aligned` richtet mit `t0="sequence_start"` auf den ersten Start der Schritte gleicher `sequence_col` aus (Pflicht, z. B. `beladung_lauf`), `sequence_steps` wählt, welche Schritte einen Lauf beginnen. Jeder Schritt nimmt seine Kanäle aus der Quelle, die ihn abdeckt (eine FID-Datei je Tag); ein Name, der weder Kanal noch Spalte ist, gibt keine Kurve (die Statuszeile zählt sie), statt einer erfundenen. Verlinkte Facetten zeigen den Bereich aller Facetten.
 - **Legenden**: `xy`, `aligned` und `bars` zeichnen ihre Legende (Farbe nach `color_by`, Symbol nach `marker_by`, gefüllt/offen nach `filled`, Budget-Anteile) als Spalte rechts im Bild, oben ausgerichtet. Sie ist damit Teil jedes Exports und jeder Berichtsseite.
 - **Mehrseitiger PDF-Bericht**: Über das Menü *Campaign → Export Report...* (oder den Tab der `report`-Ansicht) wird ein vollständiger A4-Querformat-PDF-Bericht erzeugt. Gibt es eine `report`-Ansicht, bestimmt sie Seiten, Reihenfolge, Titel, Untertitel und die Kennwert-Kacheln des Deckblatts (`tiles`), gefolgt von allen ausgewählten Diagrammen mit Kopfzeilen, Fußnoten und Seitennummerierung. Eine Kachel (`ReportTile`) hat eine Beschriftung und eine Vorlage über eine Tabelle: die Ergebnistabelle oder mit `analysis` die Tabelle einer Analyse (eine Zeile je Gruppe eines Crossings, eine Zeile eines Fits), Zeilen wählt `filter`. Beispiele: `{step_id|n}` mit `filter="klasse == 'dosierung'"` zählt Dosierstufen, `{T50}` mit `analysis="T50", filter="v_mfc == 10"` ist T50 einer Dosierstufe. Eine Kachel auf eine unbekannte Analyse schlägt beim Laden fehl, ein unbekannter Name in der Vorlage beim Export (mit Vorschlägen); ohne Kacheln hat das Deckblatt keine. Ohne Untertitel steht dort nur das Datum.
 

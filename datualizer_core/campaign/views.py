@@ -7,9 +7,11 @@ Defines serializable ViewSpec models:
 - TimelineViewSpec (time course of channels with step bands and per-step marks, one page per
   value of `page_by`, e.g. one page per measuring day)
 
-Texts with fields (`MatrixViewSpec.subtext`, `TimelineViewSpec.band_label`, `page_title`) are
-templates: `{formula:format}` takes a column or formula of the result table, e.g.
-``"{c_in:.0f} mg/Nm³"`` (`render_template`).
+Texts with fields (`MatrixViewSpec.subtext`, `row_label`, `TimelineViewSpec.band_label`,
+`page_title`, `ReportTile.value`) are templates: `{formula:format}` takes a column or formula of the
+result table, e.g. ``"{c_in:.0f} mg/Nm³"`` (`render_template`). `{formula|agg:format}` reduces it
+over all rows of the table first (`AGGREGATES`: mean, median, min, max, sum, n), e.g.
+``"({T_bett|min:.0f}–{T_bett|max:.0f} °C)"`` or ``"{step_id|n}"``.
 
 These models are referenced in Evaluation.views in campaign.json and rendered in datualizer_gui/results_window.py.
 Import rule: No GUI dependencies here (principle from AGENTS.md).
@@ -18,7 +20,7 @@ Import rule: No GUI dependencies here (principle from AGENTS.md).
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any, Literal, Sequence, Union
+from typing import Annotated, Any, Literal, Mapping, Sequence, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from datualizer_core.calc.expr import FUNCTIONS, compile_expr
@@ -36,21 +38,35 @@ _FIELD = re.compile(r"\{([^{}]+)\}")
 _OPEN, _CLOSE = "\x00", "\x01"  # stand-ins for literal braces '{{' and '}}'
 
 
-def template_fields(template: str) -> list[tuple[str, str]]:
-    """(formula, format spec) of every `{formula:format}` field; `{{` and `}}` are literal braces."""
+# reductions of a field over all rows: `{formula|agg:format}`; `|` is no operator of a formula
+AGGREGATES = ("mean", "median", "min", "max", "sum", "n")
+
+
+def template_parts(template: str) -> list[tuple[str, str | None, str]]:
+    """(formula, aggregate or None, format spec) of every field; `{{` and `}}` are literal braces."""
     out = []
     for m in _FIELD.finditer(template.replace("{{", _OPEN).replace("}}", _CLOSE)):
         expr, _, fmt = m.group(1).partition(":")
-        out.append((expr.strip(), fmt))
+        expr, bar, agg = expr.partition("|")
+        out.append((expr.strip(), agg.strip() if bar else None, fmt))
     return out
 
 
+def template_fields(template: str) -> list[tuple[str, str]]:
+    """(formula, format spec) of every `{formula:format}` field (an aggregate left out)."""
+    return [(expr, fmt) for expr, _, fmt in template_parts(template)]
+
+
 def check_template(template: str | None) -> str | None:
-    """Raise ValueError if a field is no valid formula or format (names are checked on use)."""
+    """Raise ValueError if a field is no valid formula, aggregate or format (names are checked on use)."""
     if template:
-        for expr, fmt in template_fields(template):
+        for expr, agg, fmt in template_parts(template):
             if not expr:
                 raise ValueError(f"Empty field in template {template!r}.")
+            if agg is not None and agg not in AGGREGATES:
+                raise ValueError(
+                    f"Unknown aggregate {agg!r} in template {template!r}; known are {', '.join(AGGREGATES)}."
+                )
             compile_expr(expr)
             try:
                 format(1.0, fmt)
@@ -70,38 +86,60 @@ def _format_value(value: Any, fmt: str) -> str:
         return str(value)
 
 
+def _aggregate(arr: Any, agg: str) -> Any:
+    """`agg` of the values, missing and NaN left out. Texts: n counts, min/max sort, the others join them."""
+    import numpy as np
+
+    if arr.dtype == object:
+        texts = [str(v) for v in arr if v is not None and not (isinstance(v, float) and v != v)]
+        if agg == "n":
+            return len(texts)
+        if not texts:
+            return None
+        if agg in ("min", "max"):
+            return min(texts) if agg == "min" else max(texts)
+        return ", ".join(sorted(set(texts)))
+    f = arr.astype(float)
+    ok = f[np.isfinite(f)]
+    if agg == "n":
+        return int(ok.size)
+    if not ok.size:
+        return None
+    return float({"mean": np.mean, "median": np.median, "min": np.min, "max": np.max, "sum": np.sum}[agg](ok))
+
+
 def render_template(table: Any, template: str, reduce: bool = False) -> list[str] | str:
     """The template filled from a result table: one text per row, or one for all rows (`reduce`).
 
     `reduce`: numbers are averaged over the rows (NaN left out), differing texts joined with ", ".
+    A field with an aggregate (`{T_bett|max:.0f}`) is reduced over all rows in both cases.
     A field without a value gives "–". Unknown names raise ExprError (with suggestions).
     """
     import numpy as np
 
-    fields = template_fields(template)
+    fields = template_parts(template)
     n = len(table)
     columns: list[np.ndarray] = []
-    for expr, _ in fields:
+    for expr, _, _ in fields:
         vals = eval_table_expr(table, expr) if n else None
         columns.append(np.broadcast_to(np.asarray(vals), (n,)) if n else np.array([]))
+    reduced = [_aggregate(columns[j], agg) if agg is not None else None for j, (_, agg, _) in enumerate(fields)]
 
     def value(j: int, i: int | None) -> Any:
         arr = columns[j]
+        if fields[j][1] is not None:
+            return reduced[j]
         if i is not None:
             v = arr[i]
             return v.item() if hasattr(v, "item") else v
         if not len(arr):
             return None
-        if arr.dtype == object:
-            texts = sorted({str(v) for v in arr if v is not None})
-            return ", ".join(texts) if texts else None
-        f = arr.astype(float)
-        return float(np.nanmean(f)) if np.isfinite(f).any() else None
+        return _aggregate(arr, "mean")
 
     def fill(i: int | None) -> str:
         k = iter(range(len(fields)))
         text = template.replace("{{", _OPEN).replace("}}", _CLOSE)
-        out = _FIELD.sub(lambda m: (lambda j: _format_value(value(j, i), fields[j][1]))(next(k)), text)
+        out = _FIELD.sub(lambda m: (lambda j: _format_value(value(j, i), fields[j][2]))(next(k)), text)
         return out.replace(_OPEN, "{").replace(_CLOSE, "}")
 
     if reduce:
@@ -273,6 +311,11 @@ class MatrixViewSpec(BaseModel):
         description="Template of the second line in each cell, averaged over its stationary steps, e.g. "
         "'{c_in:.0f} mg/Nm³'; ' · n Stufen' is added for more than one step. None = 'n Stufe(n)'.",
     )
+    row_label: str | None = Field(
+        default=None,
+        description="Template of each row label, filled from all steps of the row (numbers averaged), e.g. "
+        "'{T_klasse:.0f} °C' and a second line '({T_bett|min:.0f}–{T_bett|max:.0f})'. None = the row value.",
+    )
     cmap: str = Field(default="seq", description="Colormap name ('seq' = sequential blue ramp)")
     vmin: float | None = Field(default=0.0, description="Minimum value for color scaling")
     vmax: float | None = Field(default=1.0, description="Maximum value for color scaling")
@@ -287,9 +330,9 @@ class MatrixViewSpec(BaseModel):
     def _name_valid(cls, v: str) -> str:
         return _name(v, "View name")
 
-    @field_validator("subtext")
+    @field_validator("subtext", "row_label")
     @classmethod
-    def _subtext_valid(cls, v: str | None) -> str | None:
+    def _template_valid(cls, v: str | None) -> str | None:
         return check_template(v)
 
     @field_validator("filter", "status")
@@ -517,6 +560,59 @@ class TimelineViewSpec(BaseModel):
         return check_template(v)
 
 
+class ReportTile(BaseModel):
+    """A key figure on the report's cover page: a label and a template over a table.
+
+    The table is the result table, or with `analysis` the table of that analysis' result (one row per
+    group of a crossing, one row of a line fit); `filter` picks rows of it. `value` is filled once
+    for all rows (`render_template(..., reduce=True)`), e.g. ``"{step_id|n}"`` (number of steps),
+    ``"{T50}"`` with ``filter="v_mfc == 10"``, ``"{Ea_kJ_mol:.0f} ± {u_Ea_kJ_mol:.0f} kJ/mol"``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1)
+    value: str = Field(min_length=1, description="Template, e.g. '{step_id|n}' or '{T50}'")
+    analysis: str | None = Field(default=None, description="Name of an analysis whose result table fills the template")
+    filter: str | None = Field(default=None, description="Rows of the table, e.g. klasse == 'dosierung'")
+
+    @field_validator("value")
+    @classmethod
+    def _value_valid(cls, v: str) -> str:
+        return check_template(v)
+
+    @field_validator("filter")
+    @classmethod
+    def _filter_valid(cls, v: str | None) -> str | None:
+        if v is not None and v.strip():
+            compile_expr(v)
+        return v
+
+
+def report_tiles(results: Any, analyses: Mapping[str, Any], tiles: Sequence[ReportTile]) -> list[tuple[str, str]]:
+    """(label, text) of every tile; `analyses` maps names to results with a `.df` table (or to tables).
+
+    A tile on a missing analysis result or with an unknown name in its template raises ValueError
+    naming the tile; an empty table gives "–".
+    """
+    out = []
+    for tile in tiles:
+        table = results
+        if tile.analysis is not None:
+            if tile.analysis not in analyses:
+                raise ValueError(
+                    f"Tile {tile.label!r}: no result of analysis {tile.analysis!r}; there are {sorted(analyses)}."
+                )
+            res = analyses[tile.analysis]
+            table = getattr(res, "df", res)
+        try:
+            text = render_template(filter_table(table, tile.filter), tile.value, reduce=True)
+        except Exception as exc:
+            raise ValueError(f"Tile {tile.label!r}: {exc}") from exc
+        out.append((tile.label, str(text)))
+    return out
+
+
 class ReportViewSpec(BaseModel):
     """Multi-page report view specification combining views and a title/summary page."""
 
@@ -532,7 +628,10 @@ class ReportViewSpec(BaseModel):
     )
     cover: bool = Field(
         default=True,
-        description="Include cover / summary page with campaign metadata, dates, and KPI tiles from analyses",
+        description="Include cover / summary page with title, subtitle, the `tiles`, analyses and constants",
+    )
+    tiles: list[ReportTile] = Field(
+        default_factory=list, description="Key figures on the cover page, in this order; empty = no tiles"
     )
     orientation: Literal["landscape", "portrait"] = "landscape"
     page_size: Literal["A4", "Letter"] = "A4"
@@ -617,7 +716,9 @@ __all__ = [
     "AlignedViewSpec",
     "BarsViewSpec",
     "MatrixViewSpec",
+    "AGGREGATES",
     "RefLine",
+    "ReportTile",
     "ReportViewSpec",
     "SecondaryAxis",
     "TableViewSpec",
@@ -631,6 +732,8 @@ __all__ = [
     "eval_table_expr",
     "filter_table",
     "render_template",
+    "report_tiles",
     "table_env",
     "template_fields",
+    "template_parts",
 ]

@@ -53,6 +53,7 @@ from datualizer_core.campaign.derived import DerivedChannel, Mask
 from datualizer_core.campaign.intervals import CellValue
 from datualizer_core.campaign.views import (
     RefLine,
+    ReportTile,
     ReportViewSpec,
     SecondaryAxis,
     TimelineMarks,
@@ -331,6 +332,7 @@ def views():
                        cols="v_mfc", value="X", status="stationaer and bewertung != 'unsicher'", subtext="{c_in:.0f} mg/Nm³",
                        filter="klasse == 'dosierung' and luft == 100 and c_ok",
                        x_label="V_MFC [Nl/min]", y_label="T_bett (25 K)",
+                       row_label="{T_klasse:.0f} °C\n({T_bett|min:.0f}–{T_bett|max:.0f})",
                        footer="* nur nicht stationäre Stufen: Wert am Stufenende, zur Orientierung"),
         XYViewSpec(name="light_off", title="Light-off", x="T_bett", y="X", u_y="u_X", color_by="v_mfc",
                    color_mode="ordinal", marker_by="tag", filled="stationaer",
@@ -385,7 +387,15 @@ def views():
                      filter="stationaer and klasse == 'dosierung'"),
         ReportViewSpec(name="bericht", title="Messkampagne Ethanol", subtitle="SA, 12./15./17.10.2026",
                        views=["umsatz_matrix", "light_off", "konzentration", "durchbruch", "arrhenius", "verlauf",
-                              "blindwerte", "bilanz", "reproduzierbarkeit", "unsicherheit", "ergebnisse"]),
+                              "blindwerte", "bilanz", "reproduzierbarkeit", "unsicherheit", "ergebnisse"],
+                       tiles=[
+                           ReportTile(label="Dosierstufen", value="{step_id|n}", filter="klasse == 'dosierung'"),
+                           ReportTile(label="stationär auswertbar", value="{step_id|n}",
+                                      filter="klasse == 'dosierung' and " + STAT_OK),
+                           ReportTile(label="T50 bei 10 Nl/min", value="{T50}", analysis="T50", filter="v_mfc == 10"),
+                           ReportTile(label="Ea (scheinbar)", value="{Ea_kJ_mol:.0f} ± {u_Ea_kJ_mol:.0f} kJ/mol",
+                                      analysis="Arrhenius"),
+                       ]),
     ]
 
 

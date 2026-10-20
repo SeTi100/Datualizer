@@ -1077,6 +1077,7 @@
         "value": "X",
         "status": "stationaer and bewertung != 'unsicher'",
         "subtext": "{c_in:.0f} mg/Nm³",
+        "row_label": "{T_klasse:.0f} °C\n({T_bett|min:.0f}–{T_bett|max:.0f})",
         "filter": "klasse == 'dosierung' and luft == 100 and c_ok",
         "x_label": "V_MFC [Nl/min]",
         "y_label": "T_bett (25 K)",
@@ -1309,6 +1310,29 @@
           "reproduzierbarkeit",
           "unsicherheit",
           "ergebnisse"
+        ],
+        "tiles": [
+          {
+            "label": "Dosierstufen",
+            "value": "{step_id|n}",
+            "filter": "klasse == 'dosierung'"
+          },
+          {
+            "label": "stationär auswertbar",
+            "value": "{step_id|n}",
+            "filter": "klasse == 'dosierung' and stationaer and bewertung != 'unsicher' and c_ok and luft == 100"
+          },
+          {
+            "label": "T50 bei 10 Nl/min",
+            "value": "{T50}",
+            "analysis": "T50",
+            "filter": "v_mfc == 10"
+          },
+          {
+            "label": "Ea (scheinbar)",
+            "value": "{Ea_kJ_mol:.0f} ± {u_Ea_kJ_mol:.0f} kJ/mol",
+            "analysis": "Arrhenius"
+          }
         ],
         "kind": "report"
       }

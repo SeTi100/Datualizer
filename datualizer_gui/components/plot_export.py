@@ -20,7 +20,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QMarginsF, QPointF, QRectF, QSize, QSizeF, Qt
 from PySide6.QtGui import QColor, QFont, QImage, QPageSize, QPainter, QPdfWriter
@@ -212,9 +211,19 @@ def export_report(
     cover: bool = True,
     title: str = "",
     subtitle: str | None = None,
+    tiles: Sequence[Any] = (),
 ) -> Path:
-    """Export a multi-page PDF report (A4 landscape) containing a cover page and views."""
+    """Export a multi-page PDF report (A4 landscape) containing a cover page and views.
+
+    `tiles`: the report's `ReportTile`s, filled from the session's results and analyses before the
+    first page is written (a tile that cannot be filled raises, no file half written).
+    """
     path = Path(path)
+    tile_texts: list[tuple[str, str]] = []
+    if cover and tiles:
+        from datualizer_core.campaign.views import report_tiles
+
+        tile_texts = report_tiles(session.results(), session.analyses(), tiles)
     writer = QPdfWriter(str(path))
     page_w = options.width_mm if options.width_mm > 0 else 297.0
     page_h = options.height_mm if options.height_mm > 0 else 210.0
@@ -236,7 +245,7 @@ def export_report(
         # the curves of later pages, which pyqtgraph draws as paths
         if cover:
             painter.save()
-            _draw_cover_page(painter, session, w_px, h_px, title, subtitle)
+            _draw_cover_page(painter, session, w_px, h_px, title, subtitle, tiles=tile_texts)
             painter.restore()
             if views:
                 writer.newPage()
@@ -282,7 +291,9 @@ def _draw_cover_page(
     h_px: float,
     title: str = "",
     subtitle: str | None = None,
+    tiles: Sequence[tuple[str, str]] = (),
 ) -> None:
+    """Title, subtitle (else the date), the key figure tiles (label, text) as configured, analyses, constants."""
     painter.fillRect(QRectF(0, 0, w_px, h_px), QColor("#fcfcfb"))
 
     # Title
@@ -294,42 +305,11 @@ def _draw_cover_page(
     painter.setFont(f_title)
     painter.drawText(QPointF(50, 75), camp_name)
 
-    # Subtitle with dates
     f_sub = QFont()
     f_sub.setPointSize(10.5)
     painter.setFont(f_sub)
     painter.setPen(QColor("#52514e"))
-    if subtitle:
-        sub_text = subtitle
-    else:
-        days_str = ""
-        try:
-            if session is not None:
-                st = session.step_table()
-                if "tag" in st.columns:
-                    unique_days = sorted([str(d) for d in set(st["tag"].to_list()) if d is not None])
-                    if unique_days:
-                        days_str = f"{len(unique_days)} Messtage ({', '.join(unique_days)}) · "
-        except Exception:
-            pass
-        sub_text = f"{days_str}Stand {date.today().strftime('%d.%m.%Y')}"
-    painter.drawText(QPointF(50, 105), sub_text)
-
-    # Gather KPIs
-    n_steps = 0
-    n_stat = 0
-    try:
-        if session is not None:
-            results_df = session.results()
-            n_steps = len(results_df)
-            if "stationaer" in results_df.columns:
-                n_stat = int((results_df["stationaer"] == True).sum())
-            elif "stat_ok" in results_df.columns:
-                n_stat = int((results_df["stat_ok"] == True).sum())
-            else:
-                n_stat = n_steps
-    except Exception:
-        pass
+    painter.drawText(QPointF(50, 105), subtitle or f"Stand {date.today().strftime('%d.%m.%Y')}")
 
     an_res = {}
     try:
@@ -338,34 +318,13 @@ def _draw_cover_page(
     except Exception:
         pass
 
-    t50_str = "–"
-    ea_str = "–"
-    for a_name, a_val in an_res.items():
-        if "T50" in a_name or getattr(a_val, "level", None) == 0.5:
-            if hasattr(a_val, "value") and np.isfinite(getattr(a_val, "value", np.nan)):
-                t50_str = f"{a_val.value:.0f} °C"
-            elif isinstance(a_val, dict) and "T50" in a_val:
-                t50_str = str(a_val["T50"])
-        if "Arrhenius" in a_name or "fit" in a_name or "Ea" in a_name or hasattr(a_val, "derived"):
-            if hasattr(a_val, "derived") and "Ea" in a_val.derived:
-                ea_res = a_val.derived["Ea"]
-                ea_str = f"{ea_res.value:.0f} ± {ea_res.u:.0f} kJ/mol"
-            elif hasattr(a_val, "m") and np.isfinite(a_val.m):
-                ea_str = f"{-a_val.m * 8.314:.0f} kJ/mol"
-
-    tiles = [
-        ("Dosierstufen", f"{n_steps}"),
-        ("stationär auswertbar", f"{n_stat}"),
-        ("T50", t50_str),
-        ("Ea (scheinbar)", ea_str),
-    ]
-
-    # Draw KPI Tiles
-    box_w = (w_px - 100 - 3 * 20) / 4.0
+    # Key figure tiles, at most four per row
+    per_row = max(1, min(4, len(tiles)))
+    box_w = (w_px - 100 - (per_row - 1) * 20) / per_row
     box_h = 80.0
-    box_y = 135.0
     for i, (lab, val) in enumerate(tiles):
-        bx = 50.0 + i * (box_w + 20)
+        bx = 50.0 + (i % per_row) * (box_w + 20)
+        box_y = 135.0 + (i // per_row) * (box_h + 16)
         rect = QRectF(bx, box_y, box_w, box_h)
         painter.setPen(QColor("#e1e0d9"))
         painter.setBrush(QColor("#ffffff"))
@@ -383,6 +342,7 @@ def _draw_cover_page(
         painter.setFont(f_val)
         painter.setPen(QColor("#0b0b0b"))
         painter.drawText(QRectF(bx + 12, box_y + 32, box_w - 24, 40), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, val)
+    tile_rows = -(-len(tiles) // per_row)
 
     # Analyses and summary lines
     f_sect = QFont()
@@ -390,7 +350,7 @@ def _draw_cover_page(
     f_sect.setBold(True)
     painter.setFont(f_sect)
     painter.setPen(QColor("#0b0b0b"))
-    curr_y = 245.0
+    curr_y = 135.0 + tile_rows * (box_h + 16) + 14.0
     painter.drawText(QPointF(50, curr_y), "Auswertungen & Grundlagen")
 
     f_body = QFont()

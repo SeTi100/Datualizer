@@ -723,6 +723,14 @@
         "classes": [
           "dosierung"
         ]
+      },
+      {
+        "name": "zyklus",
+        "classes": [
+          "dosierung"
+        ],
+        "until_next": "dosierung",
+        "max_extend_s": 3600.0
       }
     ],
     "measures": [
@@ -807,6 +815,38 @@
         "stat": "slope",
         "min_n": 30,
         "min_coverage": 0.3
+      },
+      {
+        "alias": "I_zyk",
+        "sources": [
+          "fid_12",
+          "fid_15a",
+          "fid_15b",
+          "fid_17"
+        ],
+        "channel": "fid_mgc",
+        "window": "zyklus",
+        "stat": "integral",
+        "min_n": 30,
+        "exclude_flags": [
+          "masked"
+        ]
+      },
+      {
+        "alias": "t_zyk",
+        "sources": [
+          "fid_12",
+          "fid_15a",
+          "fid_15b",
+          "fid_17"
+        ],
+        "channel": "fid_mgc",
+        "window": "zyklus",
+        "stat": "covered_s",
+        "min_n": 30,
+        "exclude_flags": [
+          "masked"
+        ]
       }
     ],
     "relations": [
@@ -883,6 +923,23 @@
         "u_expr": "sqrt(1.5**2 + (K1 - K2)**2 / 12)",
         "unit": "°C",
         "note": "Thermoelement ⊕ Bett-Gradient (Rechteck)"
+      },
+      {
+        "name": "dosiert",
+        "expr": "-mdot * 1000 * dauer_s",
+        "unit": "mg",
+        "note": "dosierte Masse Ethanol"
+      },
+      {
+        "name": "sichtbar",
+        "expr": "(I_zyk - where(isfinite(B_vor), B_vor, raumluft) * t_zyk) * f * V_N / 3600",
+        "unit": "mg",
+        "note": "∫(FID − Blindwert vorher) · f · V̇_N dt über den Zyklus"
+      },
+      {
+        "name": "anteil",
+        "expr": "sichtbar / dosiert",
+        "note": "FID-sichtbar / dosiert"
       },
       {
         "name": "k",
@@ -1019,6 +1076,7 @@
         "cols": "v_mfc",
         "value": "X",
         "status": "stationaer and bewertung != 'unsicher'",
+        "subtext": "{c_in:.0f} mg/Nm³",
         "filter": "klasse == 'dosierung' and luft == 100 and c_ok",
         "x_label": "V_MFC [Nl/min]",
         "y_label": "T_bett (25 K)",
@@ -1132,6 +1190,104 @@
         "kind": "xy"
       },
       {
+        "name": "verlauf",
+        "title": "Messtag",
+        "subtitle": "FID, Bett-Temperaturen und Umsatz je Dosierstufe · Flächen: Dosierung (Farbe = Dosierstufe, Zahl = Nl/min)",
+        "panels": [
+          {
+            "traces": [
+              {
+                "channel": "fid_mgc",
+                "label": "FID (Rohsignal)"
+              }
+            ],
+            "marks": [
+              {
+                "y": "S_b",
+                "at": "window",
+                "window": "blank",
+                "filter": "klasse == 'null'",
+                "filled": "abs(dS * 60) <= 0.1",
+                "label": "Blindwert (FID flach)",
+                "label_open": "Null-Phase mit Desorption"
+              }
+            ],
+            "y_label": "FID [mgC]",
+            "y_robust": 99.7,
+            "height": 2.2
+          },
+          {
+            "traces": [
+              {
+                "channel": "kanal_1_kat_oben",
+                "label": "Kat oben",
+                "color": "#eb6834"
+              },
+              {
+                "channel": "kanal_2_kat_unten",
+                "label": "Kat unten",
+                "color": "#1baf7a"
+              }
+            ],
+            "y_label": "T [°C]",
+            "height": 1.2
+          },
+          {
+            "marks": [
+              {
+                "y": "X",
+                "u_y": "u_X",
+                "filter": "klasse == 'dosierung' and c_ok",
+                "filled": "stationaer and bewertung != 'unsicher' and c_ok and luft == 100",
+                "label": "X stationär",
+                "label_open": "X nicht stationär"
+              }
+            ],
+            "y_label": "Umsatz X",
+            "y_lim": [
+              -0.05,
+              1.1
+            ],
+            "height": 1.3,
+            "ref_lines": [
+              {
+                "value": 1.0
+              }
+            ]
+          }
+        ],
+        "page_by": "tag",
+        "bands": "klasse == 'dosierung'",
+        "band_color_by": "v_mfc",
+        "band_label": "{v_mfc:g}",
+        "band_legend": "Nl/min",
+        "page_title": "Messtag {tag}",
+        "kind": "timeline"
+      },
+      {
+        "name": "bilanz",
+        "title": "Kohlenstoff-Bilanz",
+        "subtitle": "Anteil des dosierten Ethanols, der als organischer Kohlenstoff am FID erscheint (Dosierstufe + folgende Null-Phasen)",
+        "x": "T_bett",
+        "y": "anteil",
+        "color_by": "v_mfc",
+        "color_mode": "ordinal",
+        "marker_by": "tag",
+        "ref_lines": [
+          {
+            "value": 0.0
+          },
+          {
+            "value": 1.0,
+            "label": "alles sichtbar"
+          }
+        ],
+        "filter": "klasse == 'dosierung' and c_ok and luft == 100",
+        "x_label": "Bett-Temperatur [°C]",
+        "y_label": "FID-sichtbar / dosiert",
+        "kind": "xy"
+      },
+      {
         "name": "unsicherheit",
         "title": "Unsicherheitsbudget von X",
         "filter": "stationaer and klasse == 'dosierung'",
@@ -1147,7 +1303,9 @@
           "konzentration",
           "durchbruch",
           "arrhenius",
+          "verlauf",
           "blindwerte",
+          "bilanz",
           "reproduzierbarkeit",
           "unsicherheit",
           "ergebnisse"

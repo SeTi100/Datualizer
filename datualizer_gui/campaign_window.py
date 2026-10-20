@@ -647,8 +647,12 @@ class CampaignWindow(QMainWindow):
             QMessageBox.critical(self, "Export Report", str(exc))
 
     def export_report(self, path: str | Path) -> Path:
-        """Export full campaign report as multi-page PDF."""
-        from datualizer_gui.results_window import ResultsWindow
+        """Export the campaign report as multi-page PDF.
+
+        The first report view (`kind: "report"`) sets which views appear, in which order, and the
+        title and subtitle; without one, every view is a page.
+        """
+        from datualizer_gui.results_window import ResultsWindow, report_views
         from datualizer_gui.components.plot_export import export_report
 
         if self._results_window is None:
@@ -657,6 +661,11 @@ class CampaignWindow(QMainWindow):
 
         ev = self._session.campaign.evaluation
         views = ev.views if ev and ev.views else []
+        report = next((v for v in views if v.kind == "report"), None)
+        title, subtitle = self._session.campaign.name, None
+        if report is not None:
+            views = report_views(views, report)
+            title, subtitle = report.title or title, report.subtitle
         if not views:
             views = [TableViewSpec(name="results", title="Results Table")]
 
@@ -666,8 +675,9 @@ class CampaignWindow(QMainWindow):
             view_widgets=self._results_window._view_widgets,
             path=path,
             options=ExportOptions(width_mm=297, height_mm=210, dpi=300),
-            cover=True,
-            title=self._session.campaign.name,
+            cover=True if report is None else report.cover,
+            title=title,
+            subtitle=subtitle,
         )
         self.status_bar.showMessage(f"Exported report {Path(out).name}")
         return Path(out)

@@ -1,4 +1,4 @@
-r"""Writes examples/campaign_SA_ethanol.json and examples/rezept_katalyse_voc.json (Etappe 2b, PR 10).
+r"""Writes examples/campaign_SA_ethanol.json and examples/rezept_katalyse_voc.json (Etappe 2b, PR 10, 11).
 
 The SA measuring campaign (catalytic ethanol oxidation, 12., 15. and 17.10.2026) as configuration:
 every source of the three days, clocks, calculated channels, masks, steps and the full evaluation.
@@ -51,7 +51,15 @@ from datualizer_core.campaign import (
 )
 from datualizer_core.campaign.derived import DerivedChannel, Mask
 from datualizer_core.campaign.intervals import CellValue
-from datualizer_core.campaign.views import RefLine, ReportViewSpec, SecondaryAxis
+from datualizer_core.campaign.views import (
+    RefLine,
+    ReportViewSpec,
+    SecondaryAxis,
+    TimelineMarks,
+    TimelinePanel,
+    TimelineTrace,
+    TimelineViewSpec,
+)
 from datualizer_core.ingestion.config import IngestionConfig, QualityConfig, TimeConfig
 from datualizer_core.ingestion.profiles import OriginRule, ReaderKind, SourceProfile, get_profile
 from datualizer_core.ingestion.readers.sqlite import SqliteOptions
@@ -208,6 +216,8 @@ SCALE = ["db_12", "ocr_12", "db_15", "db_17"]
 DAUER_M = "where(isfinite(dauer_journal_s), dauer_journal_s, dauer_s)"
 MDOT_J = f"-(masse_0 - masse_1) / {DAUER_M}"
 MDOT = f"where(isfinite({MDOT_J}), {MDOT_J}, mdot_w)"
+# baseline of the carbon balance: the blank before the step, else room air
+B_ZYK = "where(isfinite(B_vor), B_vor, raumluft)"
 # steps the script counts for light-off and Arrhenius: stationary, not 'unsicher', c_in >= 60, standard air flow
 STAT_OK = "stationaer and bewertung != 'unsicher' and c_ok and luft == 100"
 # random part of u(ln k) for the Arrhenius fit (in the results table, where u_X_zufall exists)
@@ -235,6 +245,8 @@ def evaluation() -> Evaluation:
             NamedWindow(name="steig", rule=WindowRule(length_s=300, anchor="end")),
             NamedWindow(name="tdrift", rule=WindowRule(length_s=600, anchor="end")),
             NamedWindow(name="masse", rule=WindowRule(skip_start_s=60), classes=["dosierung"]),
+            # carbon balance: dosing step and the zero phases after it, up to the next dosing (at most 60 min)
+            NamedWindow(name="zyklus", classes=["dosierung"], until_next="dosierung", max_extend_s=3600),
         ],
         measures=[
             Measure(alias="S", sources=FID, channel="fid_mgc", window="ende", stat="mean", min_coverage=0.5),
@@ -245,6 +257,10 @@ def evaluation() -> Evaluation:
             Measure(alias="dK1", sources=PICO, channel="kanal_1_kat_oben", window="tdrift", stat="slope"),
             Measure(alias="mdot_w", sources=SCALE, channel="masse", window="masse", stat="slope",
                     min_n=30, min_coverage=0.3),
+            Measure(alias="I_zyk", sources=FID, channel="fid_mgc", window="zyklus", stat="integral", min_n=30,
+                    exclude_flags=["masked"]),
+            Measure(alias="t_zyk", sources=FID, channel="fid_mgc", window="zyklus", stat="covered_s", min_n=30,
+                    exclude_flags=["masked"]),
         ],
         relations=[
             NearestReferenceRelation(
@@ -268,6 +284,11 @@ def evaluation() -> Evaluation:
             Calculation(name="X", expr="1 - (S - B) * f * k_kal / c_in + drift"),
             Calculation(name="T_bett", expr="(K1 + K2) / 2", unit="°C",
                         u_expr="sqrt(1.5**2 + (K1 - K2)**2 / 12)", note="Thermoelement ⊕ Bett-Gradient (Rechteck)"),
+            # carbon balance of the cycle: what the FID sees above the blank before the step, against the dosed mass
+            Calculation(name="dosiert", expr="-mdot * 1000 * dauer_s", unit="mg", note="dosierte Masse Ethanol"),
+            Calculation(name="sichtbar", expr=f"(I_zyk - {B_ZYK} * t_zyk) * f * V_N / 3600", unit="mg",
+                        note="∫(FID − Blindwert vorher) · f · V̇_N dt über den Zyklus"),
+            Calculation(name="anteil", expr="sichtbar / dosiert", note="FID-sichtbar / dosiert"),
             Calculation(name="k", expr="V_N * (T_bett + 273.15) / 273.15 / V_kat / 3600 * -log(1 - X)", unit="1/s"),
         ],
         criteria=[
@@ -307,7 +328,7 @@ def views():
                                "bewertung", "grund"],
                       filter="klasse == 'dosierung'", sort_by=["tag", "step_start"]),
         MatrixViewSpec(name="umsatz_matrix", title="Umsatz je Temperatur und Dosierstufe", rows="T_klasse",
-                       cols="v_mfc", value="X", status="stationaer and bewertung != 'unsicher'",
+                       cols="v_mfc", value="X", status="stationaer and bewertung != 'unsicher'", subtext="{c_in:.0f} mg/Nm³",
                        filter="klasse == 'dosierung' and luft == 100 and c_ok",
                        x_label="V_MFC [Nl/min]", y_label="T_bett (25 K)",
                        footer="* nur nicht stationäre Stufen: Wert am Stufenende, zur Orientierung"),
@@ -335,11 +356,36 @@ def views():
                    u_y="u_X", facet_by="v_mfc", marker_by="tag", color_by="tag", color_mode="categorical",
                    filled="stationaer", filter="klasse == 'dosierung' and luft == 100 and c_ok",
                    x_label="T_bett [°C]", y_label="X"),
+        TimelineViewSpec(
+            name="verlauf", title="Messtag", page_by="tag", page_title="Messtag {tag}",
+            subtitle="FID, Bett-Temperaturen und Umsatz je Dosierstufe · Flächen: Dosierung (Farbe = Dosierstufe, Zahl = Nl/min)",
+            bands="klasse == 'dosierung'", band_color_by="v_mfc", band_label="{v_mfc:g}", band_legend="Nl/min",
+            panels=[
+                TimelinePanel(traces=[TimelineTrace(channel="fid_mgc", label="FID (Rohsignal)")], y_label="FID [mgC]",
+                              y_robust=99.7, height=2.2,
+                              marks=[TimelineMarks(y="S_b", at="window", window="blank", filter="klasse == 'null'",
+                                                   filled="abs(dS * 60) <= 0.1", label="Blindwert (FID flach)",
+                                                   label_open="Null-Phase mit Desorption")]),
+                TimelinePanel(traces=[TimelineTrace(channel="kanal_1_kat_oben", label="Kat oben", color="#eb6834"),
+                                      TimelineTrace(channel="kanal_2_kat_unten", label="Kat unten", color="#1baf7a")],
+                              y_label="T [°C]", height=1.2),
+                TimelinePanel(marks=[TimelineMarks(y="X", u_y="u_X", filter="klasse == 'dosierung' and c_ok",
+                                                   filled=STAT_OK, label="X stationär", label_open="X nicht stationär")],
+                              y_label="Umsatz X", y_lim=(-0.05, 1.1), height=1.3, ref_lines=[RefLine(value=1.0)]),
+            ],
+        ),
+        XYViewSpec(name="bilanz", title="Kohlenstoff-Bilanz",
+                   subtitle="Anteil des dosierten Ethanols, der als organischer Kohlenstoff am FID erscheint "
+                            "(Dosierstufe + folgende Null-Phasen)",
+                   x="T_bett", y="anteil", color_by="v_mfc", color_mode="ordinal", marker_by="tag",
+                   filter="klasse == 'dosierung' and c_ok and luft == 100",
+                   x_label="Bett-Temperatur [°C]", y_label="FID-sichtbar / dosiert",
+                   ref_lines=[RefLine(value=0.0), RefLine(value=1.0, label="alles sichtbar")]),
         BarsViewSpec(name="unsicherheit", title="Unsicherheitsbudget von X", quantity="X",
                      filter="stationaer and klasse == 'dosierung'"),
         ReportViewSpec(name="bericht", title="Messkampagne Ethanol", subtitle="SA, 12./15./17.10.2026",
-                       views=["umsatz_matrix", "light_off", "konzentration", "durchbruch", "arrhenius",
-                              "blindwerte", "reproduzierbarkeit", "unsicherheit", "ergebnisse"]),
+                       views=["umsatz_matrix", "light_off", "konzentration", "durchbruch", "arrhenius", "verlauf",
+                              "blindwerte", "bilanz", "reproduzierbarkeit", "unsicherheit", "ergebnisse"]),
     ]
 
 
@@ -386,7 +432,7 @@ def main() -> None:
     print("written:", *(p.name for p in OUT.glob("*.json")))
 
 
-IMAGES = ("umsatz_matrix", "light_off", "arrhenius")
+IMAGES = {"umsatz_matrix": 105, "light_off": 105, "arrhenius": 105, "verlauf": 150}  # name: height in mm
 
 
 def images(report: Path | None = None) -> None:
@@ -410,9 +456,10 @@ def images(report: Path | None = None) -> None:
     win.open_campaign(OUT / "campaign_SA_ethanol.json")
     win.open_results_window()
     app.processEvents()
-    for name in IMAGES:
+    for name, height in IMAGES.items():
         target = ROOT / "docs" / "img" / f"sa_{name}.png"
-        win._results_window._view_widgets[name].export(target, ExportOptions(width_mm=170, height_mm=105, dpi=150))
+        widget = win._results_window._view_widgets[name]
+        widget.export(target, ExportOptions(width_mm=170 if height < 150 else 250, height_mm=height, dpi=150))
         print("wrote", target.relative_to(ROOT))
     if report is not None:
         print("wrote", win.export_report(report))

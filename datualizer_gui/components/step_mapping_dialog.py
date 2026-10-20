@@ -999,9 +999,7 @@ class StepMappingDialog(QDialog):
     def _selected_rows(self) -> list[int]:
         return sorted({i.row() + 1 for i in self.view.selectionModel().selectedRows()})
 
-    def row_menu_for(self, row: int) -> QMenu:
-        """Context menu of row number `row` (also offers the selected range)."""
-        menu = QMenu(self)
+    def _row_menu_entries(self, row: int) -> list[tuple[str, Any]]:
         rows = self._selected_rows()
         entries = [
             (f"Header row here (row {row})", lambda: self._set_header(row)),
@@ -1014,7 +1012,12 @@ class StepMappingDialog(QDialog):
             entries.append((f"Read row {row} again", lambda: self.toggle_skip(row)))
         else:
             entries.append((f"Leave out row {row}", lambda: self.toggle_skip(row)))
-        for text, fn in entries:
+        return entries
+
+    def row_menu_for(self, row: int) -> QMenu:
+        """Context menu of row number `row` (also offers the selected range)."""
+        menu = QMenu(self)
+        for text, fn in self._row_menu_entries(row):
             act = QAction(text, menu)
             act.triggered.connect(fn)
             menu.addAction(act)
@@ -1069,8 +1072,9 @@ class StepMappingDialog(QDialog):
             act.triggered.connect(fn)
             menu.addAction(act)
         menu.addSeparator()
-        for act in self.row_menu_for(row).actions():
-            act.setParent(menu)
+        for text, fn in self._row_menu_entries(row):
+            act = QAction(text, menu)
+            act.triggered.connect(fn)
             menu.addAction(act)
         return menu
 
@@ -1131,6 +1135,7 @@ class StepMappingDialog(QDialog):
 
     # ---------------------------------------------------------------- done
     def accept(self) -> None:
+        self._timer.stop()
         try:
             m = self.mapping()
             self._session.set_mapping(m)
@@ -1144,7 +1149,16 @@ class StepMappingDialog(QDialog):
         self.mapping_applied.emit()
         super().accept()
 
+    def reject(self) -> None:
+        self._timer.stop()
+        super().reject()
+
     def _remove(self) -> None:
+        self._timer.stop()
         self._session.remove_mapping(self.source.currentData())
         super().accept()
+
+    def closeEvent(self, event) -> None:
+        self._timer.stop()
+        super().closeEvent(event)
 

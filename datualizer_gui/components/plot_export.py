@@ -232,24 +232,47 @@ def export_report(
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
         # 1. Cover Page
+        # every page in save/restore: a brush or pen left over (the white cover tiles) would fill
+        # the curves of later pages, which pyqtgraph draws as paths
         if cover:
+            painter.save()
             _draw_cover_page(painter, session, w_px, h_px, title, subtitle)
+            painter.restore()
             if views:
                 writer.newPage()
 
-        # 2. Render each view
-        renderable_views = [v for v in views if getattr(v, "kind", "") != "report"]
-        for idx, v_spec in enumerate(renderable_views):
-            v_name = getattr(v_spec, "name", str(idx))
-            w = view_widgets.get(v_name)
+        # 2. Render each view (a view with pages, e.g. one per measuring day, gives one page each)
+        entries = report_pages(views, view_widgets)
+        for idx, (v_spec, w, page) in enumerate(entries):
             if w is not None:
+                if page is not _NO_PAGE:
+                    w.set_page(page)
+                painter.save()
                 _draw_view_page(painter, v_spec, w, w_px, h_px, page_num=idx + (2 if cover else 1))
-            if idx < len(renderable_views) - 1:
+                painter.restore()
+            if idx < len(entries) - 1:
                 writer.newPage()
+        for w in {id(w): w for _, w, page in entries if w is not None and page is not _NO_PAGE}.values():
+            w.set_page(w.pages()[0])  # back to the first page on screen
     finally:
         painter.end()
 
     return path
+
+
+_NO_PAGE = object()
+
+
+def report_pages(views: Sequence[Any], view_widgets: Mapping[str, Any]) -> list[tuple[Any, Any, Any]]:
+    """(view spec, widget, page) for every report page; views with `pages()` give one entry per page."""
+    out = []
+    for v_spec in views:
+        if getattr(v_spec, "kind", "") == "report":
+            continue
+        w = view_widgets.get(getattr(v_spec, "name", ""))
+        pages = w.pages() if w is not None and hasattr(w, "pages") else [_NO_PAGE]
+        out += [(v_spec, w, page) for page in pages]
+    return out
 
 
 def _draw_cover_page(
@@ -428,6 +451,8 @@ def _draw_view_page(
     # Header
     v_title = getattr(v_spec, "title", "") or getattr(v_spec, "name", "View")
     v_sub = getattr(v_spec, "subtitle", None)
+    if hasattr(widget, "page_heading"):
+        v_title, v_sub = widget.page_heading()
 
     f_title = QFont()
     f_title.setPointSize(14)

@@ -45,6 +45,8 @@ def dialog(qapp: QApplication, session: CampaignSession) -> StepMappingDialog:
     d = StepMappingDialog(session, source_id="journal")
     yield d
     d.close()
+    d.deleteLater()
+    qapp.processEvents()
 
 
 def actions(menu) -> dict[str, object]:
@@ -144,6 +146,8 @@ def test_table_sources_show_their_table(qapp: QApplication, session: CampaignSes
     assert not d.sheet.isVisible() and d.header_row() == 1
     assert d.model.rowCount() == len(session.datasets["db"].df) + 1
     d.close()
+    d.deleteLater()
+    qapp.processEvents()
 
 
 def test_helpers() -> None:

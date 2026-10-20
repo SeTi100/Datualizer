@@ -105,6 +105,59 @@ class StepsItem(pg.GraphicsObject):
         painter.restore()
 
 
+class ColorBandsItem(pg.GraphicsObject):
+    """Coloured bands over the full height of a plot, e.g. the dosing steps of a timeline view.
+
+    `bands`: (start, end, colour, label) on the x axis. One item for all bands, painted only where
+    visible (same reason as `StepsItem`); a label sits at the top of its band where it fits.
+    Takes no mouse input.
+    """
+
+    def __init__(self, bands: Sequence[tuple[float, float, QColor, str]], label_color: QColor | None = None) -> None:
+        super().__init__()
+        self.bands = list(bands)
+        self._label_color = label_color
+        self.setZValue(-20)
+        self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self._font = QFont()
+        self._font.setPointSizeF(7.5)
+
+    def viewRangeChanged(self) -> None:
+        self.prepareGeometryChange()
+
+    def boundingRect(self) -> QRectF:
+        vb = self.getViewBox()
+        return vb.viewRect() if vb is not None else QRectF()
+
+    def paint(self, painter, option, widget=None) -> None:  # noqa: ARG002 (Qt signature)
+        vb = self.getViewBox()
+        if vb is None or not self.bands:
+            return
+        (x_lo, x_hi), (y_lo, y_hi) = vb.viewRange()
+        to_device = painter.transform()
+        painter.save()
+        painter.resetTransform()
+        painter.setPen(Qt.PenStyle.NoPen)
+        metrics = QFontMetrics(self._font)
+        labels: list[tuple[QRectF, str]] = []
+        for start, end, color, label in self.bands:
+            if end < x_lo or start > x_hi:
+                continue
+            band = to_device.mapRect(QRectF(start, y_lo, end - start, y_hi - y_lo)).normalized()
+            painter.setBrush(color)
+            painter.drawRect(band)
+            if label and self._label_color is not None:
+                labels.append((band, label))
+        if labels:
+            painter.setFont(self._font)
+            painter.setPen(self._label_color)
+            for band, text in labels:
+                w = metrics.horizontalAdvance(text)
+                if w <= band.width() - 2:
+                    painter.drawText(band.center().x() - w / 2, band.top() + metrics.ascent() + 2, text)
+        painter.restore()
+
+
 class StepBand:
     """A step set by hand in one subplot: a draggable region (the StepsItem draws window and label)."""
 

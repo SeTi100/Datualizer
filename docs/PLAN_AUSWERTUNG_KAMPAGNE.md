@@ -150,7 +150,8 @@ Dock „Results“: Konstanten, Formeln (mit Prüfung beim Tippen), Kriterien, S
 |---|---|---|
 | `table` | Spalten, Filter, Sortierung | Ergebnistabelle |
 | `xy` | x, y, u_x, u_y, color_by (Ordinal-Rampe), marker_by, filled (Ausdruck), connect_by, facet_by, ref_lines, x_expr/y_expr, zweite Achse | Light-off, Konzentration, Blindwerte, Bilanz, Reproduzierbarkeit, Arrhenius |
-| `matrix` | rows, cols, value, status-Ausdruck, Zelltext | Umsatz-Matrix |
+| `matrix` | rows, cols, value, status-Ausdruck, Zelltext als Vorlage `{formel:format}` (PR 11) | Umsatz-Matrix |
+| `timeline` (PR 11) | Panels mit Kanälen und Marken pro Schritt (Punkt am Ende, Strich über ein Fenster), Bänder nach Spalte gefärbt, `page_by` = eine Seite je Tag | Tagesverlauf |
 | `aligned` | Ausdruck über Kanal + Schrittkonstanten, t0 (`step_start`/`sequence_start`), facet_by, color_by | Durchbruch |
 | `bars` | gestapelte Spalten (Budget) | Unsicherheit |
 | `report` | Liste von Ansichten → mehrseitiges PDF | Kampagnenbericht |
@@ -252,6 +253,7 @@ Die Namen der Kanäle/Quellen sind Beispiele. Geladene Spalten stehen in bereini
 | 9 ✅ | Uhr-Anker aus Zellpaaren, Kreuzkorrelation, Dialog | – | 2b-7 |
 | 9b ✅ | Robuste Schrittzuordnung (Überschriften, Zeilenauswahl, End-Rückfall, Parameter-Standardwerte, stabile IDs, Zellwerte über Beschriftung) und Tabellenansicht zum Anklicken | 3, 9 | 2b-5 |
 | 10 ✅ | SA-Kampagne (3 Tage) als Beispiel + Rezept, End-to-End-Orakel, Doku; Lücken aus dem Probelauf (Profil FID-.csv, `nan`, Unsicherheit aus Formel, Messgrösse aus mehreren Quellen, Konstanten je Tag, Parameter aus einer zweiten Tabelle) | 1–9, 9b | 2b-10 |
+| 11 ✅ | Fehlende Berichtsseiten: Ansicht `timeline` (Tagesverlauf), Zyklus-Fenster `until_next`/`max_extend_s` und Statistik `covered_s` für die Kohlenstoff-Bilanz, `Measure.exclude_flags`, Vorlagen-Texte, Matrix-Beschriftung, Bericht nach der `report`-Ansicht | 10 | 2b-10 |
 
 Parallel möglich: PR 2, 3 und 9 (PR 1 ist in main).
 
@@ -263,7 +265,9 @@ Mit `examples/campaign_SA_ethanol.json` auf die echten Dateien (lokal, Test übe
 - Light-off: T50 179 °C (10 Nl/min), 203 °C (20 Nl/min); Arrhenius Ea 21 ± 4 kJ/mol aus 8 Stufen.
 - Alle Ansichten aus Abschnitt 3.7 lassen sich aus der Kampagne erzeugen; der Bericht hat dieselben Seiten wie `katalyse_bericht.pdf`.
 
-**Ergebnis (20.10., Referenz vom 19.10. 16:42):** erfüllt für alle 61 Dosierstufen der drei Tage (`tests/test_sa_end_to_end.py`). Die Stichproben oben stammen aus dem Stand vor dem 19.10.; seither nimmt die Skript-Auswertung den Massenstrom zuerst aus Start- und Endmasse im Journal (`massenstrom_quelle = ["journal", "ocr"]`), am 15.10. aus der Journalzeile gleicher Dosierung mit Start ±240 s zum DB-Run. Deshalb heute Z16: c_in 147.3, X 0.568, u 0.046, gut. Die Beispielkampagne bildet das mit `mdot_j` (Journal, u nach GUM per `u_expr`) vor `mdot_w` (Waage) und `ParameterLookup` ab. Light-off T50 178 °C (10 Nl/min) und 203 °C (20 Nl/min) wie `light_off_kennwerte.csv`; Ea aus denselben 8 Stufen 22 ± 4 kJ/mol mit dem Fit des Skripts (`FitLineResult.derived_zufall`), 19 ± 5 kJ/mol mit GLS und Korrelation je Tag. Bericht: 10 statt 14 Seiten, es fehlen Tagesverlauf je Messtag und Kohlenstoff-Bilanz (offen).
+**Ergebnis (20.10., Referenz vom 19.10. 16:42):** erfüllt für alle 61 Dosierstufen der drei Tage (`tests/test_sa_end_to_end.py`). Die Stichproben oben stammen aus dem Stand vor dem 19.10.; seither nimmt die Skript-Auswertung den Massenstrom zuerst aus Start- und Endmasse im Journal (`massenstrom_quelle = ["journal", "ocr"]`), am 15.10. aus der Journalzeile gleicher Dosierung mit Start ±240 s zum DB-Run. Deshalb heute Z16: c_in 147.3, X 0.568, u 0.046, gut. Die Beispielkampagne bildet das mit `mdot_j` (Journal, u nach GUM per `u_expr`) vor `mdot_w` (Waage) und `ParameterLookup` ab. Light-off T50 178 °C (10 Nl/min) und 203 °C (20 Nl/min) wie `light_off_kennwerte.csv`; Ea aus denselben 8 Stufen 22 ± 4 kJ/mol mit dem Fit des Skripts (`FitLineResult.derived_zufall`), 19 ± 5 kJ/mol mit GLS und Korrelation je Tag. Bericht: 10 statt 14 Seiten, es fehlen Tagesverlauf je Messtag und Kohlenstoff-Bilanz (PR 11).
+
+**Nachtrag PR 11 (20.10.):** Der Bericht hat jetzt 14 Seiten wie `katalyse_bericht.pdf`, in derselben Reihenfolge (`tests/test_sa_end_to_end.py::test_report_has_the_pages_of_the_script`). Tagesverlauf als Ansicht `timeline` mit `page_by="tag"` (FID mit Blindwert-Strichen, Kat oben/unten, X am Stufenende). Kohlenstoff-Bilanz: Fenster `zyklus` (Dosierstufe bis zur nächsten Dosierung, ≤ 60 min, `NamedWindow.until_next`), Messgrössen `I_zyk` (Integral) und `t_zyk` (abgedeckte Zeit, `covered_s`, u = 0), Rechengrössen `dosiert`, `sichtbar`, `anteil`. Alle 61 Zyklen wie `bilanz.csv`: dosierte Masse gleich, Anteil |Δ| ≤ 0.005 oder 1 % (grösste Abweichung 0.013 bei Anteil 2.40, Z38 am 12.10.). Dafür lässt `I_zyk` nur Masken aus (`Measure.exclude_flags`): Mit dem Spike-Flag fehlten die steilen Anstiege, der Anteil lag bis 7 % tiefer.
 
 ### 3.9 Robuste Schrittzuordnung – PR 9b ✅
 Umgesetzt in `datualizer_core/ingestion/grid.py` (Raster, Überschriften, Beschriftung), `ingestion/steps.py` (`RowSelection`, `EndRule.fallback`, `CellRef`), `campaign/intervals.py` (`derive_steps`, `StepDerivation` mit Zustand jeder Zeile, `CellValue`, `MappingSnapshot`, `diff_snapshot`) und dem Dialog `datualizer_gui/components/step_mapping_dialog.py`. Probelauf 19.10. mit dem geänderten Journal: Schritte aus `IntervalMapping` gleich wie die Skript-Auswertung (12.10.: 37/37, 17.10.: 9/9 mit Start, Ende, T_soll, V_MFC); 15.10.: mit `parameter_defaults={"volumenstrom": 100}` passt der Blindwert-`match` über den Luftstrom (Run52 9,32 statt 7,36 mgC wie das Skript).

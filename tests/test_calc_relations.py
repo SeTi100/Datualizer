@@ -332,6 +332,7 @@ class TestCumulative:
             df,
             expr="m",
             reset_when="(klasse == 'null' and dauer_s >= 300) or changed(T_soll)",
+            track_when="klasse == 'dosierung'",
             gap_s=1000.0,
         )
         assert res[0] == pytest.approx(1.0)
@@ -340,6 +341,15 @@ class TestCumulative:
         assert res[2] == pytest.approx(3.0)
         # D3 resets because T_soll changed from 150 to 200: 0 + 3.0 = 3.0
         assert res[3] == pytest.approx(3.0)
+
+    def test_changed_tracks_every_row_without_track_when(self):
+        """No class column is guessed: without track_when every row counts, also a zero phase."""
+        df = pl.DataFrame({
+            "step_start": [0.0, 100.0, 200.0], "step_end": [100.0, 150.0, 250.0],
+            "klasse": ["dosierung", "null", "dosierung"], "T_soll": [150.0, 180.0, 150.0], "m": [1.0, 0.0, 2.0],
+        })
+        res = cumulative(df, expr="m", reset_when="changed(T_soll)", gap_s=1000.0)
+        assert res.to_list() == [1.0, 0.0, 2.0]  # 180 and back to 150 are both changes
 
 
 # ------------------------------------------------------------------ Tests: bin

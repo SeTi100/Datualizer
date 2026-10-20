@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QApplication
 
 from datualizer_core.calc.relations import CumulativeRelation, apply_relation, cumulative
 from datualizer_core.campaign import AlignedViewSpec, BarsViewSpec, XYViewSpec
+from datualizer_gui.components.curves import FastCurve
 from datualizer_gui.results_window import (
     CAT,
     AlignedViewWidget,
@@ -126,7 +127,8 @@ def test_sequence_start_needs_the_column() -> None:
 class _Session:
     """Two sources with channel `s`, one per 'day' (as one FID file per measuring day)."""
 
-    def __init__(self) -> None:
+    def __init__(self, gap_rows: tuple[int, ...] = ()) -> None:
+        self._gaps = np.array(gap_rows, dtype=np.int64)
         base = T0.timestamp()
         self._t = {"day1": base + np.arange(0, 1800, 10.0), "day2": base + np.arange(2400, 3600, 10.0)}
         self.datasets = {k: SimpleNamespace(channels=["s"], df=pl.DataFrame({"s": np.full(len(t), 2.0 if k == "day1" else 4.0)}))
@@ -136,9 +138,12 @@ class _Session:
     def master_time(self, source_id: str) -> np.ndarray:
         return self._t[source_id]
 
+    def track(self, source_id: str, channel: str) -> SimpleNamespace:
+        return SimpleNamespace(gap_rows=self._gaps if source_id == "day1" else np.array([], dtype=np.int64))
+
 
 def _curves(w) -> list[tuple[np.ndarray, np.ndarray]]:
-    return [it.getData() for it in w.glw.scene().items() if isinstance(it, pg.PlotDataItem)]
+    return [it.getOriginalDataset() for it in w.glw.scene().items() if isinstance(it, FastCurve)]
 
 
 def test_aligned_channel_from_the_source_covering_the_step(qapp) -> None:
@@ -150,6 +155,18 @@ def test_aligned_channel_from_the_source_covering_the_step(qapp) -> None:
     # not the first source for every step; t0 is d1 resp. d3, not the zero phase that reset the run
     starts = sorted((round(float(x[0])), round(float(y[0]), 3)) for x, y in _curves(w))
     assert starts == [(0, 1.0), (0, 1.0), (10, 0.667)]
+    w.deleteLater()
+    qapp.processEvents()
+
+
+def test_aligned_never_bridges_a_gap_of_the_source(qapp) -> None:
+    """Curves go through curves.add_curve: a time gap of the source inside a step breaks the line."""
+    spec = AlignedViewSpec(name="a", expr="s", filter="step_id == 'd1'")
+    w = AlignedViewWidget(spec, session=_Session(gap_rows=(65,)))  # day1 row 65 = 650 s, inside d1 (600-1200 s)
+    w.set_data(_table())
+    curve = [it for it in w.glw.scene().items() if isinstance(it, FastCurve)][0]
+    x, _, connect, _ = curve._samples
+    assert len(x) == 61 and not connect[4] and connect[:4].all() and connect[5:-1].all()  # broken once, before 650 s
     w.deleteLater()
     qapp.processEvents()
 

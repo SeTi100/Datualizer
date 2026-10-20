@@ -365,3 +365,33 @@ def test_fit_line_monte_carlo() -> None:
     assert res.mc_results["mc_m_mean"] == pytest.approx(-2.0, abs=0.1)
     assert res.mc_results["mc_m_std"] == pytest.approx(res.u_m, rel=0.3)
     assert "mc_Ea_mean" in res.mc_results
+
+
+# ------------------------------------------------------------------ scope without guessed columns (PR 14)
+def _two_days() -> pl.DataFrame:
+    return pl.DataFrame({
+        "y": [1.0, 2.0, 3.0], "u_y_zufall": [0.1, 0.1, 0.1], "b_y__luft": [0.2, 0.2, 0.2],
+        "messtag": ["a", "a", None],
+    })
+
+
+def test_scope_is_campaign_column_or_none() -> None:
+    from datualizer_core.calc.analyses import build_row_covariance
+
+    consts = {"luft": Constant(name="luft", value=100.0, u=7.2, kind="syst")}
+    t = _two_days()
+    _, _, v_all, _ = build_row_covariance(t, "y", consts)  # default: the constant applies to all rows
+    assert v_all[0, 2] == pytest.approx(0.04)
+    _, _, v_day, _ = build_row_covariance(t, "y", consts, scope_default="messtag")  # any column, no fixed name
+    assert v_day[0, 1] == pytest.approx(0.04) and v_day[0, 2] == 0.0
+    assert v_day[2, 2] == pytest.approx(0.01 + 0.04)  # a row without a value keeps its own systematic part
+    _, _, v_none, _ = build_row_covariance(t, "y", consts, scope_default="")
+    assert v_none[0, 1] == 0.0 and v_none[0, 0] == pytest.approx(0.05)
+
+
+def test_unknown_scope_fails_loudly() -> None:
+    from datualizer_core.calc.analyses import build_row_covariance
+
+    consts = {"luft": Constant(name="luft", value=100.0, u=7.2, kind="syst", scope="tga")}
+    with pytest.raises(ValueError, match="Scope 'tga' of 'luft': no column of that name"):
+        build_row_covariance(_two_days(), "y", consts)

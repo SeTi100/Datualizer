@@ -298,7 +298,7 @@ class TestAlignedSignalEmission:
         # Simulate scatter clicked
         pts = scatters[0].points()
         if len(pts) > 0:
-            scatters[0].sigClicked.emit(scatters[0], [pts[0]])
+            scatters[0].sigClicked.emit(scatters[0], [pts[0]], None)
             assert len(emitted) == 1
             assert emitted[0] == "s1"
 

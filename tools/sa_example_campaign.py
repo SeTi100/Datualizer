@@ -270,7 +270,8 @@ def evaluation() -> Evaluation:
                 fallback={"value": "raumluft", "u": 2.0},
             ),
             CumulativeRelation(name="beladung", expr=f"-({MDOT}) * dauer_s",
-                               reset_when="(klasse == 'null' and dauer_s >= 300) or changed(temperatur)", gap_s=300.0),
+                               reset_when="(klasse == 'null' and dauer_s >= 300) or changed(temperatur)",
+                               track_when="klasse == 'dosierung'", gap_s=300.0),
         ],
         calculations=[
             Calculation(name="mdot_j", expr=MDOT_J, unit="g/s", note="Journal: Start- und Endmasse",
@@ -310,13 +311,13 @@ def evaluation() -> Evaluation:
         ],
         analyses=[
             CrossingAnalysis(name="T50", x="T_bett", y="X", level=0.5, group="v_mfc", u_y="u_X", unit="°C",
-                             where=STAT_OK),
+                             where=STAT_OK, scope="tag"),
             CrossingAnalysis(name="T90", x="T_bett", y="X", level=0.9, group="v_mfc", u_y="u_X", unit="°C",
-                             where=STAT_OK),
+                             where=STAT_OK, scope="tag"),
             FitLineAnalysis(name="Arrhenius", x_expr="1000 / (T_bett + 273.15)", y_expr="log(k)",
                             u_x="1000 * u_T_bett / (T_bett + 273.15)**2", u_y=U_LNK,
                             where=STAT_OK + " and X > 0.05 and X < 0.8",
-                            derived={"Ea_kJ_mol": "-m * 8.314"}),
+                            derived={"Ea_kJ_mol": "-m * 8.314"}, scope="tag"),
         ],
         views=views(),
     )

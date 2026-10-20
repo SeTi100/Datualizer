@@ -1058,12 +1058,14 @@ class AlignedViewWidget(QWidget):
 
         # every source with the channel (e.g. one FID file per day); each step takes the one covering it
         ch_sources: dict[str, list[tuple[str, np.ndarray]]] = {}
+        gap_rows: dict[tuple[str, str], np.ndarray] = {}  # rows starting a time gap, per source and channel
         if self.session is not None:
             for ch in channel_names:
                 for s_id, ds in self.session.datasets.items():
                     m_t = self.session.master_time(s_id) if ch in ds.channels else None
                     if m_t is not None:
                         ch_sources.setdefault(ch, []).append((s_id, m_t))
+                        gap_rows[(s_id, ch)] = np.asarray(self.session.track(s_id, ch).gap_rows, dtype=np.int64)
 
         # Faceting
         facets: list[tuple[Any, np.ndarray]] = []
@@ -1148,6 +1150,7 @@ class AlignedViewWidget(QWidget):
                 # over the step; a name found nowhere gives no curve (nothing made up)
                 t_slice = None
                 ch_arrays = {}
+                gaps = np.array([], dtype=np.int64)
                 for ch, candidates in ch_sources.items():
                     best = max(((src_id, (m_t >= st) & (m_t <= en)) for src_id, m_t in candidates),
                                key=lambda c: int(c[1].sum()))
@@ -1155,6 +1158,9 @@ class AlignedViewWidget(QWidget):
                         m_t = dict(candidates)[best[0]]
                         t_slice = m_t[best[1]]
                         ch_arrays[ch] = self.session.datasets[best[0]].df[ch].to_numpy()[best[1]]
+                        rows = np.flatnonzero(best[1])
+                        g = gap_rows[(best[0], ch)]
+                        gaps = np.union1d(gaps, g[(g > rows[0]) & (g <= rows[-1])] - rows[0])
                 missing = [ch for ch in channel_names if ch not in ch_arrays and ch not in step_env]
                 if missing or not np.isfinite(t0) or (t_slice is None and ch_sources):
                     skipped += 1
@@ -1185,7 +1191,8 @@ class AlignedViewWidget(QWidget):
 
                     valid_idx = np.isfinite(t_rel_min) & np.isfinite(y_arr)
                     if valid_idx.sum() >= 2:
-                        p.plot(t_rel_min[valid_idx], y_arr[valid_idx], pen=pg.mkPen(line_col, width=1.5))
+                        # gaps of the source and missing values break the line (never bridged)
+                        add_curve(p, t_rel_min, y_arr, gaps, curve_pen(line_col))
                         total_curves += 1
                         drawn_x.append(t_rel_min[valid_idx])
                         drawn_y.append(y_arr[valid_idx])

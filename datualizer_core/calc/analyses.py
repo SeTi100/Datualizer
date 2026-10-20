@@ -11,8 +11,10 @@ and uncertain constants (`calc/uncertain.py`).
    and Generalized Least Squares (GLS) using row-to-row covariance from `Constant.scope`.
    Outputs: m and u_m (random only), u_m with correlation, u_b, and derived quantities (e.g. Ea = -m * 8.314).
 3. `aggregate`: pivot table or 1D aggregation (mean, median, n, min, max).
-4. Between-row correlation: `Constant.scope` (e.g. "tag" = constant is identical for all steps of the
-   same measurement day; "campaign" = constant applies across the entire campaign).
+4. Between-row correlation: `Constant.scope`, else the analysis' `scope`: "campaign" = the constant
+   applies to all steps (default), a column of the result table (e.g. "tag" = identical for all steps
+   with the same value of that column, one measuring day), "" = no correlation between rows. Any other
+   scope raises (a misspelt column would otherwise correlate everything).
    Random contributions only on the diagonal; systematic contributions of the same constant within the
    same scope are fully correlated (c_i * c_j), independent across scope boundaries. `group` from PR 1
    remains within-row correlation and is not repurposed.
@@ -58,7 +60,8 @@ class CrossingAnalysis(BaseModel):
     u_y: str | None = Field(default=None, description="Standard uncertainty column or expression for y.")
     where: str | None = Field(default=None, description="Filter condition.")
     unit: str = Field(default="", description="Unit of x for formatted text output (e.g. '°C').")
-    scope: str = Field(default="tag", description="Scope for between-row correlation (e.g. 'tag').")
+    scope: str = Field(default="campaign", description="Scope for between-row correlation of systematic contributions: "
+        "'campaign' (all rows), '' (none) or a column of the result table, e.g. 'tag'.")
     mc_samples: int | None = Field(default=None, ge=1, description="Optional Monte Carlo sample count.")
 
     @field_validator("name")
@@ -90,7 +93,8 @@ class FitLineAnalysis(BaseModel):
     derived: dict[str, str] = Field(
         default_factory=dict, description="Derived formulas, e.g. {'Ea': '-m * 8.314462'}."
     )
-    scope: str = Field(default="tag", description="Scope for between-row correlation (e.g. 'tag').")
+    scope: str = Field(default="campaign", description="Scope for between-row correlation of systematic contributions: "
+        "'campaign' (all rows), '' (none) or a column of the result table, e.g. 'tag'.")
     mc_samples: int | None = Field(default=None, ge=1, description="Optional Monte Carlo sample count.")
 
     @field_validator("name")
@@ -266,33 +270,6 @@ def _table_env(table: pl.DataFrame) -> tuple[dict[str, Any], list[str]]:
     return env, text_names
 
 
-def _step_dates(table: pl.DataFrame) -> list[str]:
-    """Extract YYYY-MM-DD measurement day strings per row."""
-    if "tag" in table.columns:
-        return [str(v) if v is not None else "" for v in table["tag"].to_list()]
-    start_col = next((c for c in ("step_start", "start") if c in table.columns), None)
-    if start_col is not None:
-        s = table[start_col]
-        if s.dtype in (pl.Datetime, pl.Date):
-            return [str(d)[:10] if d is not None else "" for d in s.to_list()]
-        # Physical epoch seconds or floats
-        try:
-            import datetime
-            nums = s.to_numpy().astype(float)
-            dates = []
-            for num in nums:
-                if np.isnan(num):
-                    dates.append("")
-                else:
-                    # Treat as epoch seconds
-                    dt = datetime.datetime.fromtimestamp(num, tz=datetime.timezone.utc)
-                    dates.append(dt.strftime("%Y-%m-%d"))
-            return dates
-        except Exception:
-            pass
-    return ["" for _ in range(len(table))]
-
-
 def _filter_table(table: pl.DataFrame, where: str | None) -> pl.DataFrame:
     """Filter table by formula condition."""
     if where is None or not where.strip():
@@ -315,7 +292,7 @@ def build_row_covariance(
     y_expr: str,
     constants: Mapping[str, Constant] | None = None,
     u_y: str | None = None,
-    scope_default: str = "tag",
+    scope_default: str = "campaign",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, np.ndarray]]:
     """Build covariance matrix across rows for a quantity `y_expr`.
 
@@ -330,7 +307,7 @@ def build_row_covariance(
     u_y : str | None
         Optional override for standard uncertainty of y.
     scope_default : str
-        Default scope if constant scope is not set.
+        Scope of constants without their own: 'campaign', '' or a column of `table`.
 
     Returns
     -------
@@ -453,7 +430,6 @@ def build_row_covariance(
     # 3. Group systematic inputs that share a `group` within a row
     # In PR 1: systematic inputs with the same `group` add linearly: c_group = sum_{i in g} c_i
     grouped_contributions: dict[str, tuple[str, np.ndarray]] = {}  # key -> (scope, c_vec)
-    step_dates = _step_dates(table)
 
     # Map each input to group and scope
     group_map: dict[str, list[str]] = {}
@@ -487,22 +463,23 @@ def build_row_covariance(
     V_y = np.diag(u_y_rand**2)
 
     for key, (sc, c_vec) in grouped_contributions.items():
-        # Determine partition per row
-        if sc in ("tag", "day", "date"):
-            partitions = step_dates
-        elif sc in ("campaign", "global", "all"):
-            partitions = ["global" for _ in range(n)]
-        elif sc in table.columns:
-            partitions = [str(v) for v in table[sc].to_list()]
-        elif sc:
-            partitions = [sc for _ in range(n)]
-        else:
-            # Empty scope -> independent between rows (only diagonal)
+        # Partition per row; a row without a value is correlated with itself only
+        if sc == "campaign":
+            partitions = ["campaign"] * n
+        elif sc == "":
             partitions = [f"row_{i}" for i in range(n)]
+        elif sc in table.columns:
+            partitions = [f"row_{i}" if v is None else f"v_{v}" for i, v in enumerate(table[sc].to_list())]
+        else:
+            name = key[len("group_"):] if key.startswith("group_") else key
+            raise ValueError(
+                f"Scope {sc!r} of {name!r}: no column of that name in the table; use 'campaign', '' or a column "
+                f"such as {sorted(c for c in table.columns if not c.startswith(('u_', 'b_')))[:8]}."
+            )
 
         for i in range(n):
             for j in range(n):
-                if partitions[i] == partitions[j] and partitions[i] != "":
+                if partitions[i] == partitions[j]:
                     V_y[i, j] += c_vec[i] * c_vec[j]
 
     return y_val, u_y_rand, V_y, budget_contributions
@@ -550,7 +527,7 @@ def crossing(
     u_y: str | None = None,
     where: str | None = None,
     unit: str = "",
-    scope: str = "tag",
+    scope: str = "campaign",
     constants: Mapping[str, Constant] | None = None,
     mc_samples: int | None = None,
     name: str = "crossing",
@@ -576,7 +553,7 @@ def crossing(
     unit : str
         Unit of x for formatting (e.g. '°C').
     scope : str
-        Scope for between-row correlation of systematic uncertainties (default 'tag').
+        Scope for between-row correlation of systematic uncertainties: 'campaign' (default), '' or a column.
     constants : Mapping[str, Constant] | None
         Campaign constants.
     mc_samples : int | None
@@ -739,7 +716,7 @@ def fit_line(
     where: str | None = None,
     method: str = "effective_variance",
     derived: Mapping[str, str] | None = None,
-    scope: str = "tag",
+    scope: str = "campaign",
     constants: Mapping[str, Constant] | None = None,
     mc_samples: int | None = None,
     name: str = "fit_line",
@@ -765,7 +742,7 @@ def fit_line(
     derived : Mapping[str, str] | None
         Formulas for derived quantities (e.g. {'Ea': '-m * 8.314462'}).
     scope : str
-        Scope for between-row correlation of systematic uncertainties (default 'tag').
+        Scope for between-row correlation of systematic uncertainties: 'campaign' (default), '' or a column.
     constants : Mapping[str, Constant] | None
         Campaign constants.
     mc_samples : int | None

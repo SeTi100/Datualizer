@@ -1439,7 +1439,7 @@ class CampaignSession:
                 u_y = a.u_y if hasattr(a, "u_y") else a.get("u_y")
                 where = a.where if hasattr(a, "where") else a.get("where")
                 unit = a.unit if hasattr(a, "unit") else a.get("unit", "")
-                scope = a.scope if hasattr(a, "scope") else a.get("scope", "tag")
+                scope = a.scope if hasattr(a, "scope") else a.get("scope", "campaign")
                 mc_samples = a.mc_samples if hasattr(a, "mc_samples") else a.get("mc_samples")
                 out[name] = crossing(
                     df,
@@ -1463,7 +1463,7 @@ class CampaignSession:
                 where = a.where if hasattr(a, "where") else a.get("where")
                 method = a.method if hasattr(a, "method") else a.get("method", "effective_variance")
                 derived = a.derived if hasattr(a, "derived") else a.get("derived", {})
-                scope = a.scope if hasattr(a, "scope") else a.get("scope", "tag")
+                scope = a.scope if hasattr(a, "scope") else a.get("scope", "campaign")
                 mc_samples = a.mc_samples if hasattr(a, "mc_samples") else a.get("mc_samples")
                 out[name] = fit_line(
                     df,

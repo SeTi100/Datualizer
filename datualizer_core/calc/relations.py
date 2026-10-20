@@ -124,6 +124,11 @@ class CumulativeRelation(BaseModel):
     kind: Literal["cumulative"] = "cumulative"
     expr: str = Field(min_length=1, description="Formula for increment per step.")
     reset_when: str | None = Field(default=None, description="Reset condition formula; may use changed(col).")
+    track_when: str | None = Field(
+        default=None,
+        description="Rows whose values changed(col) compares, e.g. klasse == 'dosierung' (zero phases in between "
+        "do not count as a change); None = all rows.",
+    )
     gap_s: float = Field(default=300.0, ge=0.0, description="Time gap in seconds that triggers reset.")
 
     @field_validator("name")
@@ -142,6 +147,13 @@ class CumulativeRelation(BaseModel):
     def _reset_valid(cls, v: str | None) -> str | None:
         if v is not None:
             compile_expr(v, extra_functions=RELATION_FUNCTIONS)
+        return v
+
+    @field_validator("track_when")
+    @classmethod
+    def _track_valid(cls, v: str | None) -> str | None:
+        if v is not None and v.strip():
+            compile_expr(v)
         return v
 
     def columns(self) -> tuple[str, str]:
@@ -502,6 +514,7 @@ def cumulative(
     gap_s: float = 300.0,
     keep_nan: bool = True,
     runs: bool = False,
+    track_when: str | None = None,
     **kwargs: Any,
 ) -> pl.Series | tuple[pl.Series, pl.Series]:
     """Running sum across steps in time order with reset conditions.
@@ -509,7 +522,7 @@ def cumulative(
     Resets to 0.0 when `reset_when` evaluates to true (before adding the current increment)
     or when the time gap between consecutive steps is >= `gap_s`.
     The function `changed(col)` inside `reset_when` is true when `col` has changed value
-    since the previous dosing step.
+    since the previous row matching `track_when` (all rows without it); other rows never change.
 
     Parameters
     ----------
@@ -525,6 +538,8 @@ def cumulative(
         Time gap threshold in seconds.
     keep_nan : bool, default True
         If True, rows where `expr` evaluates to NaN get NaN in the output.
+    track_when : str, optional
+        Condition for the rows whose values `changed(col)` compares, e.g. ``"klasse == 'dosierung'"``.
     runs : bool, default False
         Also return the run number of each step (`<name>_lauf`): 1 for the first step in time order,
         one more at every reset. Steps of one run share it, e.g. to align curves on the start of a
@@ -585,17 +600,14 @@ def cumulative(
     if reset_when is not None and reset_when.strip():
         # Precompute changed(col) if present
         changed_cols = _extract_changed_columns(reset_when)
+        is_dosing = np.ones(n, dtype=bool)  # rows whose values changed() tracks
+        if changed_cols and track_when is not None and track_when.strip():
+            t_val = compile_expr(track_when, names=table.columns, text_names=text_names).evaluate(env).value
+            t_val = np.broadcast_to(np.asarray(t_val, dtype=float), (n,))
+            is_dosing = (t_val != 0) & ~np.isnan(t_val)
         for col in changed_cols:
             if col not in table.columns:
                 raise ValueError(f"changed({col!r}): column not found in table; available: {table.columns}.")
-            # A dosing row is any row where klasse != "null" (if klasse is present)
-            if "klasse" in table.columns:
-                is_dosing = np.array(
-                    [v is not None and str(v) != "null" for v in table["klasse"].to_list()],
-                    dtype=bool,
-                )
-            else:
-                is_dosing = np.ones(n, dtype=bool)
 
             ch_arr = np.zeros(n, dtype=bool)
             prev_dosing_val = None
@@ -741,6 +753,7 @@ def apply_relation(table: pl.DataFrame, rel: Relation) -> pl.DataFrame:
             reset_when=rel.reset_when,
             gap_s=rel.gap_s,
             runs=True,
+            track_when=rel.track_when,
         )
         return table.with_columns(*s)
     elif isinstance(rel, BinRelation):

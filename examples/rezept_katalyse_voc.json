@@ -260,6 +260,7 @@
         "name": "beladung",
         "expr": "-(where(isfinite(-(masse_0 - masse_1) / where(isfinite(dauer_journal_s), dauer_journal_s, dauer_s)), -(masse_0 - masse_1) / where(isfinite(dauer_journal_s), dauer_journal_s, dauer_s), mdot_w)) * dauer_s",
         "reset_when": "(klasse == 'null' and dauer_s >= 300) or changed(temperatur)",
+        "track_when": "klasse == 'dosierung'",
         "kind": "cumulative"
       },
       {
@@ -409,6 +410,7 @@
         "u_y": "u_X",
         "where": "stationaer and bewertung != 'unsicher' and c_ok and luft == 100",
         "unit": "°C",
+        "scope": "tag",
         "kind": "crossing"
       },
       {
@@ -420,6 +422,7 @@
         "u_y": "u_X",
         "where": "stationaer and bewertung != 'unsicher' and c_ok and luft == 100",
         "unit": "°C",
+        "scope": "tag",
         "kind": "crossing"
       },
       {
@@ -432,6 +435,7 @@
         "derived": {
           "Ea_kJ_mol": "-m * 8.314"
         },
+        "scope": "tag",
         "kind": "fit_line"
       }
     ],

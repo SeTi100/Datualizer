@@ -57,7 +57,8 @@ class Constant(BaseModel):
         None, description="Systematic inputs with the same group share one error source and are fully correlated "
         "(e.g. one reference gas). Not for different quantities of the same day."
     )
-    scope: str = Field("", description="Optional scope of the constant, e.g. 'tag' (evaluated in PR 6).")
+    scope: str = Field("", description="Scope of a systematic constant across steps: a column of the result "
+                       "table (e.g. 'tag'), 'campaign', or '' = the analysis' scope (evaluated in PR 6).")
     unit: str = ""
     note: str = ""
 

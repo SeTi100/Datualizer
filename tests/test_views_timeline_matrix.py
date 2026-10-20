@@ -100,6 +100,7 @@ def test_matrix_labels_every_row_with_hottest_on_top(qapp, tmp_path: Path) -> No
     out = w.export(tmp_path / "m.png", ExportOptions(width_mm=170, height_mm=105, dpi=100))
     assert out.stat().st_size > 1000
     w.deleteLater()
+    qapp.processEvents()
 
 
 # ------------------------------------------------------------------ timeline
@@ -170,6 +171,7 @@ def test_timeline_one_page_per_day(qapp, session: CampaignSession) -> None:
     first_color = [it for it in w.plots[0].items if isinstance(it, ColorBandsItem)][0].bands[0][2].name()
     assert bands[0].bands[0][2].name() != first_color
     w.deleteLater()
+    qapp.processEvents()
 
 
 def _record_pages(monkeypatch) -> list[str]:
@@ -202,7 +204,9 @@ def test_report_has_a_page_per_day(qapp, session: CampaignSession, tmp_path: Pat
     assert doc.pageCount() == 3 and seen == ["Messtag a", "Messtag b"]
     assert win._view_widgets["verlauf"].page_heading()[0] == "Messtag a"  # back on the first page
     doc.close()
+    win.close()
     win.deleteLater()
+    qapp.processEvents()
 
 
 def test_campaign_window_report_follows_the_report_view(
@@ -232,6 +236,7 @@ def test_campaign_window_report_follows_the_report_view(
         assert covers == ["Mein Bericht"] and seen == ["Messtag a", "Messtag b", "Erst XY"]  # the report's order
         win.close()
         win.deleteLater()
+        qapp.processEvents()
     finally:
         session.campaign.evaluation = ev
 
